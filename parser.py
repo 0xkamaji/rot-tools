@@ -2,7 +2,7 @@ import argparse
 
 from agents.runner import ask_agent
 from git_commands import git_pull, git_push
-from signalrot import sr_diff, sr_publish, sr_pull, sr_push, sr_status
+from signalrot import sr_context, sr_diff, sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
 
 
@@ -110,6 +110,19 @@ def create_parser():
         help="Check Signal Rot website status"
     )
     status_parser.set_defaults(func=sr_status)
+
+    context_parser = sr_commands.add_parser(
+        "context",
+        help="Show or refresh signalrot context"
+    )
+    context_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Inspect signalrot and regenerate current-state context"
+    )
+    _add_agent_argument(context_parser)
+    _add_note_argument(context_parser)
+    context_parser.set_defaults(func=sr_context)
 
     diff_parser = sr_commands.add_parser(
         "diff",

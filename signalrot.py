@@ -9,6 +9,11 @@ from urllib.request import Request, urlopen
 from agents.runner import stream_agent
 from git_commands import PUSH_CANCELLED, git_push
 from gui import rot_say
+from signalrot_context import (
+    refresh_signalrot_context,
+    show_signalrot_context,
+    with_signalrot_context
+)
 
 
 DEFAULT_REPO = "/home/kamaji/github/signalrot"
@@ -93,7 +98,7 @@ def _validate_repo(repository):
 def _review_task(prompt, working_directory, activity, agent_name=None):
     rot_say("Starting streamed AI review...")
     returncode, output, elapsed = stream_agent(
-        prompt,
+        with_signalrot_context(prompt),
         activity,
         working_directory,
         agent_name=agent_name
@@ -258,7 +263,52 @@ def sr_push(args):
     return git_push(
         args,
         str(repository),
-        "Commit and push the Signal Rot website source to GitHub."
+        with_signalrot_context(
+            "Commit and push the signalrot website source to GitHub."
+        )
+    )
+
+
+def sr_context(args):
+    if not getattr(args, "refresh", False):
+        if getattr(args, "note", None) or getattr(args, "agent", None):
+            rot_say("--note and --agent require --refresh for signalrot context.")
+            return 2
+        return show_signalrot_context()
+
+    repository = _repo_path()
+    web_root = _web_root()
+    if not _validate_repo(repository):
+        return 1
+    if not web_root.is_dir():
+        rot_say(f"signalrot web root not found:\n{web_root}")
+        return 1
+
+    status = _capture(["git", "status", "--short"], repository)
+    if status.returncode != 0:
+        rot_say(f"Could not inspect signalrot Git state.\n{status.stderr.strip()}")
+        return status.returncode
+
+    try:
+        deployment = _capture(
+            _rsync_command(repository, web_root, dry_run=True),
+            repository
+        )
+    except FileNotFoundError:
+        rot_say("rsync is not installed or is not available in PATH.")
+        return 127
+
+    if deployment.returncode != 0:
+        detail = deployment.stderr.strip() or deployment.stdout.strip()
+        rot_say(f"Could not compare signalrot with production.\n{detail}")
+        return deployment.returncode
+
+    return refresh_signalrot_context(
+        args,
+        repository,
+        web_root,
+        status.stdout.rstrip(),
+        deployment.stdout.rstrip()
     )
 
 
