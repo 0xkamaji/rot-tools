@@ -52,6 +52,11 @@ def create_parser():
         action="store_true",
         help="Ask OpenCode to review changes before committing"
     )
+    push_parser.add_argument(
+        "-m",
+        "--message",
+        help="Use this commit message instead of prompting"
+    )
     _add_note_argument(push_parser)
     push_parser.set_defaults(func=git_push)
 

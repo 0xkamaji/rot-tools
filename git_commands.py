@@ -133,6 +133,7 @@ def git_push(args, working_directory=None, review_context=None):
 
     review_requested = getattr(args, "review", False)
     review_note = getattr(args, "note", None)
+    provided_message = getattr(args, "message", None)
     if review_note and not review_requested:
         rot_say("--note requires --review for a push command.")
         return 2
@@ -241,7 +242,9 @@ def git_push(args, working_directory=None, review_context=None):
             rot_say("Push cancelled. No Git changes were made.")
             return PUSH_CANCELLED
 
-    if suggested_message:
+    if provided_message:
+        commit_message = provided_message.strip()
+    elif suggested_message:
         commit_message = _choose_commit_message(suggested_message)
     else:
         rot_say("Enter a commit message:")
