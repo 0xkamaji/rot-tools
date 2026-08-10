@@ -7,9 +7,6 @@ from signalrot import sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
 
 
-COMMANDS = {"push", "sr", "wtf"}
-
-
 def _add_note_argument(command_parser):
     command_parser.add_argument(
         "-n",
@@ -121,11 +118,21 @@ def create_parser():
 
 def parse_args(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    parser = create_parser()
+    commands = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
 
-    if argv and argv[0] not in COMMANDS and argv[0] not in {"-h", "--help"}:
+    if (
+        argv
+        and argv[0] not in commands.choices
+        and argv[0] not in {"-h", "--help"}
+    ):
         return argparse.Namespace(
             func=ask_opencode,
             question=" ".join(argv)
         )
 
-    return create_parser().parse_args(argv)
+    return parser.parse_args(argv)
