@@ -43,8 +43,6 @@ def _select_agent(agent_name=None):
     for agent_name in ("opencode", "codex"):
         agent = AGENTS[agent_name]
         if which(agent.EXECUTABLE) is not None:
-            if agent_name == "codex":
-                rot_say("Using AI agent: Codex.")
             return agent
 
     rot_say("No supported AI agent is available. Install OpenCode or Codex.")
@@ -65,6 +63,7 @@ def stream_agent(
     agent = _select_agent(agent_name)
     if agent is None:
         return 127, "", 0
+    rot_say(f"Using AI agent: {agent.NAME} (model: {agent.get_model()}).")
 
     try:
         process = subprocess.Popen(
@@ -140,7 +139,6 @@ def stream_agent(
         and returncode == -SIGILL
         and which(codex_runner.EXECUTABLE) is not None
     ):
-        rot_say("Using AI agent: Codex.")
         return stream_agent(
             prompt,
             activity_message,
