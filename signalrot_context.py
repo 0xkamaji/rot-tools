@@ -9,6 +9,7 @@ from gui import rot_continue, rot_say
 CONTEXT_ROOT = Path(__file__).resolve().parent / "context" / "signalrot"
 IDENTITY_PATH = CONTEXT_ROOT / "signalrot_identity.md"
 REFRESH_PATH = CONTEXT_ROOT / "signalrot_refresh.md"
+TRACKED_SECTIONS = ("OPPSEC", "Hacks", "Signals", "Beats", "Frames", "Contact")
 
 
 def _read_context_file(path):
@@ -81,6 +82,40 @@ def _identity_summary(identity):
     ]
 
 
+def _section_updates(refresh):
+    lines = refresh.splitlines()
+    start = next(
+        (
+            index + 1
+            for index, line in enumerate(lines)
+            if line.strip() == "## Section updates"
+        ),
+        None
+    )
+    if start is None:
+        return []
+
+    updates = []
+    section_name = None
+    fields = {}
+
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("### "):
+            if section_name:
+                updates.append((section_name, fields))
+            section_name = line[4:].strip()
+            fields = {}
+        elif section_name and line.startswith("- ") and ":" in line:
+            key, value = line[2:].split(":", 1)
+            fields[key.strip()] = value.strip()
+
+    if section_name:
+        updates.append((section_name, fields))
+    return updates
+
+
 def signalrot_context_block():
     identity = _read_context_file(IDENTITY_PATH)
     refresh = _read_context_file(REFRESH_PATH)
@@ -104,6 +139,7 @@ def _summary_text():
     refreshed = re.search(r"^Last refreshed:\s*(.+)$", refresh, re.MULTILINE)
     sections = _list_items(refresh, "Current sections") or _identity_sections(identity)
     published = _list_items(refresh, "Published content")
+    section_updates = _section_updates(refresh)
 
     lines = [
         "Identity:",
@@ -124,6 +160,16 @@ def _summary_text():
     lines.extend(sections or ["(unknown)"])
     lines.extend(("", "Published:"))
     lines.extend(published or ["(run rot sr context --refresh)"])
+    lines.extend(("", "Section updates:"))
+    if section_updates:
+        for section_name, fields in section_updates:
+            lines.extend((
+                section_name,
+                f"  Last: {fields.get('Latest addition or change', 'unknown')}",
+                f"  Updated: {fields.get('Last changed', 'unknown')}"
+            ))
+    else:
+        lines.append("(run rot sr context --refresh)")
     return "\n".join(lines)
 
 
@@ -170,6 +216,37 @@ def refresh_signalrot_context(
         "Use one bullet per section containing only the section name.\n\n"
         "## Published content\n\n"
         "Use concise count bullets such as `7 OPPSEC guides`.\n\n"
+        "## Section updates\n\n"
+        "Create each subsection below. Inspect repository content and Git "
+        "history to identify the most recent addition or meaningful change and "
+        "its date. Use `unknown` only when history cannot establish a date. "
+        "Beats and Frames currently lead to external links; state that as their "
+        "current behavior, but still report their latest link or configuration "
+        "change so future additions are tracked. Use exactly these fields:\n\n"
+        "### OPPSEC\n"
+        "- Current: ...\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "### Hacks\n"
+        "- Current: ...\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "### Signals\n"
+        "- Current: ...\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "### Beats\n"
+        "- Current: external link section\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "### Frames\n"
+        "- Current: external link section\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "### Contact\n"
+        "- Current: ...\n"
+        "- Latest addition or change: ...\n"
+        "- Last changed: YYYY-MM-DD or unknown\n\n"
         "## New since previous refresh\n\n"
         "## Current focus\n\n"
         "## Repository vs production\n\n"
@@ -200,12 +277,15 @@ def refresh_signalrot_context(
     if (
         not content.startswith("# SignalRot Current State")
         or f"Last refreshed: {refreshed_on}" not in content
+        or any(f"### {section}" not in content for section in TRACKED_SECTIONS)
     ):
         rot_say("The AI agent returned an invalid signalrot context document.")
         return 1
 
     try:
-        REFRESH_PATH.write_text(content.rstrip() + "\n", encoding="utf-8")
+        temporary_path = REFRESH_PATH.with_suffix(".tmp")
+        temporary_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        temporary_path.replace(REFRESH_PATH)
     except OSError as error:
         rot_say(f"Could not write signalrot refresh context.\n{error}")
         return 1
