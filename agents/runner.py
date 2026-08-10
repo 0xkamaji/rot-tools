@@ -129,7 +129,7 @@ def stream_agent(
     if output_started:
         rot_output_end()
 
-    if returncode != 0 and not agent.MERGE_STDERR:
+    if returncode != 0:
         error_detail = "\n".join(
             line.rstrip()
             for line in error_lines[-8:]
