@@ -1,6 +1,7 @@
 import os
 from queue import Empty, Queue
 from shutil import which
+from signal import SIGILL
 import subprocess
 from threading import Thread
 from time import perf_counter
@@ -57,6 +58,10 @@ def stream_agent(
     display_question=None,
     agent_name=None
 ):
+    automatic_selection = (
+        agent_name is None
+        and not os.environ.get("ROTBOT_AGENT", "").strip()
+    )
     agent = _select_agent(agent_name)
     if agent is None:
         return 127, "", 0
@@ -128,6 +133,24 @@ def stream_agent(
         error_thread.join()
     if output_started:
         rot_output_end()
+
+    if (
+        automatic_selection
+        and agent is opencode_runner
+        and returncode == -SIGILL
+        and which(codex_runner.EXECUTABLE) is not None
+    ):
+        rot_say(
+            "OpenCode cannot run on this CPU (illegal instruction). "
+            "Falling back to Codex."
+        )
+        return stream_agent(
+            prompt,
+            activity_message,
+            working_directory,
+            display_question,
+            agent_name="codex"
+        )
 
     if returncode != 0:
         error_detail = "\n".join(
