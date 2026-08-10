@@ -7,14 +7,15 @@ from time import perf_counter
 from gui import rot_continue, rot_say, rot_status
 
 
-def stream_opencode(prompt, activity_message):
+def stream_opencode(prompt, activity_message, working_directory=None):
     try:
         process = subprocess.Popen(
             ["opencode", "run", prompt],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            cwd=working_directory
         )
     except FileNotFoundError:
         rot_say("OpenCode is not installed or is not available in PATH.")
@@ -70,26 +71,43 @@ def ask_opencode(args):
 
 def directory_report(args):
     current_directory = os.getcwd()
+    requested_target = getattr(args, "target", None)
+    target = (
+        os.path.abspath(os.path.expanduser(requested_target))
+        if requested_target
+        else current_directory
+    )
+
+    if not os.path.exists(target):
+        rot_say(f"Cannot inspect a path that does not exist:\n{target}")
+        return 1
+
+    target_type = "directory" if os.path.isdir(target) else "file"
+    inspection_directory = target if target_type == "directory" else os.path.dirname(target)
     prompt = (
-        "Inspect the current directory and produce a tailored, read-only WTF "
-        "report. Do not modify any files. Examine the files and directories, "
-        "then explain what this project or directory appears to be, the purpose "
-        "of its important files and folders, how the pieces interact, likely "
-        "entry points, and how to run, test, or build it. Include notable Git "
-        "state, unfinished work, risks, and anything confusing or unknown. "
-        "Prioritize useful specifics over generic advice. Format the response "
-        "with clear sections beginning with 'WTF REPORT'.\n\n"
-        f"Current directory: {current_directory}"
+        f"Inspect the specified {target_type} and produce a tailored, read-only "
+        "WTF report. Do not modify any files. Focus specifically on the target "
+        "while inspecting nearby project context when needed. Explain what it "
+        "is, its purpose, how it interacts with related files, likely entry "
+        "points, and how to run, test, or build the relevant code. Include "
+        "notable Git state, unfinished work, risks, and anything confusing or "
+        "unknown. Prioritize useful specifics over generic advice. Format the "
+        "response with clear sections beginning with 'WTF REPORT'.\n\n"
+        f"Requested target: {target}\n"
+        f"Target type: {target_type}\n"
+        f"Invocation directory: {current_directory}"
     )
 
     rot_say(
         "WTF inspection started.\n"
-        f"Directory: {current_directory}\n"
-        "Mode:      read-only"
+        f"Target: {target}\n"
+        f"Type:   {target_type}\n"
+        "Mode:   read-only"
     )
     returncode, output, elapsed = stream_opencode(
         prompt,
-        "Rotbot is still investigating..."
+        "Rotbot is still investigating...",
+        inspection_directory
     )
 
     if returncode != 0:

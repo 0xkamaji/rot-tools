@@ -20,6 +20,7 @@ def create_parser():
             "  rot push\n"
             "  rot push --review\n"
             "  rot wtf\n"
+            "  rot wtf path/to/file.py\n"
             "  rotbot \"What is today's date?\"\n"
             "  rot \"What is today's date?\""
         ),
@@ -40,7 +41,12 @@ def create_parser():
 
     wtf_parser = commands.add_parser(
         "wtf",
-        help="Explain the current directory and what its files do"
+        help="Explain a file or directory and what it does"
+    )
+    wtf_parser.add_argument(
+        "target",
+        nargs="?",
+        help="Optional file or directory to inspect"
     )
     wtf_parser.set_defaults(func=directory_report)
 
