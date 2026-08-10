@@ -1,11 +1,12 @@
 import argparse
 import sys
 
+from git_commands import git_push
 from opencode_runner import ask_opencode
 from signalrot import sr_publish, sr_pull, sr_push, sr_status
 
 
-COMMANDS = {"sr"}
+COMMANDS = {"push", "sr"}
 
 
 def create_parser():
@@ -16,12 +17,25 @@ def create_parser():
             "Examples:\n"
             "  rotbot sr status\n"
             "  rot sr status\n"
+            "  rot push\n"
+            "  rot push --review\n"
             "  rotbot \"What is today's date?\"\n"
             "  rot \"What is today's date?\""
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    push_parser = commands.add_parser(
+        "push",
+        help="Stage, commit, and push the current Git repository"
+    )
+    push_parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Ask OpenCode to review changes before committing"
+    )
+    push_parser.set_defaults(func=git_push)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(

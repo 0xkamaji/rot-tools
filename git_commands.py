@@ -1,0 +1,265 @@
+import os
+from queue import Empty, Queue
+import re
+import shlex
+import subprocess
+from threading import Thread
+from time import perf_counter
+
+from gui import rot_continue, rot_say, rot_status
+
+
+def _capture_git(*args):
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+
+
+def _stream_opencode_review(prompt):
+    try:
+        process = subprocess.Popen(
+            ["opencode", "run", prompt],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+    except FileNotFoundError:
+        rot_say("OpenCode is not installed or is not available in PATH.")
+        return 127, ""
+
+    output_queue = Queue()
+    output_lines = []
+
+    def read_output():
+        try:
+            for line in process.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    Thread(target=read_output, daemon=True).start()
+    started_at = perf_counter()
+
+    while True:
+        try:
+            line = output_queue.get(timeout=2)
+        except Empty:
+            elapsed = round(perf_counter() - started_at)
+            rot_status(f"Rotbot is still reviewing... {elapsed}s elapsed")
+            continue
+
+        if line is None:
+            break
+
+        output_lines.append(line)
+        if line.strip():
+            rot_continue(line.rstrip())
+
+    returncode = process.wait()
+    elapsed = perf_counter() - started_at
+    rot_say(f"OpenCode review finished in {elapsed:.1f}s.")
+    return returncode, "".join(output_lines)
+
+
+def _suggested_commit_message(review_output):
+    match = re.search(
+        r"^\s*SUGGESTED_COMMIT_MESSAGE:\s*(.+?)\s*$",
+        review_output,
+        re.MULTILINE
+    )
+    return match.group(1).strip("`\"'") if match else ""
+
+
+def _read_input():
+    try:
+        return input("> ").strip()
+    except EOFError:
+        return ""
+
+
+def _edit_commit_message(suggested_message):
+    try:
+        import readline
+    except ImportError:
+        return _read_input()
+
+    readline.set_startup_hook(lambda: readline.insert_text(suggested_message))
+    try:
+        return _read_input()
+    finally:
+        readline.set_startup_hook()
+
+
+def _choose_commit_message(suggested_message):
+    while True:
+        rot_say(
+            f"Suggested commit message:\n{suggested_message}\n\n"
+            "[A]ccept, [E]dit, or [R]eplace?"
+        )
+        choice = _read_input().lower()
+
+        if choice in {"", "a", "accept"}:
+            return suggested_message
+        if choice in {"e", "edit"}:
+            rot_say("Edit the prefilled commit message, then press Enter:")
+            return _edit_commit_message(suggested_message)
+        if choice in {"r", "replace"}:
+            rot_say("Enter a replacement commit message:")
+            return _read_input()
+
+        rot_say("Please choose accept, edit, or replace.")
+
+
+def git_push(args):
+    try:
+        inside_repo = _capture_git("rev-parse", "--is-inside-work-tree")
+    except FileNotFoundError:
+        rot_say("Git is not installed or is not available in PATH.")
+        return 127
+
+    if inside_repo.returncode != 0 or inside_repo.stdout.strip() != "true":
+        rot_say("The current directory is not inside a Git repository.")
+        return 1
+
+    repository = _capture_git("rev-parse", "--show-toplevel")
+    status = _capture_git("status", "--short")
+    branch = _capture_git("branch", "--show-current")
+    upstream = _capture_git(
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}"
+    )
+
+    if repository.returncode != 0 or status.returncode != 0:
+        detail = repository.stderr.strip() or status.stderr.strip()
+        rot_say(f"Could not inspect the Git repository.\n{detail}")
+        return 1
+
+    changes = status.stdout.rstrip()
+    if not changes:
+        rot_say("No changes found. There is nothing to commit.")
+        return 0
+
+    review_requested = getattr(args, "review", False)
+    suggested_message = ""
+
+    if review_requested:
+        rot_say("Running: git status --short\nRunning: git diff")
+        diff = _capture_git("diff")
+
+        if diff.returncode != 0:
+            rot_say(f"Could not read the Git diff.\n{diff.stderr.strip()}")
+            return 1
+
+        review_prompt = (
+            "Review the following uncommitted Git changes. Do not modify any "
+            "files. Report bugs, risks, behavioral regressions, and missing "
+            "tests first, ordered by severity with file references. If there "
+            "are no findings, say so explicitly. Be thorough and include "
+            "sections for findings, testing gaps, and a recommendation. You "
+            "may inspect untracked files listed in the status from the current "
+            "repository, but keep the entire review read-only. End with exactly "
+            "one plain-text line in this format, with no Markdown around the "
+            "message:\nSUGGESTED_COMMIT_MESSAGE: <concise commit message>\n\n"
+            f"Git status:\n{changes}\n\n"
+            f"Git diff:\n{diff.stdout.rstrip() or '(no tracked diff)'}"
+        )
+
+        changed_paths = len(changes.splitlines())
+        diff_lines = len(diff.stdout.splitlines())
+        rot_say(
+            "Review input collected.\n"
+            f"Changed paths: {changed_paths}\n"
+            f"Diff lines:    {diff_lines}"
+        )
+        rot_say("Starting streamed OpenCode review...")
+        review_returncode, review_output = _stream_opencode_review(review_prompt)
+
+        if review_returncode != 0:
+            rot_say(
+                f"OpenCode review failed with exit code {review_returncode}."
+            )
+            return review_returncode
+
+        if not review_output.strip():
+            rot_say("OpenCode returned an empty review.")
+
+        suggested_message = _suggested_commit_message(review_output)
+        if suggested_message:
+            rot_say(f"Commit suggestion received: {suggested_message}")
+        else:
+            rot_say("OpenCode did not return a usable commit message suggestion.")
+
+        rot_say("Continue with the commit and push? [y/N]")
+        confirmed = _read_input().lower()
+
+        if confirmed not in {"y", "yes"}:
+            rot_say("Push cancelled. No Git changes were made.")
+            return 0
+
+    if suggested_message:
+        commit_message = _choose_commit_message(suggested_message)
+    else:
+        rot_say("Enter a commit message:")
+        commit_message = _read_input()
+
+    if not commit_message:
+        rot_say("Push cancelled: a commit message is required.")
+        return 1
+
+    branch_name = branch.stdout.strip() or "(detached HEAD)"
+    upstream_name = (
+        upstream.stdout.strip()
+        if upstream.returncode == 0
+        else "(not configured; git push may fail)"
+    )
+    indented_changes = "\n".join(f"  {line}" for line in changes.splitlines())
+    commit_command = shlex.join(["git", "commit", "-m", commit_message])
+
+    rot_say(
+        "GIT PUSH PLAN\n"
+        "-------------\n"
+        f"Repository: {repository.stdout.strip()}\n"
+        f"Directory:  {os.getcwd()}\n"
+        f"Branch:     {branch_name}\n"
+        f"Upstream:   {upstream_name}\n"
+        "Changes:\n"
+        f"{indented_changes}\n\n"
+        "Actions:\n"
+        "  1. git add .\n"
+        f"  2. {commit_command}\n"
+        "  3. git push"
+    )
+
+    if not review_requested:
+        rot_say("Proceed? [y/N]")
+        confirmed = _read_input().lower()
+
+        if confirmed not in {"y", "yes"}:
+            rot_say("Push cancelled. No Git changes were made.")
+            return 0
+
+    commands = (
+        ["git", "add", "."],
+        ["git", "commit", "-m", commit_message],
+        ["git", "push"]
+    )
+
+    for command in commands:
+        rot_say(f"Running: {shlex.join(command)}")
+        result = subprocess.run(command, check=False)
+
+        if result.returncode != 0:
+            rot_say(
+                f"Command failed with exit code {result.returncode}:\n"
+                f"{shlex.join(command)}"
+            )
+            return result.returncode
+
+    rot_say("Push complete.")
+    return 0
