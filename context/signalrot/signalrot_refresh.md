@@ -6,23 +6,55 @@ Last refreshed: 2026-08-10
 
 ## Overview
 
-SignalRot is a handmade static personal site combining practical security guidance, technical notes, broad-form writing, photography, and music. The repository is clean and retains the simple HTML, CSS, vanilla JavaScript, Markdown, and asset-based architecture described by the immutable identity context. The newest substantial body of work is a seven-part OPPSEC guide collection with dedicated styling, page behavior, navigation, and imagery.
+SignalRot is a handmade static personal site combining practical security guidance, technical notes, broad writing, photography, and music. It uses simple HTML, CSS, vanilla JavaScript, Markdown, and local assets in keeping with its immutable identity. The repository working tree is clean. The newest substantial body of work visible in the supplied state is the seven-part OPPSEC collection and its dedicated presentation layer.
 
 ## Current sections
 
 - OPPSEC
 - Hacks
 - Signals
-- Frames
 - Beats
+- Frames
 
 ## Published content
 
 - 7 OPPSEC guides
 
+## Section updates
+
+### OPPSEC
+- Current: seven published practical-security guides with a section index, reusable guide page, dedicated CSS and JavaScript, navigation, and banner imagery
+- Latest addition or change: complete seven-guide sequence covering orientation, accounts, devices, web browsing, public-space threats, home networks, and compromise recovery
+- Last changed: unknown
+
+### Hacks
+- Current: technical notebook section for reverse engineering, debugging, configuration, experiments, fixes, and lessons learned
+- Latest addition or change: no newer content addition or meaningful change could be established from the supplied comparison
+- Last changed: unknown
+
+### Signals
+- Current: broad writing section for essays, projects, experiments, observations, hardware, music, and miscellaneous interests
+- Latest addition or change: no newer content addition or meaningful change could be established from the supplied comparison
+- Last changed: unknown
+
+### Beats
+- Current: external link section
+- Latest addition or change: external-link routing remains the latest established configuration; no newer destination change was identified
+- Last changed: unknown
+
+### Frames
+- Current: external link section
+- Latest addition or change: external-link routing remains the latest established configuration; no newer destination change was identified
+- Last changed: unknown
+
+### Contact
+- Current: contact entry associated with the main site rather than a counted publishing section
+- Latest addition or change: no newer contact-content or configuration change could be established from the supplied comparison
+- Last changed: unknown
+
 ## New since previous refresh
 
-The repository now contains a complete seven-guide OPPSEC sequence:
+No additional content newer than the previous refresh is established by the supplied repository and production state. The seven-guide OPPSEC sequence remains the newest identifiable addition:
 
 - Start Here
 - Protect Your Accounts
@@ -32,27 +64,36 @@ The repository now contains a complete seven-guide OPPSEC sequence:
 - Secure Your Home Network
 - What to Do If You Get Compromised
 
-The OPPSEC addition also includes dedicated CSS, JavaScript, a banner image, a section index, and a reusable guide-page entry point. This is the clearest new content and implementation work visible since the previous refresh.
+Its supporting implementation includes `assets/css/oppsec.css`, `assets/js/oppsec-page.js`, a section index, a reusable guide-page entry point, and `oppsec/assets/temp_banner.jpg`.
 
 ## Current focus
 
-Current work is concentrated on OPPSEC: approachable, practical guidance covering threat modeling, account security, device protection, safer browsing, physical and public-space risks, home-network security, and compromise recovery. The sequence is structured as a progression from basic orientation through prevention and incident response, consistent with SignalRot’s goal of improving ordinary people’s security without creating paranoia.
+Current development is concentrated on OPPSEC. The section forms a practical progression from threat-model orientation through account, device, browsing, physical-space, and home-network protection to compromise recovery. This aligns with SignalRot’s stated aim of making ordinary people meaningfully safer without encouraging paranoia or requiring an unnecessarily complex technical stack.
 
 ## Repository vs production
 
-The repository working tree is clean, so the inspected OPPSEC state is committed rather than unfinished local work.
+The repository working tree is clean, indicating that the inspected state is committed rather than unfinished local work.
 
-Production is behind the repository. The deployment dry-run shows that production does not yet contain the seven OPPSEC Markdown guides, `assets/css/oppsec.css`, `assets/js/oppsec-page.js`, `oppsec/assets/temp_banner.jpg`, or `oppsec/page/index.html`. It would also create the associated OPPSEC asset and page directories.
+Production is behind the repository. The supplied deployment dry-run would add:
 
-The existing `oppsec/index.html` differs between repository and production in content or size as well as timestamp and permissions. Directory timestamps also differ for the shared CSS and JavaScript directories and for `oppsec/`. No production-only files are identified by the supplied comparison.
+- `assets/css/oppsec.css`
+- `assets/js/oppsec-page.js`
+- Seven OPPSEC Markdown guides
+- `oppsec/assets/temp_banner.jpg`
+- `oppsec/page/index.html`
+- The associated `oppsec/assets/` and `oppsec/page/` directories
+
+The existing `oppsec/index.html` also differs in content or size, modification time, and permissions. Directory timestamps differ for `assets/css/`, `assets/js/`, and `oppsec/`. The comparison identifies no production-only files.
 
 ## Possible next steps
 
-- Review the seven OPPSEC guides for spelling, naming, link, and navigation consistency before deployment; notably verify the repository filename `2. Protect Your Accoutns.md`.
-- Replace or deliberately approve the temporary OPPSEC banner asset before publishing.
-- Preview the OPPSEC index and guide-page flow in both Candy Rot and Dead Signal themes.
-- Check mobile layout, keyboard navigation, contrast, reduced-motion behavior, and JavaScript-disabled fallbacks.
-- Validate that guide URLs, Markdown loading, previous/next navigation, and compromise-response links work from the production web-root layout.
-- Review the unexpected permissions change reported for `oppsec/index.html` before synchronizing.
-- Run one final deployment dry-run, then deploy the OPPSEC CSS, JavaScript, guides, page structure, image, and updated index together.
-- After deployment, compare repository and production again and perform a live smoke test of every OPPSEC guide.
+- Correct or deliberately retain the filename typo `2. Protect Your Accoutns.md`, then verify every reference to it.
+- Replace or explicitly approve `temp_banner.jpg` before deployment.
+- Review the seven guides for factual accuracy, spelling, consistent terminology, internal links, and previous/next navigation.
+- Preview the OPPSEC index and guide pages in both Candy Rot and Dead Signal.
+- Test mobile layout, keyboard navigation, contrast, reduced-motion behavior, and JavaScript-disabled fallbacks.
+- Verify that Markdown loading and guide URLs work from the production web-root layout.
+- Investigate the permissions difference reported for `oppsec/index.html`.
+- Run a final deployment dry-run and deploy the OPPSEC files as one coherent release.
+- Smoke-test all seven live guides after deployment, then repeat the repository-to-production comparison.
+- Record dated changes for Hacks, Signals, Beats, Frames, and Contact in future refreshes so section activity can be tracked reliably.
