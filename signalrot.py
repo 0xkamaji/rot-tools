@@ -40,6 +40,26 @@ def _capture(command, working_directory):
     )
 
 
+def _rsync_command(repository, web_root, dry_run=False, sudo=False):
+    excludes = [item for pattern in GIT_EXCLUDES for item in ("--exclude", pattern)]
+    command = [
+        "rsync",
+        "--archive",
+        "--delete",
+        "--delete-excluded"
+    ]
+
+    if dry_run:
+        command.extend(("--dry-run", "--itemize-changes"))
+
+    command.extend((
+        *excludes,
+        f"{repository}/",
+        f"{web_root}/"
+    ))
+    return ["sudo", *command] if sudo else command
+
+
 def _confirm(message):
     rot_say(f"{message} [y/N]")
     try:
@@ -236,6 +256,73 @@ def sr_push(args):
     )
 
 
+def sr_diff(args):
+    repository = _repo_path()
+    web_root = _web_root()
+    if not _validate_repo(repository):
+        return 1
+    if not web_root.is_dir():
+        rot_say(f"Signal Rot web root not found:\n{web_root}")
+        return 1
+
+    dry_run_command = _rsync_command(repository, web_root, dry_run=True)
+    rot_say(
+        "Comparing the Signal Rot repository with the live Caddy web root...\n"
+        f"Repository: {repository}\n"
+        f"Live site:  {web_root}"
+    )
+    try:
+        dry_run = _capture(dry_run_command, repository)
+    except FileNotFoundError:
+        rot_say("rsync is not installed or is not available in PATH.")
+        return 127
+
+    if dry_run.returncode != 0:
+        detail = dry_run.stderr.strip() or dry_run.stdout.strip()
+        rot_say(f"Signal Rot comparison failed.\n{detail}")
+        return dry_run.returncode
+
+    planned_changes = dry_run.stdout.rstrip() or "(no deployment changes)"
+    rot_say(
+        "SIGNAL ROT DEPLOYMENT DIFF\n"
+        "--------------------------\n"
+        "Direction:   repository -> live web root\n"
+        "Git data:    excluded\n"
+        "Stale files: would be deleted\n"
+        "Planned changes:\n"
+        f"{planned_changes}"
+    )
+
+    note = getattr(args, "note", None)
+    prompt = (
+        "Produce a read-only comparison of the Signal Rot GitHub repository "
+        "and the live Caddy web root. Do not modify files. Inspect both "
+        "directories as needed and explain exactly what a publish would add, "
+        "update, overwrite, or delete. Identify live-only edits, missing assets, "
+        "secret or development files that could be exposed, and deployment "
+        "risks. Distinguish repository content from live content and cite paths. "
+        "Begin with 'SIGNAL ROT DIFF REPORT'.\n\n"
+        f"Repository source: {repository}\n"
+        f"Live destination: {web_root}\n"
+        f"rsync dry-run:\n{planned_changes}"
+        + (
+            f"\n\nAdditional user note:\n{note}"
+            if note
+            else ""
+        )
+    )
+    review_result = _review_task(
+        prompt,
+        repository,
+        "Rotbot is still comparing Signal Rot..."
+    )
+    if review_result != 0:
+        return review_result
+
+    rot_say("Signal Rot deployment comparison complete. No files were changed.")
+    return 0
+
+
 def sr_publish(args):
     review_requested = getattr(args, "review", False)
     review_note = getattr(args, "note", None)
@@ -260,20 +347,7 @@ def sr_publish(args):
         rot_say("Signal Rot publish stopped because the GitHub push failed.")
         return push_result
 
-    excludes = [item for pattern in GIT_EXCLUDES for item in ("--exclude", pattern)]
-    source = f"{repository}/"
-    destination = f"{web_root}/"
-    dry_run_command = [
-        "rsync",
-        "--archive",
-        "--delete",
-        "--delete-excluded",
-        "--dry-run",
-        "--itemize-changes",
-        *excludes,
-        source,
-        destination
-    ]
+    dry_run_command = _rsync_command(repository, web_root, dry_run=True)
 
     rot_say("Building a dry-run of the Signal Rot publish...")
     try:
@@ -290,16 +364,7 @@ def sr_publish(args):
         rot_say("The live Signal Rot website already matches the repository.")
         return 0
 
-    publish_command = [
-        "sudo",
-        "rsync",
-        "--archive",
-        "--delete",
-        "--delete-excluded",
-        *excludes,
-        source,
-        destination
-    ]
+    publish_command = _rsync_command(repository, web_root, sudo=True)
     rot_say(
         "SIGNAL ROT PUBLISH PLAN\n"
         "-----------------------\n"

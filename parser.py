@@ -3,7 +3,7 @@ import sys
 
 from git_commands import git_pull, git_push
 from opencode_runner import ask_opencode
-from signalrot import sr_publish, sr_pull, sr_push, sr_status
+from signalrot import sr_diff, sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
 
 
@@ -88,6 +88,13 @@ def create_parser():
         help="Check Signal Rot website status"
     )
     status_parser.set_defaults(func=sr_status)
+
+    diff_parser = sr_commands.add_parser(
+        "diff",
+        help="Compare the Signal Rot repository with the live website"
+    )
+    _add_note_argument(diff_parser)
+    diff_parser.set_defaults(func=sr_diff)
 
     pull_parser = sr_commands.add_parser(
         "pull",
