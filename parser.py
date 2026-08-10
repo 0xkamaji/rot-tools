@@ -1,10 +1,26 @@
 import argparse
+import sys
 
+from opencode_runner import ask_opencode
 from signalrot import sr_publish, sr_pull, sr_push, sr_status
 
 
+COMMANDS = {"sr"}
+
+
 def create_parser():
-    parser = argparse.ArgumentParser(prog="rotbot")
+    parser = argparse.ArgumentParser(
+        prog="rotbot",
+        description="Launch Rotbot using either the 'rotbot' or 'rot' command.",
+        epilog=(
+            "Examples:\n"
+            "  rotbot sr status\n"
+            "  rot sr status\n"
+            "  rotbot \"What is today's date?\"\n"
+            "  rot \"What is today's date?\""
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
@@ -38,3 +54,15 @@ def create_parser():
     publish_parser.set_defaults(func=sr_publish)
 
     return parser
+
+
+def parse_args(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+
+    if argv and argv[0] not in COMMANDS and argv[0] not in {"-h", "--help"}:
+        return argparse.Namespace(
+            func=ask_opencode,
+            question=" ".join(argv)
+        )
+
+    return create_parser().parse_args(argv)

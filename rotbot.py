@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 ############################################################
 # Author: Kamaji aka Deadhand aka gh0st aka scraps_dad
 # Creation Date: 08.10.26
@@ -6,16 +8,15 @@
 # He manages signalrot and rotten signals in his domain
 ############################################################
 
-from gui import rot_say
-from parser import create_parser
+from parser import parse_args
 
 
 def main():
-    parser = create_parser()
-    args = parser.parse_args()
+    args = parse_args()
+    result = args.func(args)
 
-    args.func(args)
+    return result if isinstance(result, int) else 0
     
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
