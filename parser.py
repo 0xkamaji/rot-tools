@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from git_commands import git_push
+from git_commands import git_pull, git_push
 from opencode_runner import ask_opencode
 from signalrot import sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
@@ -23,6 +23,7 @@ def create_parser():
             "Examples:\n"
             "  rotbot sr status\n"
             "  rot sr status\n"
+            "  rot pull\n"
             "  rot push\n"
             "  rot push --review\n"
             "  rot wtf\n"
@@ -35,6 +36,12 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    pull_parser = commands.add_parser(
+        "pull",
+        help="Pull the current Git repository"
+    )
+    pull_parser.set_defaults(func=git_pull)
 
     push_parser = commands.add_parser(
         "push",

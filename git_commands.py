@@ -69,6 +69,23 @@ def _choose_commit_message(suggested_message):
         rot_say("Please choose accept, edit, or replace.")
 
 
+def git_pull(args):
+    rot_say("Running: git pull")
+
+    try:
+        result = subprocess.run(["git", "pull"], check=False)
+    except FileNotFoundError:
+        rot_say("Git is not installed or is not available in PATH.")
+        return 127
+
+    if result.returncode != 0:
+        rot_say(f"git pull failed with exit code {result.returncode}.")
+        return result.returncode
+
+    rot_say("Pull complete.")
+    return 0
+
+
 def git_push(args, working_directory=None, review_context=None):
     command_directory = working_directory or os.getcwd()
 
