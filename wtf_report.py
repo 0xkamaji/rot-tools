@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from agents.runner import stream_agent
 from gui import rot_say
-from opencode_runner import stream_opencode
 
 
 SKIPPED_DIRECTORIES = {
@@ -239,18 +239,19 @@ def directory_report(args):
         activity = "Rotbot is still orienting..."
         mode_name = "Fast"
 
-    rot_say(f"Starting {mode_name.lower()} OpenCode orientation...")
-    returncode, output, elapsed = stream_opencode(
+    rot_say(f"Starting {mode_name.lower()} AI orientation...")
+    returncode, output, elapsed = stream_agent(
         prompt,
         activity,
-        project_root
+        project_root,
+        agent_name=getattr(args, "agent", None)
     )
 
     if returncode != 0:
         rot_say(f"WTF inspection failed with exit code {returncode}.")
         return returncode
     if not output.strip():
-        rot_say("OpenCode returned an empty WTF report.")
+        rot_say("The AI agent returned an empty WTF report.")
         return 1
 
     rot_say(f"{mode_name} WTF report finished in {elapsed:.1f}s.")

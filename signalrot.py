@@ -6,9 +6,9 @@ from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from agents.runner import stream_agent
 from git_commands import PUSH_CANCELLED, git_push
 from gui import rot_say
-from opencode_runner import stream_opencode
 
 
 DEFAULT_REPO = "/home/kamaji/github/signalrot"
@@ -90,20 +90,21 @@ def _validate_repo(repository):
     return True
 
 
-def _review_task(prompt, working_directory, activity):
-    rot_say("Starting streamed OpenCode review...")
-    returncode, output, elapsed = stream_opencode(
+def _review_task(prompt, working_directory, activity, agent_name=None):
+    rot_say("Starting streamed AI review...")
+    returncode, output, elapsed = stream_agent(
         prompt,
         activity,
-        working_directory
+        working_directory,
+        agent_name=agent_name
     )
-    rot_say(f"OpenCode review finished in {elapsed:.1f}s.")
+    rot_say(f"AI review finished in {elapsed:.1f}s.")
 
     if returncode != 0:
-        rot_say(f"OpenCode review failed with exit code {returncode}.")
+        rot_say(f"AI review failed with exit code {returncode}.")
         return returncode
     if not output.strip():
-        rot_say("OpenCode returned an empty review.")
+        rot_say("The AI agent returned an empty review.")
         return 1
 
     return 0
@@ -148,8 +149,12 @@ def sr_status(args):
 def sr_pull(args):
     review_requested = getattr(args, "review", False)
     review_note = getattr(args, "note", None)
+    review_agent = getattr(args, "agent", None)
     if review_note and not review_requested:
         rot_say("--note requires --review for Signal Rot pull.")
+        return 2
+    if review_agent and not review_requested:
+        rot_say("--agent requires --review for Signal Rot pull.")
         return 2
 
     repository = _repo_path()
@@ -221,7 +226,8 @@ def sr_pull(args):
         review_result = _review_task(
             review_prompt,
             repository,
-            "Rotbot is still reviewing the pull..."
+            "Rotbot is still reviewing the pull...",
+            review_agent
         )
         if review_result != 0:
             return review_result
@@ -314,7 +320,8 @@ def sr_diff(args):
     review_result = _review_task(
         prompt,
         repository,
-        "Rotbot is still comparing Signal Rot..."
+        "Rotbot is still comparing Signal Rot...",
+        getattr(args, "agent", None)
     )
     if review_result != 0:
         return review_result
@@ -326,8 +333,12 @@ def sr_diff(args):
 def sr_publish(args):
     review_requested = getattr(args, "review", False)
     review_note = getattr(args, "note", None)
+    review_agent = getattr(args, "agent", None)
     if review_note and not review_requested:
         rot_say("--note requires --review for Signal Rot publish.")
+        return 2
+    if review_agent and not review_requested:
+        rot_say("--agent requires --review for Signal Rot publish.")
         return 2
 
     repository = _repo_path()
@@ -397,7 +408,8 @@ def sr_publish(args):
         review_result = _review_task(
             review_prompt,
             repository,
-            "Rotbot is still reviewing the publish..."
+            "Rotbot is still reviewing the publish...",
+            review_agent
         )
         if review_result != 0:
             return review_result

@@ -1,7 +1,7 @@
 import argparse
 
+from agents.runner import ask_agent
 from git_commands import git_pull, git_push
-from opencode_runner import ask_opencode
 from signalrot import sr_diff, sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
 
@@ -10,7 +10,16 @@ def _add_note_argument(command_parser):
     command_parser.add_argument(
         "-n",
         "--note",
-        help="Add a user caveat or request to the OpenCode prompt"
+        help="Add a user caveat or request to the AI prompt"
+    )
+
+
+def _add_agent_argument(command_parser):
+    command_parser.add_argument(
+        "-a",
+        "--agent",
+        choices=("opencode", "codex"),
+        help="Choose the AI agent for this command"
     )
 
 
@@ -38,14 +47,15 @@ def create_parser():
 
     ask_parser = commands.add_parser(
         "ask",
-        help="Ask OpenCode a question"
+        help="Ask the configured AI agent a question"
     )
     ask_parser.add_argument(
         "question",
         nargs="+",
-        help="Question to send to OpenCode"
+        help="Question to send to the AI agent"
     )
-    ask_parser.set_defaults(func=ask_opencode)
+    _add_agent_argument(ask_parser)
+    ask_parser.set_defaults(func=ask_agent)
 
     pull_parser = commands.add_parser(
         "pull",
@@ -60,13 +70,14 @@ def create_parser():
     push_parser.add_argument(
         "--review",
         action="store_true",
-        help="Ask OpenCode to review changes before committing"
+        help="Ask the AI agent to review changes before committing"
     )
     push_parser.add_argument(
         "-m",
         "--message",
         help="Use this commit message instead of prompting"
     )
+    _add_agent_argument(push_parser)
     _add_note_argument(push_parser)
     push_parser.set_defaults(func=git_push)
 
@@ -84,6 +95,7 @@ def create_parser():
         action="store_true",
         help="Inspect broader context, architecture, risks, and testing"
     )
+    _add_agent_argument(wtf_parser)
     _add_note_argument(wtf_parser)
     wtf_parser.set_defaults(func=directory_report)
 
@@ -103,6 +115,7 @@ def create_parser():
         "diff",
         help="Compare the Signal Rot repository with the live website"
     )
+    _add_agent_argument(diff_parser)
     _add_note_argument(diff_parser)
     diff_parser.set_defaults(func=sr_diff)
 
@@ -113,8 +126,9 @@ def create_parser():
     pull_parser.add_argument(
         "--review",
         action="store_true",
-        help="Review incoming changes with OpenCode before pulling"
+        help="Review incoming changes with the AI agent before pulling"
     )
+    _add_agent_argument(pull_parser)
     _add_note_argument(pull_parser)
     pull_parser.set_defaults(func=sr_pull)
 
@@ -125,8 +139,9 @@ def create_parser():
     push_parser.add_argument(
         "--review",
         action="store_true",
-        help="Review changes with OpenCode before pushing"
+        help="Review changes with the AI agent before pushing"
     )
+    _add_agent_argument(push_parser)
     _add_note_argument(push_parser)
     push_parser.set_defaults(func=sr_push)
 
@@ -137,8 +152,9 @@ def create_parser():
     publish_parser.add_argument(
         "--review",
         action="store_true",
-        help="Review the deployment plan with OpenCode before publishing"
+        help="Review the deployment plan with the AI agent before publishing"
     )
+    _add_agent_argument(publish_parser)
     _add_note_argument(publish_parser)
     publish_parser.set_defaults(func=sr_publish)
 

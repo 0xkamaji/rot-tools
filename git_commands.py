@@ -3,8 +3,8 @@ import re
 import shlex
 import subprocess
 
+from agents.runner import stream_agent
 from gui import rot_say
-from opencode_runner import stream_opencode
 
 
 PUSH_CANCELLED = object()
@@ -133,9 +133,13 @@ def git_push(args, working_directory=None, review_context=None):
 
     review_requested = getattr(args, "review", False)
     review_note = getattr(args, "note", None)
+    review_agent = getattr(args, "agent", None)
     provided_message = getattr(args, "message", None)
     if review_note and not review_requested:
         rot_say("--note requires --review for a push command.")
+        return 2
+    if review_agent and not review_requested:
+        rot_say("--agent requires --review for a push command.")
         return 2
 
     branch_name = branch.stdout.strip() or "(detached HEAD)"
@@ -212,28 +216,29 @@ def git_push(args, working_directory=None, review_context=None):
             f"Changed paths: {changed_paths}\n"
             f"Diff lines:    {diff_lines}"
         )
-        rot_say("Starting streamed OpenCode review...")
-        review_returncode, review_output, review_elapsed = stream_opencode(
+        rot_say("Starting streamed AI review...")
+        review_returncode, review_output, review_elapsed = stream_agent(
             review_prompt,
             "Rotbot is still reviewing...",
-            command_directory
+            command_directory,
+            agent_name=review_agent
         )
-        rot_say(f"OpenCode review finished in {review_elapsed:.1f}s.")
+        rot_say(f"AI review finished in {review_elapsed:.1f}s.")
 
         if review_returncode != 0:
             rot_say(
-                f"OpenCode review failed with exit code {review_returncode}."
+                f"AI review failed with exit code {review_returncode}."
             )
             return review_returncode
 
         if not review_output.strip():
-            rot_say("OpenCode returned an empty review.")
+            rot_say("The AI agent returned an empty review.")
 
         suggested_message = _suggested_commit_message(review_output)
         if suggested_message:
             rot_say(f"Commit suggestion received: {suggested_message}")
         else:
-            rot_say("OpenCode did not return a usable commit message suggestion.")
+            rot_say("The AI agent did not return a usable commit message suggestion.")
 
         rot_say("Continue with the commit and push? [y/N]")
         confirmed = _read_input().lower()
