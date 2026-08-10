@@ -47,6 +47,11 @@ def rot_continue(message):
         print(f"{'':<{bot_width}}   {line}")
 
 
+def rot_break():
+    bot_width = max(len(line) for line in ROTBOT.splitlines())
+    print(f"{'':<{bot_width}}   {ROTBOT_DIVIDER}")
+
+
 def rot_output_start(question=None):
     label = " ROT OUTPUT "
     width = max(get_terminal_size(fallback=(80, 24)).columns, len(label))

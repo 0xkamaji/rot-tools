@@ -8,6 +8,7 @@ from time import perf_counter
 
 from agents import codex_runner, opencode_runner
 from gui import (
+    rot_break,
     rot_output_end,
     rot_output_line,
     rot_output_start,
@@ -63,7 +64,8 @@ def stream_agent(
     agent = _select_agent(agent_name)
     if agent is None:
         return 127, "", 0
-    rot_say(f"Using AI agent: {agent.NAME} (model: {agent.get_model()}).")
+    rot_status(f"Using AI agent: {agent.NAME}.")
+    rot_break()
 
     try:
         process = subprocess.Popen(
