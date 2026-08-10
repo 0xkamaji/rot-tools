@@ -42,6 +42,8 @@ def _select_agent(agent_name=None):
     for agent_name in ("opencode", "codex"):
         agent = AGENTS[agent_name]
         if which(agent.EXECUTABLE) is not None:
+            if agent_name == "codex":
+                rot_say("OpenCode is unavailable. Falling back to Codex.")
             return agent
 
     rot_say("No supported AI agent is available. Install OpenCode or Codex.")
@@ -66,7 +68,7 @@ def stream_agent(
             stderr=(
                 subprocess.STDOUT
                 if agent.MERGE_STDERR
-                else subprocess.DEVNULL
+                else subprocess.PIPE
             ),
             text=True,
             bufsize=1,
@@ -78,6 +80,7 @@ def stream_agent(
 
     output_queue = Queue()
     output_lines = []
+    error_lines = []
 
     def read_output():
         try:
@@ -87,6 +90,15 @@ def stream_agent(
             output_queue.put(None)
 
     Thread(target=read_output, daemon=True).start()
+    error_thread = None
+    if process.stderr is not None:
+        def read_errors():
+            for line in process.stderr:
+                error_lines.append(line)
+
+        error_thread = Thread(target=read_errors, daemon=True)
+        error_thread.start()
+
     started_at = perf_counter()
     output_started = False
 
@@ -112,8 +124,22 @@ def stream_agent(
             rot_output_line("")
 
     returncode = process.wait()
+    if error_thread is not None:
+        error_thread.join()
     if output_started:
         rot_output_end()
+
+    if returncode != 0 and not agent.MERGE_STDERR:
+        error_detail = "\n".join(
+            line.rstrip()
+            for line in error_lines[-8:]
+            if line.strip()
+        )
+        message = f"{agent.NAME} failed with exit code {returncode}."
+        if error_detail:
+            message += f"\n{error_detail}"
+        rot_say(message)
+
     elapsed = perf_counter() - started_at
     return returncode, "".join(output_lines), elapsed
 
