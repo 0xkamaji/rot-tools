@@ -1,5 +1,4 @@
 import argparse
-import sys
 
 from git_commands import git_pull, git_push
 from opencode_runner import ask_opencode
@@ -30,12 +29,23 @@ def create_parser():
             "  rot wtf -n \"also count occurrences of chicken\"\n"
             "  rot wtf path/to/file.py\n"
             "  rot wtf --deep path/to/directory\n"
-            "  rotbot \"What is today's date?\"\n"
-            "  rot \"What is today's date?\""
+            "  rotbot ask \"What is today's date?\"\n"
+            "  rot ask \"What is today's date?\""
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    ask_parser = commands.add_parser(
+        "ask",
+        help="Ask OpenCode a question"
+    )
+    ask_parser.add_argument(
+        "question",
+        nargs="+",
+        help="Question to send to OpenCode"
+    )
+    ask_parser.set_defaults(func=ask_opencode)
 
     pull_parser = commands.add_parser(
         "pull",
@@ -136,22 +146,4 @@ def create_parser():
 
 
 def parse_args(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    parser = create_parser()
-    commands = next(
-        action
-        for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
-    )
-
-    if (
-        argv
-        and argv[0] not in commands.choices
-        and argv[0] not in {"-h", "--help"}
-    ):
-        return argparse.Namespace(
-            func=ask_opencode,
-            question=" ".join(argv)
-        )
-
-    return parser.parse_args(argv)
+    return create_parser().parse_args(argv)
