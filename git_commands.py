@@ -1,12 +1,10 @@
 import os
-from queue import Empty, Queue
 import re
 import shlex
 import subprocess
-from threading import Thread
-from time import perf_counter
 
-from gui import rot_continue, rot_say, rot_status
+from gui import rot_say
+from opencode_runner import stream_opencode
 
 
 def _capture_git(*args):
@@ -16,53 +14,6 @@ def _capture_git(*args):
         text=True,
         check=False
     )
-
-
-def _stream_opencode_review(prompt):
-    try:
-        process = subprocess.Popen(
-            ["opencode", "run", prompt],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-    except FileNotFoundError:
-        rot_say("OpenCode is not installed or is not available in PATH.")
-        return 127, ""
-
-    output_queue = Queue()
-    output_lines = []
-
-    def read_output():
-        try:
-            for line in process.stdout:
-                output_queue.put(line)
-        finally:
-            output_queue.put(None)
-
-    Thread(target=read_output, daemon=True).start()
-    started_at = perf_counter()
-
-    while True:
-        try:
-            line = output_queue.get(timeout=2)
-        except Empty:
-            elapsed = round(perf_counter() - started_at)
-            rot_status(f"Rotbot is still reviewing... {elapsed}s elapsed")
-            continue
-
-        if line is None:
-            break
-
-        output_lines.append(line)
-        if line.strip():
-            rot_continue(line.rstrip())
-
-    returncode = process.wait()
-    elapsed = perf_counter() - started_at
-    rot_say(f"OpenCode review finished in {elapsed:.1f}s.")
-    return returncode, "".join(output_lines)
 
 
 def _suggested_commit_message(review_output):
@@ -178,7 +129,11 @@ def git_push(args):
             f"Diff lines:    {diff_lines}"
         )
         rot_say("Starting streamed OpenCode review...")
-        review_returncode, review_output = _stream_opencode_review(review_prompt)
+        review_returncode, review_output, review_elapsed = stream_opencode(
+            review_prompt,
+            "Rotbot is still reviewing..."
+        )
+        rot_say(f"OpenCode review finished in {review_elapsed:.1f}s.")
 
         if review_returncode != 0:
             rot_say(

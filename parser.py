@@ -2,11 +2,11 @@ import argparse
 import sys
 
 from git_commands import git_push
-from opencode_runner import ask_opencode
+from opencode_runner import ask_opencode, directory_report
 from signalrot import sr_publish, sr_pull, sr_push, sr_status
 
 
-COMMANDS = {"push", "sr"}
+COMMANDS = {"push", "sr", "wtf"}
 
 
 def create_parser():
@@ -19,6 +19,7 @@ def create_parser():
             "  rot sr status\n"
             "  rot push\n"
             "  rot push --review\n"
+            "  rot wtf\n"
             "  rotbot \"What is today's date?\"\n"
             "  rot \"What is today's date?\""
         ),
@@ -36,6 +37,12 @@ def create_parser():
         help="Ask OpenCode to review changes before committing"
     )
     push_parser.set_defaults(func=git_push)
+
+    wtf_parser = commands.add_parser(
+        "wtf",
+        help="Explain the current directory and what its files do"
+    )
+    wtf_parser.set_defaults(func=directory_report)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(
