@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -198,7 +198,7 @@ def refresh_signalrot_context(
     git_status,
     deployment_diff
 ):
-    refreshed_on = date.today().isoformat()
+    refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     prompt = with_signalrot_context(
         "Regenerate the refreshable signalrot current-state document by "
         "inspecting the repository and the supplied production comparison. "
@@ -209,7 +209,7 @@ def refresh_signalrot_context(
         "section where possible, identify current focus, compare repository and "
         "production, and suggest concrete next steps. Use exactly this structure:\n\n"
         "# SignalRot Current State\n\n"
-        f"Last refreshed: {refreshed_on}\n\n"
+        f"Last refreshed: {refreshed_at}\n\n"
         "# Snapshot\n\n"
         "## Overview\n\n"
         "## Current sections\n\n"
@@ -219,34 +219,35 @@ def refresh_signalrot_context(
         "## Section updates\n\n"
         "Create each subsection below. Inspect repository content and Git "
         "history to identify the most recent addition or meaningful change and "
-        "its date. Use `unknown` only when history cannot establish a date. "
+        "its date and time, normalized to UTC at minute precision. Use `unknown` "
+        "only when history cannot establish a timestamp. "
         "Beats and Frames currently lead to external links; state that as their "
         "current behavior, but still report their latest link or configuration "
         "change so future additions are tracked. Use exactly these fields:\n\n"
         "### OPPSEC\n"
         "- Current: ...\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "### Hacks\n"
         "- Current: ...\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "### Signals\n"
         "- Current: ...\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "### Beats\n"
         "- Current: external link section\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "### Frames\n"
         "- Current: external link section\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "### Contact\n"
         "- Current: ...\n"
         "- Latest addition or change: ...\n"
-        "- Last changed: YYYY-MM-DD or unknown\n\n"
+        "- Last changed: YYYY-MM-DD HH:MM UTC or unknown\n\n"
         "## New since previous refresh\n\n"
         "## Current focus\n\n"
         "## Repository vs production\n\n"
@@ -274,10 +275,21 @@ def refresh_signalrot_context(
         return returncode
 
     content = _clean_refresh_output(output)
+    updates = dict(_section_updates(content))
+    timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$")
+    valid_section_timestamps = all(
+        section in updates
+        and (
+            updates[section].get("Last changed") == "unknown"
+            or timestamp_pattern.match(updates[section].get("Last changed", ""))
+        )
+        for section in TRACKED_SECTIONS
+    )
     if (
         not content.startswith("# SignalRot Current State")
-        or f"Last refreshed: {refreshed_on}" not in content
+        or f"Last refreshed: {refreshed_at}" not in content
         or any(f"### {section}" not in content for section in TRACKED_SECTIONS)
+        or not valid_section_timestamps
     ):
         rot_say("The AI agent returned an invalid signalrot context document.")
         return 1

@@ -25,32 +25,32 @@ SignalRot is a handmade static personal site combining practical security guidan
 ### OPPSEC
 - Current: seven published practical-security guides with a section index, reusable guide page, dedicated CSS and JavaScript, navigation, and banner imagery
 - Latest addition or change: complete seven-guide sequence covering orientation, accounts, devices, web browsing, public-space threats, home networks, and compromise recovery
-- Last changed: unknown
+- Last changed: 08/10/26 5:16pm
 
 ### Hacks
 - Current: technical notebook section for reverse engineering, debugging, configuration, experiments, fixes, and lessons learned
 - Latest addition or change: no newer content addition or meaningful change could be established from the supplied comparison
-- Last changed: unknown
+- Last changed: 08/10/26 5:16pm
 
 ### Signals
 - Current: broad writing section for essays, projects, experiments, observations, hardware, music, and miscellaneous interests
-- Latest addition or change: no newer content addition or meaningful change could be established from the supplied comparison
-- Last changed: unknown
+- Latest addition or change: added write up for tape player pitch modification, bringing the current number of signal postings to two!
+- Last changed: 08/10/26 5:16pm
 
 ### Beats
 - Current: external link section
 - Latest addition or change: external-link routing remains the latest established configuration; no newer destination change was identified
-- Last changed: unknown
+- Last changed: 08/10/26 5:16pm
 
 ### Frames
 - Current: external link section
 - Latest addition or change: external-link routing remains the latest established configuration; no newer destination change was identified
-- Last changed: unknown
+- Last changed: 08/10/26 5:16pm
 
 ### Contact
 - Current: contact entry associated with the main site rather than a counted publishing section
 - Latest addition or change: no newer contact-content or configuration change could be established from the supplied comparison
-- Last changed: unknown
+- Last changed: 08/10/26 5:16pm
 
 ## New since previous refresh
 
