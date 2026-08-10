@@ -10,6 +10,14 @@ from wtf_report import directory_report
 COMMANDS = {"push", "sr", "wtf"}
 
 
+def _add_note_argument(command_parser):
+    command_parser.add_argument(
+        "-n",
+        "--note",
+        help="Add a user caveat or request to the OpenCode prompt"
+    )
+
+
 def create_parser():
     parser = argparse.ArgumentParser(
         prog="rotbot",
@@ -21,6 +29,7 @@ def create_parser():
             "  rot push\n"
             "  rot push --review\n"
             "  rot wtf\n"
+            "  rot wtf -n \"also count occurrences of chicken\"\n"
             "  rot wtf path/to/file.py\n"
             "  rot wtf --deep path/to/directory\n"
             "  rotbot \"What is today's date?\"\n"
@@ -39,6 +48,7 @@ def create_parser():
         action="store_true",
         help="Ask OpenCode to review changes before committing"
     )
+    _add_note_argument(push_parser)
     push_parser.set_defaults(func=git_push)
 
     wtf_parser = commands.add_parser(
@@ -55,6 +65,7 @@ def create_parser():
         action="store_true",
         help="Inspect broader context, architecture, risks, and testing"
     )
+    _add_note_argument(wtf_parser)
     wtf_parser.set_defaults(func=directory_report)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
@@ -78,6 +89,7 @@ def create_parser():
         action="store_true",
         help="Review incoming changes with OpenCode before pulling"
     )
+    _add_note_argument(pull_parser)
     pull_parser.set_defaults(func=sr_pull)
 
     push_parser = sr_commands.add_parser(
@@ -89,6 +101,7 @@ def create_parser():
         action="store_true",
         help="Review changes with OpenCode before pushing"
     )
+    _add_note_argument(push_parser)
     push_parser.set_defaults(func=sr_push)
 
     publish_parser = sr_commands.add_parser(
@@ -100,6 +113,7 @@ def create_parser():
         action="store_true",
         help="Review the deployment plan with OpenCode before publishing"
     )
+    _add_note_argument(publish_parser)
     publish_parser.set_defaults(func=sr_publish)
 
     return parser

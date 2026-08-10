@@ -114,6 +114,12 @@ def git_push(args, working_directory=None, review_context=None):
         rot_say(f"Could not inspect the Git repository.\n{detail}")
         return 1
 
+    review_requested = getattr(args, "review", False)
+    review_note = getattr(args, "note", None)
+    if review_note and not review_requested:
+        rot_say("--note requires --review for a push command.")
+        return 2
+
     branch_name = branch.stdout.strip() or "(detached HEAD)"
     upstream_name = (
         upstream.stdout.strip()
@@ -151,7 +157,6 @@ def git_push(args, working_directory=None, review_context=None):
         rot_say("Push complete.")
         return 0
 
-    review_requested = getattr(args, "review", False)
     suggested_message = ""
 
     if review_requested:
@@ -175,6 +180,11 @@ def git_push(args, working_directory=None, review_context=None):
             f"Task context: {review_context or 'Commit and push this Git repository.'}\n\n"
             f"Git status:\n{changes}\n\n"
             f"Git diff:\n{diff.stdout.rstrip() or '(no tracked diff)'}"
+            + (
+                f"\n\nAdditional user note:\n{review_note}"
+                if review_note
+                else ""
+            )
         )
 
         changed_paths = len(changes.splitlines())

@@ -111,9 +111,7 @@ def _read_excerpt(path, limit):
 
 def _important_files(root, target, excerpt_limit):
     candidates = []
-
-    if target.is_file():
-        candidates.append(target)
+    target_file = target.resolve() if target.is_file() else None
 
     try:
         readmes = sorted(
@@ -130,7 +128,7 @@ def _important_files(root, target, excerpt_limit):
     seen = set()
     for path in candidates:
         resolved = path.resolve()
-        if resolved in seen:
+        if resolved == target_file or resolved in seen:
             continue
         seen.add(resolved)
 
@@ -191,6 +189,7 @@ def directory_report(args):
         return 1
 
     deep = getattr(args, "deep", False)
+    note = getattr(args, "note", None)
     snapshot, project_root = _build_snapshot(target, invocation_directory, deep)
     rot_say(
         f"{'DEEP WTF SNAPSHOT' if deep else 'FAST WTF SNAPSHOT'}\n"
@@ -207,18 +206,35 @@ def directory_report(args):
             "work, testing and gaps, and anything obviously weird. Be specific "
             "and cite paths. Begin with 'DEEP WTF REPORT'.\n\n"
             f"{snapshot}"
+            + (
+                f"\n\nAdditional user note to address:\n{note}"
+                if note
+                else ""
+            )
         )
         activity = "Rotbot is still digging through the project..."
         mode_name = "Deep"
     else:
+        note_instruction = (
+            " A narrowly scoped read-only inspection beyond the snapshot is "
+            "allowed only when needed to fulfill the additional user note."
+            if note
+            else ""
+        )
         prompt = (
             "Using only the deterministic snapshot below, provide a quick, "
             "read-only orientation. Do not inspect additional files and do not "
             "modify anything. Answer these exact questions with concise, "
             "path-specific evidence: What is this? What is the entry point? "
             "What are the major files? How does it fit together? Anything "
-            "obviously weird? Begin with 'FAST WTF REPORT'.\n\n"
+            "obviously weird? Begin with 'FAST WTF REPORT'."
+            f"{note_instruction}\n\n"
             f"{snapshot}"
+            + (
+                f"\n\nAdditional user note to address:\n{note}"
+                if note
+                else ""
+            )
         )
         activity = "Rotbot is still orienting..."
         mode_name = "Fast"

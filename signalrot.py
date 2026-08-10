@@ -126,6 +126,12 @@ def sr_status(args):
 
 
 def sr_pull(args):
+    review_requested = getattr(args, "review", False)
+    review_note = getattr(args, "note", None)
+    if review_note and not review_requested:
+        rot_say("--note requires --review for Signal Rot pull.")
+        return 2
+
     repository = _repo_path()
     if not _validate_repo(repository):
         return 1
@@ -177,7 +183,7 @@ def sr_pull(args):
         f"{incoming.stdout.rstrip()}"
     )
 
-    if getattr(args, "review", False):
+    if review_requested:
         review_prompt = (
             "Review the incoming Signal Rot website changes before they are "
             "pulled from GitHub. Keep the review read-only and do not modify "
@@ -186,6 +192,11 @@ def sr_pull(args):
             f"Repository: {repository}\n"
             f"Incoming commits:\n{incoming.stdout.rstrip()}\n\n"
             f"Incoming diff:\n{diff.stdout.rstrip()}"
+            + (
+                f"\n\nAdditional user note:\n{review_note}"
+                if review_note
+                else ""
+            )
         )
         review_result = _review_task(
             review_prompt,
@@ -226,6 +237,12 @@ def sr_push(args):
 
 
 def sr_publish(args):
+    review_requested = getattr(args, "review", False)
+    review_note = getattr(args, "note", None)
+    if review_note and not review_requested:
+        rot_say("--note requires --review for Signal Rot publish.")
+        return 2
+
     repository = _repo_path()
     web_root = _web_root()
     if not _validate_repo(repository):
@@ -295,7 +312,7 @@ def sr_publish(args):
         f"{dry_run.stdout.rstrip()}"
     )
 
-    if getattr(args, "review", False):
+    if review_requested:
         review_prompt = (
             "Review this planned deployment of the Signal Rot repository into "
             "the live Caddy web root. Keep the review read-only and do not "
@@ -306,6 +323,11 @@ def sr_publish(args):
             f"Source: {repository}\n"
             f"Destination: {web_root}\n"
             f"rsync dry-run:\n{dry_run.stdout.rstrip()}"
+            + (
+                f"\n\nAdditional user note:\n{review_note}"
+                if review_note
+                else ""
+            )
         )
         review_result = _review_task(
             review_prompt,
