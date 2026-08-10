@@ -44,7 +44,7 @@ def _select_agent(agent_name=None):
         agent = AGENTS[agent_name]
         if which(agent.EXECUTABLE) is not None:
             if agent_name == "codex":
-                rot_say("OpenCode is unavailable. Falling back to Codex.")
+                rot_say("Using AI agent: Codex.")
             return agent
 
     rot_say("No supported AI agent is available. Install OpenCode or Codex.")
@@ -140,10 +140,7 @@ def stream_agent(
         and returncode == -SIGILL
         and which(codex_runner.EXECUTABLE) is not None
     ):
-        rot_say(
-            "OpenCode cannot run on this CPU (illegal instruction). "
-            "Falling back to Codex."
-        )
+        rot_say("Using AI agent: Codex.")
         return stream_agent(
             prompt,
             activity_message,

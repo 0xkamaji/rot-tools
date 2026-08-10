@@ -268,12 +268,12 @@ def sr_diff(args):
     if not _validate_repo(repository):
         return 1
     if not web_root.is_dir():
-        rot_say(f"Signal Rot web root not found:\n{web_root}")
+        rot_say(f"signalrot web root not found:\n{web_root}")
         return 1
 
     dry_run_command = _rsync_command(repository, web_root, dry_run=True)
     rot_say(
-        "Comparing the Signal Rot repository with the live Caddy web root...\n"
+        "Comparing the signalrot repository with the live Caddy web root...\n"
         f"Repository: {repository}\n"
         f"Live site:  {web_root}"
     )
@@ -285,13 +285,13 @@ def sr_diff(args):
 
     if dry_run.returncode != 0:
         detail = dry_run.stderr.strip() or dry_run.stdout.strip()
-        rot_say(f"Signal Rot comparison failed.\n{detail}")
+        rot_say(f"signalrot comparison failed.\n{detail}")
         return dry_run.returncode
 
     planned_changes = dry_run.stdout.rstrip() or "(no deployment changes)"
     rot_say(
-        "SIGNAL ROT DEPLOYMENT DIFF\n"
-        "--------------------------\n"
+        "SIGNALROT DEPLOYMENT DIFF\n"
+        "-------------------------\n"
         "Direction:   repository -> live web root\n"
         "Git data:    excluded\n"
         "Stale files: would be deleted\n"
@@ -301,13 +301,13 @@ def sr_diff(args):
 
     note = getattr(args, "note", None)
     prompt = (
-        "Produce a read-only comparison of the Signal Rot GitHub repository "
+        "Produce a read-only comparison of the signalrot GitHub repository "
         "and the live Caddy web root. Do not modify files. Inspect both "
         "directories as needed and explain exactly what a publish would add, "
         "update, overwrite, or delete. Identify live-only edits, missing assets, "
         "secret or development files that could be exposed, and deployment "
         "risks. Distinguish repository content from live content and cite paths. "
-        "Begin with 'SIGNAL ROT DIFF REPORT'.\n\n"
+        "Begin with 'SIGNALROT DIFF REPORT'.\n\n"
         f"Repository source: {repository}\n"
         f"Live destination: {web_root}\n"
         f"rsync dry-run:\n{planned_changes}"
@@ -320,13 +320,13 @@ def sr_diff(args):
     review_result = _review_task(
         prompt,
         repository,
-        "Rotbot is still comparing Signal Rot...",
+        "Rotbot is still comparing signalrot...",
         getattr(args, "agent", None)
     )
     if review_result != 0:
         return review_result
 
-    rot_say("Signal Rot deployment comparison complete. No files were changed.")
+    rot_say("signalrot deployment comparison complete. No files were changed.")
     return 0
 
 

@@ -113,7 +113,7 @@ def create_parser():
 
     diff_parser = sr_commands.add_parser(
         "diff",
-        help="Compare the Signal Rot repository with the live website"
+        help="Compare the signalrot repository with the live website"
     )
     _add_agent_argument(diff_parser)
     _add_note_argument(diff_parser)
