@@ -2,8 +2,9 @@ import argparse
 import sys
 
 from git_commands import git_push
-from opencode_runner import ask_opencode, directory_report
+from opencode_runner import ask_opencode
 from signalrot import sr_publish, sr_pull, sr_push, sr_status
+from wtf_report import directory_report
 
 
 COMMANDS = {"push", "sr", "wtf"}
@@ -21,6 +22,7 @@ def create_parser():
             "  rot push --review\n"
             "  rot wtf\n"
             "  rot wtf path/to/file.py\n"
+            "  rot wtf --deep path/to/directory\n"
             "  rotbot \"What is today's date?\"\n"
             "  rot \"What is today's date?\""
         ),
@@ -48,6 +50,11 @@ def create_parser():
         nargs="?",
         help="Optional file or directory to inspect"
     )
+    wtf_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Inspect broader context, architecture, risks, and testing"
+    )
     wtf_parser.set_defaults(func=directory_report)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
@@ -66,17 +73,32 @@ def create_parser():
         "pull",
         help="Pull the latest Signal Rot version"
     )
+    pull_parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Review incoming changes with OpenCode before pulling"
+    )
     pull_parser.set_defaults(func=sr_pull)
 
     push_parser = sr_commands.add_parser(
         "push",
         help="Push the latest Signal Rot version"
     )
+    push_parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Review changes with OpenCode before pushing"
+    )
     push_parser.set_defaults(func=sr_push)
 
     publish_parser = sr_commands.add_parser(
         "publish",
         help="Publish the latest Signal Rot version"
+    )
+    publish_parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Review the deployment plan with OpenCode before publishing"
     )
     publish_parser.set_defaults(func=sr_publish)
 

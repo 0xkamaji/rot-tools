@@ -7,12 +7,16 @@ from gui import rot_say
 from opencode_runner import stream_opencode
 
 
-def _capture_git(*args):
+PUSH_CANCELLED = object()
+
+
+def _capture_git(*args, working_directory=None):
     return subprocess.run(
         ["git", *args],
         capture_output=True,
         text=True,
-        check=False
+        check=False,
+        cwd=working_directory
     )
 
 
@@ -65,9 +69,15 @@ def _choose_commit_message(suggested_message):
         rot_say("Please choose accept, edit, or replace.")
 
 
-def git_push(args):
+def git_push(args, working_directory=None, review_context=None):
+    command_directory = working_directory or os.getcwd()
+
     try:
-        inside_repo = _capture_git("rev-parse", "--is-inside-work-tree")
+        inside_repo = _capture_git(
+            "rev-parse",
+            "--is-inside-work-tree",
+            working_directory=command_directory
+        )
     except FileNotFoundError:
         rot_say("Git is not installed or is not available in PATH.")
         return 127
@@ -76,14 +86,27 @@ def git_push(args):
         rot_say("The current directory is not inside a Git repository.")
         return 1
 
-    repository = _capture_git("rev-parse", "--show-toplevel")
-    status = _capture_git("status", "--short")
-    branch = _capture_git("branch", "--show-current")
+    repository = _capture_git(
+        "rev-parse",
+        "--show-toplevel",
+        working_directory=command_directory
+    )
+    status = _capture_git(
+        "status",
+        "--short",
+        working_directory=command_directory
+    )
+    branch = _capture_git(
+        "branch",
+        "--show-current",
+        working_directory=command_directory
+    )
     upstream = _capture_git(
         "rev-parse",
         "--abbrev-ref",
         "--symbolic-full-name",
-        "@{upstream}"
+        "@{upstream}",
+        working_directory=command_directory
     )
 
     if repository.returncode != 0 or status.returncode != 0:
@@ -91,17 +114,49 @@ def git_push(args):
         rot_say(f"Could not inspect the Git repository.\n{detail}")
         return 1
 
+    branch_name = branch.stdout.strip() or "(detached HEAD)"
+    upstream_name = (
+        upstream.stdout.strip()
+        if upstream.returncode == 0
+        else "(not configured; git push may fail)"
+    )
     changes = status.stdout.rstrip()
     if not changes:
-        rot_say("No changes found. There is nothing to commit.")
+        rot_say(
+            "GIT PUSH PLAN\n"
+            "-------------\n"
+            f"Repository: {repository.stdout.strip()}\n"
+            f"Directory:  {command_directory}\n"
+            f"Branch:     {branch_name}\n"
+            f"Upstream:   {upstream_name}\n"
+            "Changes:    none to commit\n\n"
+            "Action:\n"
+            "  1. git push"
+        )
+        rot_say("Push existing commits? [y/N]")
+        if _read_input().lower() not in {"y", "yes"}:
+            rot_say("Push cancelled.")
+            return PUSH_CANCELLED
+
+        rot_say("Running: git push")
+        result = subprocess.run(
+            ["git", "push"],
+            check=False,
+            cwd=command_directory
+        )
+        if result.returncode != 0:
+            rot_say(f"git push failed with exit code {result.returncode}.")
+            return result.returncode
+
+        rot_say("Push complete.")
         return 0
 
     review_requested = getattr(args, "review", False)
     suggested_message = ""
 
     if review_requested:
-        rot_say("Running: git status --short\nRunning: git diff")
-        diff = _capture_git("diff")
+        rot_say("Running: git status --short\nRunning: git diff HEAD")
+        diff = _capture_git("diff", "HEAD", working_directory=command_directory)
 
         if diff.returncode != 0:
             rot_say(f"Could not read the Git diff.\n{diff.stderr.strip()}")
@@ -117,6 +172,7 @@ def git_push(args):
             "repository, but keep the entire review read-only. End with exactly "
             "one plain-text line in this format, with no Markdown around the "
             "message:\nSUGGESTED_COMMIT_MESSAGE: <concise commit message>\n\n"
+            f"Task context: {review_context or 'Commit and push this Git repository.'}\n\n"
             f"Git status:\n{changes}\n\n"
             f"Git diff:\n{diff.stdout.rstrip() or '(no tracked diff)'}"
         )
@@ -131,7 +187,8 @@ def git_push(args):
         rot_say("Starting streamed OpenCode review...")
         review_returncode, review_output, review_elapsed = stream_opencode(
             review_prompt,
-            "Rotbot is still reviewing..."
+            "Rotbot is still reviewing...",
+            command_directory
         )
         rot_say(f"OpenCode review finished in {review_elapsed:.1f}s.")
 
@@ -155,7 +212,7 @@ def git_push(args):
 
         if confirmed not in {"y", "yes"}:
             rot_say("Push cancelled. No Git changes were made.")
-            return 0
+            return PUSH_CANCELLED
 
     if suggested_message:
         commit_message = _choose_commit_message(suggested_message)
@@ -167,12 +224,6 @@ def git_push(args):
         rot_say("Push cancelled: a commit message is required.")
         return 1
 
-    branch_name = branch.stdout.strip() or "(detached HEAD)"
-    upstream_name = (
-        upstream.stdout.strip()
-        if upstream.returncode == 0
-        else "(not configured; git push may fail)"
-    )
     indented_changes = "\n".join(f"  {line}" for line in changes.splitlines())
     commit_command = shlex.join(["git", "commit", "-m", commit_message])
 
@@ -180,7 +231,7 @@ def git_push(args):
         "GIT PUSH PLAN\n"
         "-------------\n"
         f"Repository: {repository.stdout.strip()}\n"
-        f"Directory:  {os.getcwd()}\n"
+        f"Directory:  {command_directory}\n"
         f"Branch:     {branch_name}\n"
         f"Upstream:   {upstream_name}\n"
         "Changes:\n"
@@ -197,7 +248,7 @@ def git_push(args):
 
         if confirmed not in {"y", "yes"}:
             rot_say("Push cancelled. No Git changes were made.")
-            return 0
+            return PUSH_CANCELLED
 
     commands = (
         ["git", "add", "."],
@@ -207,7 +258,11 @@ def git_push(args):
 
     for command in commands:
         rot_say(f"Running: {shlex.join(command)}")
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(
+            command,
+            check=False,
+            cwd=command_directory
+        )
 
         if result.returncode != 0:
             rot_say(
