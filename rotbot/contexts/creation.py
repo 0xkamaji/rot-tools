@@ -286,6 +286,8 @@ def _ask_choice(message, choices, default):
         if answer is None:
             return None
         answer = answer.lower()
+        if answer in {"exit", "e", "quit", "q"}:
+            return None
         if not answer:
             return default
         for value, accepted in choices.items():
@@ -336,8 +338,13 @@ def _add_person_context(name, role, display_name):
 
 def context_add(args):
     context_type = _ask_choice(
-        "Context type:\n\n  1. Project\n  2. Person\n\nChoose 1 or 2 [1]:",
-        {"project": {"1", "project"}, "person": {"2", "person"}},
+        "Context type:\n\n  1. Project\n  2. Person\n  3. Exit\n\n"
+        "Choose 1, 2, or 3 [1]:",
+        {
+            "project": {"1", "project"},
+            "person": {"2", "person"},
+            None: {"3"}
+        },
         "project"
     )
     if context_type is None:
@@ -369,8 +376,9 @@ def context_add(args):
         "Person role:\n\n"
         "  1. Contact - someone known to a RotBot user\n"
         "  2. User - someone who operates RotBot\n\n"
-        "Choose 1 or 2 [1]:",
-        {"contact": {"1", "contact"}, "user": {"2", "user"}},
+        "  3. Exit\n\n"
+        "Choose 1, 2, or 3 [1]:",
+        {"contact": {"1", "contact"}, "user": {"2", "user"}, None: {"3"}},
         "contact"
     )
     if role is None:

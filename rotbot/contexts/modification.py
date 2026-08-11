@@ -222,17 +222,22 @@ def _read_input():
 
 
 def _choose_number(message, labels):
+    exit_number = len(labels) + 1
     rendered = message + "\n\n" + "\n".join(
         f"  {index}. {label}" for index, label in enumerate(labels, 1)
-    )
+    ) + f"\n  {exit_number}. Exit"
     while True:
         rot_say(rendered)
         answer = _read_input()
         if answer is None:
             return None
+        if answer.lower() in {"", "exit", "e", "quit", "q"}:
+            return None
+        if answer == str(exit_number):
+            return None
         if answer.isdigit() and 1 <= int(answer) <= len(labels):
             return int(answer) - 1
-        rot_say(f"Please choose a number from 1 to {len(labels)}.")
+        rot_say(f"Please choose a number from 1 to {exit_number}.")
 
 
 def _confirm(message):

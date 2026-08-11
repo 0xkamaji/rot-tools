@@ -413,6 +413,24 @@ class ContextCreationTests(unittest.TestCase):
 
 
 class ContextQuestionnaireTests(unittest.TestCase):
+    def test_context_type_and_person_role_menus_can_exit(self):
+        for answers in (("exit",), ("3",), ("person", "alex", "q")):
+            with self.subTest(answers=answers), patch(
+                "builtins.input",
+                side_effect=answers
+            ), patch.object(
+                context_creation,
+                "_add_project_context"
+            ) as add_project, patch.object(
+                context_creation,
+                "_add_person_context"
+            ) as add_person, patch.object(context_creation, "rot_say"):
+                result = context_creation.context_add(argparse.Namespace(agent=None))
+
+            self.assertEqual(result, 0)
+            add_project.assert_not_called()
+            add_person.assert_not_called()
+
     def test_project_questions_route_name_path_and_agent(self):
         answers = ("project", "/srv/example", "example")
 

@@ -283,6 +283,23 @@ class ContextLoaderTests(unittest.TestCase):
         ))
         rot_continue.assert_called_with("(no recorded information)")
 
+    def test_show_selection_menu_can_exit_without_displaying(self):
+        self.create_context("alpha")
+        for answer in ("exit", "2", ""):
+            with self.subTest(answer=answer), patch(
+                "builtins.input",
+                return_value=answer
+            ), patch.object(contexts, "rot_say"), patch.object(
+                contexts,
+                "rot_continue"
+            ) as rot_continue:
+                result = contexts.context_show(
+                    argparse.Namespace(name=None, vision=False)
+                )
+
+            self.assertEqual(result, 0)
+            rot_continue.assert_not_called()
+
     def test_show_rejects_ambiguous_name_and_person_vision(self):
         from rotbot.contexts import people
 

@@ -164,21 +164,27 @@ def _available_context_entries():
 
 
 def _choose_context_to_show(entries):
+    exit_number = len(entries) + 1
     rot_say(
         "Which context would you like to show?\n\n"
         + "\n".join(
             f"  {index}. {context_type}: {name}"
             for index, (context_type, name) in enumerate(entries, 1)
         )
+        + f"\n  {exit_number}. Exit"
     )
     while True:
         try:
             answer = input("> ").strip()
         except EOFError:
             return None
+        if answer.lower() in {"", "exit", "e", "quit", "q"}:
+            return None
+        if answer == str(exit_number):
+            return None
         if answer.isdigit() and 1 <= int(answer) <= len(entries):
             return entries[int(answer) - 1]
-        rot_say(f"Please choose a number from 1 to {len(entries)}.")
+        rot_say(f"Please choose a number from 1 to {exit_number}.")
 
 
 def _show_project_context(name, vision_only):

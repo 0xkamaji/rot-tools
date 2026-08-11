@@ -262,6 +262,21 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(identity.read_text(encoding="utf-8"), original)
 
+    def test_numbered_modification_menus_offer_graceful_exit(self):
+        self.create_person()
+        for answer in ("exit", "5"):
+            with self.subTest(answer=answer), patch(
+                "builtins.input",
+                return_value=answer
+            ), patch.object(
+                modification,
+                "add_person_information"
+            ) as add_information, patch.object(modification, "rot_say"):
+                result = modification.context_mod(argparse.Namespace(name="alex"))
+
+            self.assertEqual(result, 0)
+            add_information.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -203,6 +203,21 @@ class ContextDeletionTests(unittest.TestCase):
             for call in rot_say.call_args_list
         ))
 
+    def test_delete_selection_menu_can_exit_without_archiving(self):
+        self.create_project("example")
+        for answer in ("exit", "2", ""):
+            with self.subTest(answer=answer), patch(
+                "builtins.input",
+                return_value=answer
+            ), patch.object(
+                deletion,
+                "archive_context"
+            ) as archive_context, patch.object(deletion, "rot_say"):
+                result = deletion.context_delete(argparse.Namespace(name=None))
+
+            self.assertEqual(result, 0)
+            archive_context.assert_not_called()
+
     def test_deletable_listing_includes_safe_directories_even_if_incomplete(self):
         self.create_project("valid")
         incomplete = self.people / "incomplete"

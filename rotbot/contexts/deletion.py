@@ -166,21 +166,27 @@ def _confirm(message):
 
 
 def _choose_context(contexts):
+    exit_number = len(contexts) + 1
     rot_say(
         "Which context would you like to archive?\n\n"
         + "\n".join(
             f"  {index}. {context_type}: {name}"
             for index, (context_type, name) in enumerate(contexts, 1)
         )
+        + f"\n  {exit_number}. Exit"
     )
     while True:
         try:
             answer = input("> ").strip()
         except EOFError:
             return None
+        if answer.lower() in {"", "exit", "e", "quit", "q"}:
+            return None
+        if answer == str(exit_number):
+            return None
         if answer.isdigit() and 1 <= int(answer) <= len(contexts):
             return contexts[int(answer) - 1]
-        rot_say(f"Please choose a number from 1 to {len(contexts)}.")
+        rot_say(f"Please choose a number from 1 to {exit_number}.")
 
 
 def context_delete(args):
