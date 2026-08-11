@@ -43,6 +43,29 @@ class ParserDispatchTests(unittest.TestCase):
             "context_show",
             {"context_command": "show", "name": "signalrot", "vision": True}
         ),
+        (
+            ["context", "bind"],
+            "context_bind",
+            {"context_command": "bind", "first": None, "second": None}
+        ),
+        (
+            ["context", "bind", "."],
+            "context_bind",
+            {"first": ".", "second": None}
+        ),
+        (
+            ["context", "bind", "signalrot", "/srv/site", "--as", "source"],
+            "context_bind",
+            {"first": "signalrot", "second": "/srv/site", "binding_type": "source"}
+        ),
+        (
+            [
+                "context", "bind", "signalrot", "/var/www/signalrot",
+                "--as", "production"
+            ],
+            "context_bind",
+            {"binding_type": "production"}
+        ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
             ["sr", "context", "--refresh", "--agent", "codex"],

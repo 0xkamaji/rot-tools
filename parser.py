@@ -1,6 +1,7 @@
 import argparse
 
 from agents.runner import ask_agent
+from context_binding import context_bind
 from contexts import context_list, context_show
 from git_commands import git_pull, git_push
 from gui import rot_content_width, rot_say
@@ -142,6 +143,30 @@ def create_parser():
         help="Show only the optional vision document"
     )
     context_show_parser.set_defaults(func=context_show)
+
+    context_bind_parser = context_commands.add_parser(
+        "bind",
+        help="Recognize and bind a local context path"
+    )
+    context_bind_parser.add_argument(
+        "first",
+        nargs="?",
+        metavar="PATH|NAME",
+        help="Path to infer, or context name when followed by PATH"
+    )
+    context_bind_parser.add_argument(
+        "second",
+        nargs="?",
+        metavar="PATH",
+        help="Path for an explicitly named context"
+    )
+    context_bind_parser.add_argument(
+        "--as",
+        dest="binding_type",
+        choices=("source", "production"),
+        help="Match only a source or production path"
+    )
+    context_bind_parser.set_defaults(func=context_bind)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(

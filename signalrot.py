@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from agents.runner import stream_agent
 from git_commands import PUSH_CANCELLED, git_push
 from gui import rot_say
+from rotbot_config import ConfigError, get_context_binding
 from signalrot_context import (
     refresh_signalrot_context,
     show_signalrot_context,
@@ -16,8 +17,6 @@ from signalrot_context import (
 )
 
 
-DEFAULT_REPO = "/home/kamaji/github/signalrot"
-DEFAULT_WEB_ROOT = "/var/www/signalrot"
 GIT_EXCLUDES = (
     ".git",
     ".github",
@@ -28,11 +27,39 @@ GIT_EXCLUDES = (
 
 
 def _repo_path():
-    return Path(os.environ.get("SIGNALROT_REPO", DEFAULT_REPO)).expanduser().resolve()
+    configured = os.environ.get("SIGNALROT_REPO")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    try:
+        configured = get_context_binding("signalrot").get("source_path")
+    except ConfigError as error:
+        rot_say(str(error))
+        return None
+    if configured:
+        return Path(configured).expanduser().resolve()
+    rot_say(
+        "SignalRot source path is not configured.\n\n"
+        "Run:\n  rot context bind signalrot /path/to/signalrot --as source"
+    )
+    return None
 
 
 def _web_root():
-    return Path(os.environ.get("SIGNALROT_WEB_ROOT", DEFAULT_WEB_ROOT)).expanduser().resolve()
+    configured = os.environ.get("SIGNALROT_WEB_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    try:
+        configured = get_context_binding("signalrot").get("production_path")
+    except ConfigError as error:
+        rot_say(str(error))
+        return None
+    if configured:
+        return Path(configured).expanduser().resolve()
+    rot_say(
+        "SignalRot production path is not configured.\n\n"
+        "Run:\n  rot context bind signalrot /path/to/signalrot --as production"
+    )
+    return None
 
 
 def _capture(command, working_directory):
@@ -163,6 +190,8 @@ def sr_pull(args):
         return 2
 
     repository = _repo_path()
+    if repository is None:
+        return 1
     if not _validate_repo(repository):
         return 1
 
@@ -256,6 +285,8 @@ def sr_pull(args):
 
 def sr_push(args):
     repository = _repo_path()
+    if repository is None:
+        return 1
     if not _validate_repo(repository):
         return 1
 
@@ -277,7 +308,11 @@ def sr_context(args):
         return show_signalrot_context()
 
     repository = _repo_path()
+    if repository is None:
+        return 1
     web_root = _web_root()
+    if web_root is None:
+        return 1
     if not _validate_repo(repository):
         return 1
     if not web_root.is_dir():
@@ -314,7 +349,11 @@ def sr_context(args):
 
 def sr_diff(args):
     repository = _repo_path()
+    if repository is None:
+        return 1
     web_root = _web_root()
+    if web_root is None:
+        return 1
     if not _validate_repo(repository):
         return 1
     if not web_root.is_dir():
@@ -392,7 +431,11 @@ def sr_publish(args):
         return 2
 
     repository = _repo_path()
+    if repository is None:
+        return 1
     web_root = _web_root()
+    if web_root is None:
+        return 1
     if not _validate_repo(repository):
         return 1
     if not web_root.is_dir():

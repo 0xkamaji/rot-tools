@@ -63,9 +63,11 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
             identity_path = root / "identity.md"
             state_path = root / "state.md"
             vision_path = root / "vision.md"
+            match_path = root / "match.md"
             identity_path.write_text("identity only", encoding="utf-8")
             state_path.write_text("state only", encoding="utf-8")
             vision_path.write_text("vision must stay separate", encoding="utf-8")
+            match_path.write_text("match must stay separate", encoding="utf-8")
 
             with patch.object(
                 signalrot_context,
@@ -77,6 +79,7 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         self.assertIn("identity only", block)
         self.assertIn("state only", block)
         self.assertNotIn("vision must stay separate", block)
+        self.assertNotIn("match must stay separate", block)
 
     def test_refresh_modifies_only_state(self):
         refreshed_at = "2026-08-10 17:16 UTC"
@@ -96,9 +99,11 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
             identity_path = root / "identity.md"
             state_path = root / "state.md"
             vision_path = root / "vision.md"
+            match_path = root / "match.md"
             identity_path.write_text("identity unchanged", encoding="utf-8")
             state_path.write_text("old state", encoding="utf-8")
             vision_path.write_text("vision unchanged", encoding="utf-8")
+            match_path.write_text("match unchanged", encoding="utf-8")
 
             with patch.object(
                 signalrot_context,
@@ -134,6 +139,10 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
             self.assertEqual(
                 vision_path.read_text(encoding="utf-8"),
                 "vision unchanged"
+            )
+            self.assertEqual(
+                match_path.read_text(encoding="utf-8"),
+                "match unchanged"
             )
             self.assertEqual(
                 state_path.read_text(encoding="utf-8"),
