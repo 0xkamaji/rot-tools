@@ -1,0 +1,5 @@
+type = "person"
+role = "assistant"
+name = "rot"
+display_name = "rot"
+related_projects = []

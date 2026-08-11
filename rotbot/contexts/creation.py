@@ -375,10 +375,16 @@ def context_add(args):
     role = _ask_choice(
         "Person role:\n\n"
         "  1. Contact - someone known to a RotBot user\n"
-        "  2. User - someone who operates RotBot\n\n"
-        "  3. Exit\n\n"
-        "Choose 1, 2, or 3 [1]:",
-        {"contact": {"1", "contact"}, "user": {"2", "user"}, None: {"3"}},
+        "  2. User - someone who operates RotBot\n"
+        "  3. Assistant - an assistant persona such as Rot\n"
+        "  4. Exit\n\n"
+        "Choose 1, 2, 3, or 4 [1]:",
+        {
+            "contact": {"1", "contact"},
+            "user": {"2", "user"},
+            "assistant": {"3", "assistant"},
+            None: {"4"}
+        },
         "contact"
     )
     if role is None:

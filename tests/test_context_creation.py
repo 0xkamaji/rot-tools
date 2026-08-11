@@ -414,7 +414,12 @@ class ContextCreationTests(unittest.TestCase):
 
 class ContextQuestionnaireTests(unittest.TestCase):
     def test_context_type_and_person_role_menus_can_exit(self):
-        for answers in (("exit",), ("3",), ("person", "alex", "q")):
+        for answers in (
+            ("exit",),
+            ("3",),
+            ("person", "alex", "q"),
+            ("person", "alex", "4")
+        ):
             with self.subTest(answers=answers), patch(
                 "builtins.input",
                 side_effect=answers
@@ -462,6 +467,22 @@ class ContextQuestionnaireTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         create_person.assert_called_once_with("alex", "user", "Alex Example")
+
+    def test_person_questions_route_assistant_role(self):
+        answers = ("person", "rot", "assistant", "Rot", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.people,
+            "create_person_context",
+            return_value=Path("context/people/rot")
+        ) as create_person, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        create_person.assert_called_once_with("rot", "assistant", "Rot")
 
     def test_person_questions_apply_contact_and_display_defaults(self):
         answers = ("2", "sam", "", "", "yes")
