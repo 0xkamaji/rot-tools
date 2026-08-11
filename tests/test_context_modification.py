@@ -81,6 +81,8 @@ class PersonModificationTests(unittest.TestCase):
         contact = people.load_person_context("alex", people_root=self.people_root)
         self.create_person("kamaji", "user", "Kamaji")
         user = people.load_person_context("kamaji", people_root=self.people_root)
+        self.create_person("rot", "assistant", "Rot")
+        assistant = people.load_person_context("rot", people_root=self.people_root)
 
         self.assertEqual(
             modification.available_documents(contact),
@@ -88,6 +90,10 @@ class PersonModificationTests(unittest.TestCase):
         )
         self.assertIn("experience.md", modification.available_documents(user))
         self.assertIn("priorities.md", modification.available_documents(user))
+        self.assertEqual(
+            modification.available_documents(assistant),
+            ("identity.md", "preferences.md", "relationship.md", "state.md")
+        )
         self.assertNotIn("metadata.toml", modification.available_documents(user))
         with self.assertRaises(modification.PersonModificationError):
             modification.add_person_information(

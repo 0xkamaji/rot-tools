@@ -36,6 +36,7 @@ class PersonContextTests(unittest.TestCase):
             'role = "contact"\n'
             'name = "alex"\n'
             'display_name = "Alex Example"\n'
+            'related_projects = []\n'
         )
 
     def test_user_creation_adds_user_templates_and_defaults_display_name(self):
@@ -61,7 +62,129 @@ class PersonContextTests(unittest.TestCase):
             'role = "user"\n'
             'name = "kamaji"\n'
             'display_name = "kamaji"\n'
+            'related_projects = []\n'
         )
+
+    def test_assistant_creation_uses_core_layout_and_related_project(self):
+        destination = people.create_person_context(
+            "rot",
+            "assistant",
+            "Rot",
+            ["rotbot"],
+            people_root=self.root
+        )
+
+        self.assertEqual(
+            {path.name for path in destination.iterdir()},
+            {
+                "metadata.toml",
+                "identity.md",
+                "preferences.md",
+                "relationship.md",
+                "state.md"
+            }
+        )
+        self.assertFalse((destination / "experience.md").exists())
+        self.assertFalse((destination / "priorities.md").exists())
+        self.assertEqual(
+            (destination / "metadata.toml").read_text(encoding="utf-8"),
+            'type = "person"\n'
+            'role = "assistant"\n'
+            'name = "rot"\n'
+            'display_name = "Rot"\n'
+            'related_projects = ["rotbot"]\n'
+        )
+        loaded = people.load_person_context("rot", people_root=self.root)
+        self.assertEqual(loaded.role, "assistant")
+        self.assertEqual(loaded.related_projects, ("rotbot",))
+
+    def test_related_projects_preserve_order_and_remove_duplicates(self):
+        person = people.build_person_context(
+            "alex",
+            "contact",
+            "Alex",
+            ["rotbot", "signalrot", "rotbot", "signalrot"]
+        )
+
+        self.assertEqual(person.related_projects, ("rotbot", "signalrot"))
+        self.assertIn(
+            'related_projects = ["rotbot", "signalrot"]\n',
+            people.render_person_files(person)["metadata.toml"]
+        )
+
+    def test_related_projects_do_not_need_to_exist(self):
+        destination = people.create_person_context(
+            "future-user",
+            "user",
+            related_projects=["future-project"],
+            people_root=self.root
+        )
+
+        self.assertTrue(destination.is_dir())
+        self.assertIn(
+            'related_projects = ["future-project"]',
+            (destination / "metadata.toml").read_text(encoding="utf-8")
+        )
+
+    def test_invalid_related_projects_are_rejected_before_creation(self):
+        invalid_values = (
+            "rotbot",
+            7,
+            [""],
+            ["../rotbot"],
+            ["projects/rotbot"],
+            ["nested\\rotbot"],
+            [None],
+            [42]
+        )
+        for index, related_projects in enumerate(invalid_values):
+            name = f"invalid-{index}"
+            with self.subTest(related_projects=related_projects), self.assertRaises(
+                people.PersonContextError
+            ):
+                people.create_person_context(
+                    name,
+                    "contact",
+                    related_projects=related_projects,
+                    people_root=self.root
+                )
+            self.assertFalse((self.root / name).exists())
+
+    def test_legacy_metadata_without_related_projects_loads_as_empty(self):
+        destination = people.create_person_context(
+            "legacy", "contact", people_root=self.root
+        )
+        metadata = destination / "metadata.toml"
+        metadata.write_text(
+            metadata.read_text(encoding="utf-8").replace(
+                "related_projects = []\n",
+                ""
+            ),
+            encoding="utf-8"
+        )
+
+        loaded = people.load_person_context("legacy", people_root=self.root)
+
+        self.assertEqual(loaded.related_projects, ())
+
+    def test_related_projects_metadata_must_be_a_toml_array(self):
+        destination = people.create_person_context(
+            "invalid-metadata", "contact", people_root=self.root
+        )
+        metadata = destination / "metadata.toml"
+        metadata.write_text(
+            metadata.read_text(encoding="utf-8").replace(
+                "related_projects = []",
+                'related_projects = "rotbot"'
+            ),
+            encoding="utf-8"
+        )
+
+        with self.assertRaisesRegex(
+            people.PersonContextError,
+            "Invalid related projects metadata"
+        ):
+            people.load_person_context("invalid-metadata", people_root=self.root)
 
     def test_person_loading_and_listing_uses_valid_metadata(self):
         people.create_person_context(
@@ -75,7 +198,7 @@ class PersonContextTests(unittest.TestCase):
 
         self.assertEqual(
             loaded,
-            people.PersonContext("alpha", "user", "Alpha Person")
+            people.PersonContext("alpha", "user", "Alpha Person", ())
         )
         self.assertEqual(
             tuple(person.name for person in people.list_person_contexts(people_root=self.root)),

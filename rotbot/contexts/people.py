@@ -7,7 +7,7 @@ from typing import NamedTuple
 from rotbot.contexts import loader
 
 
-PERSON_ROLES = ("contact", "user")
+PERSON_ROLES = ("contact", "user", "assistant")
 CORE_TEMPLATES = {
     "identity.md": (
         "# Identity\n\n"
@@ -122,6 +122,7 @@ class PersonContext(NamedTuple):
     name: str
     role: str
     display_name: str
+    related_projects: tuple = ()
 
 
 class PersonDocument(NamedTuple):
@@ -129,7 +130,36 @@ class PersonDocument(NamedTuple):
     sections: tuple
 
 
-def build_person_context(name, role, display_name=None):
+def _normalize_related_projects(related_projects):
+    if related_projects is None:
+        return ()
+    if isinstance(related_projects, (str, bytes)):
+        raise PersonContextError("Related projects must be a collection of names.")
+    try:
+        projects = tuple(related_projects)
+    except TypeError:
+        raise PersonContextError("Related projects must be a collection of names.") from None
+    normalized = []
+    seen = set()
+    for project in projects:
+        if not isinstance(project, str):
+            raise PersonContextError("Related project names must be strings.")
+        try:
+            loader.validate_context_name(project)
+        except loader.ContextError:
+            raise PersonContextError(f"Invalid related project name: {project}") from None
+        if project not in seen:
+            normalized.append(project)
+            seen.add(project)
+    return tuple(normalized)
+
+
+def build_person_context(
+    name,
+    role,
+    display_name=None,
+    related_projects=None
+):
     try:
         loader.validate_context_name(name)
     except loader.ContextError as error:
@@ -144,7 +174,12 @@ def build_person_context(name, role, display_name=None):
         or any(ord(character) < 32 for character in display_name)
     ):
         raise PersonContextError("Invalid person display name.")
-    return PersonContext(name=name, role=role, display_name=display_name)
+    return PersonContext(
+        name=name,
+        role=role,
+        display_name=display_name,
+        related_projects=_normalize_related_projects(related_projects)
+    )
 
 
 def render_person_files(person):
@@ -153,6 +188,8 @@ def render_person_files(person):
         f"role = {json.dumps(person.role, ensure_ascii=False)}\n"
         f"name = {json.dumps(person.name, ensure_ascii=False)}\n"
         f"display_name = {json.dumps(person.display_name, ensure_ascii=False)}\n"
+        "related_projects = "
+        f"{json.dumps(list(person.related_projects), ensure_ascii=False)}\n"
     )
     files = {"metadata.toml": metadata, **CORE_TEMPLATES}
     if person.role == "user":
@@ -282,10 +319,14 @@ def load_person_context(name, *, people_root=None):
         or "display_name" not in metadata
     ):
         raise PersonContextError(f"Invalid person metadata: {name}")
+    related_projects = metadata.get("related_projects", [])
+    if not isinstance(related_projects, list):
+        raise PersonContextError(f"Invalid related projects metadata: {name}")
     person = build_person_context(
         metadata.get("name"),
         metadata.get("role"),
-        metadata.get("display_name")
+        metadata.get("display_name"),
+        related_projects
     )
     for filename in render_person_files(person):
         document = directory / filename
@@ -332,8 +373,15 @@ def _rollback_person(destination, filenames):
     return tuple(errors)
 
 
-def create_person_context(name, role, display_name=None, *, people_root=None):
-    person = build_person_context(name, role, display_name)
+def create_person_context(
+    name,
+    role,
+    display_name=None,
+    related_projects=None,
+    *,
+    people_root=None
+):
+    person = build_person_context(name, role, display_name, related_projects)
     files = render_person_files(person)
     root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
     if root.is_symlink() or not root.is_dir():
