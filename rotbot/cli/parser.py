@@ -18,7 +18,25 @@ from rotbot.integrations.signalrot.commands import (
 from rotbot.ui.terminal import rot_content_width, rot_say
 
 
+class VerboseHelpAction(argparse.Action):
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_verbose_help()
+        parser.exit()
+
+
 class RotArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_argument(
+            "-hv",
+            "--help-verbose",
+            action=VerboseHelpAction,
+            help="Show detailed help for this command and all subcommands"
+        )
+
     def _get_formatter(self):
         return self.formatter_class(
             prog=self.prog,
@@ -27,6 +45,41 @@ class RotArgumentParser(argparse.ArgumentParser):
 
     def print_help(self, file=None):
         rot_say(self.format_help().rstrip())
+
+    def print_verbose_help(self):
+        sections = ["ROTBOT VERBOSE HELP", self.format_help().rstrip()]
+        help_options = {"-h", "--help", "-hv", "--help-verbose"}
+
+        def append_subcommands(current, depth=0):
+            for action in current._actions:
+                if not isinstance(action, argparse._SubParsersAction):
+                    continue
+                for subparser in action.choices.values():
+                    hidden_actions = [
+                        item for item in subparser._actions
+                        if help_options.intersection(item.option_strings)
+                    ]
+                    original_help = [item.help for item in hidden_actions]
+                    for item in hidden_actions:
+                        item.help = argparse.SUPPRESS
+                    try:
+                        command_help = subparser.format_help().rstrip()
+                    finally:
+                        for item, help_text in zip(hidden_actions, original_help):
+                            item.help = help_text
+                    if depth == 0:
+                        divider = "=" * 60
+                        sections.append(
+                            f"{divider}\nCOMMAND: {subparser.prog}\n{divider}"
+                        )
+                    else:
+                        sections.append(f"COMMAND: {subparser.prog}")
+                    sections.append(command_help)
+                    append_subcommands(subparser, depth + 1)
+
+        append_subcommands(self)
+
+        rot_say("\n\n".join(sections))
 
     def error(self, message):
         rot_say(f"{self.format_usage().strip()}\n\nError: {message}")
