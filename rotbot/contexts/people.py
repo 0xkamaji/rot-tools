@@ -130,6 +130,47 @@ class PersonDocument(NamedTuple):
     sections: tuple
 
 
+def _people_root(people_root=None):
+    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    if root.is_symlink() or not root.is_dir():
+        raise PersonContextError(f"Invalid people context directory: {root}")
+    for role in PERSON_ROLES:
+        role_root = root / role
+        if role_root.is_symlink() or not role_root.is_dir():
+            raise PersonContextError(f"Invalid {role} person directory: {role_root}")
+    return root
+
+
+def _find_person_directory(name, root):
+    try:
+        loader.validate_context_name(name)
+    except loader.ContextError as error:
+        raise PersonContextError(str(error)) from None
+    matches = []
+    for role in PERSON_ROLES:
+        directory = root / role / name
+        if os.path.lexists(directory):
+            matches.append((role, directory))
+    if not matches:
+        raise PersonContextError(f"Unknown or invalid person context: {name}")
+    if len(matches) > 1:
+        raise PersonContextError(
+            f"Person context name exists in multiple role directories: {name}"
+        )
+    role, directory = matches[0]
+    if directory.is_symlink() or not directory.is_dir():
+        raise PersonContextError(f"Unknown or invalid person context: {name}")
+    return role, directory
+
+
+def person_context_directory(person, *, people_root=None):
+    root = _people_root(people_root)
+    role, directory = _find_person_directory(person.name, root)
+    if role != person.role:
+        raise PersonContextError(f"Person role directory does not match metadata: {person.name}")
+    return directory
+
+
 def _normalize_related_projects(related_projects):
     if related_projects is None:
         return ()
@@ -270,9 +311,9 @@ def _populated_sections(markdown, filename):
 
 
 def load_person_documents(name, *, people_root=None):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    root = _people_root(people_root)
     person = load_person_context(name, people_root=root)
-    directory = root / person.name
+    directory = person_context_directory(person, people_root=root)
     documents = []
     for filename in person_document_names(person):
         path = directory / filename
@@ -291,14 +332,8 @@ def load_person_documents(name, *, people_root=None):
 
 
 def load_person_context(name, *, people_root=None):
-    try:
-        loader.validate_context_name(name)
-    except loader.ContextError as error:
-        raise PersonContextError(str(error)) from None
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
-    if root.is_symlink() or not root.is_dir():
-        raise PersonContextError(f"Invalid people context directory: {root}")
-    directory = root / name
+    root = _people_root(people_root)
+    directory_role, directory = _find_person_directory(name, root)
     metadata_path = directory / "metadata.toml"
     if (
         directory.is_symlink()
@@ -328,6 +363,8 @@ def load_person_context(name, *, people_root=None):
         metadata.get("display_name"),
         related_projects
     )
+    if person.role != directory_role:
+        raise PersonContextError(f"Person role directory does not match metadata: {name}")
     for filename in render_person_files(person):
         document = directory / filename
         if document.is_symlink() or not document.is_file():
@@ -336,20 +373,26 @@ def load_person_context(name, *, people_root=None):
 
 
 def list_person_contexts(*, people_root=None):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
-    if root.is_symlink() or not root.is_dir():
-        raise PersonContextError(f"Invalid people context directory: {root}")
-    try:
-        entries = tuple(root.iterdir())
-    except OSError as error:
-        raise PersonContextError(f"Could not list person contexts: {error}") from None
-    people = []
-    for entry in entries:
+    root = _people_root(people_root)
+    entries = []
+    for role in PERSON_ROLES:
         try:
-            people.append(load_person_context(entry.name, people_root=root))
+            entries.extend((role, entry) for entry in (root / role).iterdir())
+        except OSError as error:
+            raise PersonContextError(f"Could not list person contexts: {error}") from None
+    names = [entry.name for _role, entry in entries if entry.is_dir() and not entry.is_symlink()]
+    duplicate = next((name for name in names if names.count(name) > 1), None)
+    if duplicate is not None:
+        raise PersonContextError(
+            f"Person context name exists in multiple role directories: {duplicate}"
+        )
+    person_contexts = []
+    for _role, entry in entries:
+        try:
+            person_contexts.append(load_person_context(entry.name, people_root=root))
         except PersonContextError:
             continue
-    return tuple(sorted(people, key=lambda person: person.name))
+    return tuple(sorted(person_contexts, key=lambda person: person.name))
 
 
 def _write_document(path, content):
@@ -383,13 +426,12 @@ def create_person_context(
 ):
     person = build_person_context(name, role, display_name, related_projects)
     files = render_person_files(person)
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
-    if root.is_symlink() or not root.is_dir():
-        raise PersonContextError(f"Invalid people context directory: {root}")
+    root = _people_root(people_root)
 
-    destination = root / person.name
-    if os.path.lexists(destination):
+    destinations = tuple(root / role / person.name for role in PERSON_ROLES)
+    if any(os.path.lexists(destination) for destination in destinations):
         raise PersonContextError(f"Person context '{person.name}' already exists.")
+    destination = root / person.role / person.name
 
     created = False
     try:

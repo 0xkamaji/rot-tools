@@ -14,6 +14,8 @@ class PersonModificationTests(unittest.TestCase):
         self.context_root.mkdir()
         self.people_root = self.context_root / "people"
         self.people_root.mkdir()
+        for role in people.PERSON_ROLES:
+            (self.people_root / role).mkdir()
         self.projects = self.context_root / "projects"
         self.projects.mkdir()
         self.root_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
@@ -37,7 +39,7 @@ class PersonModificationTests(unittest.TestCase):
             related_projects,
             people_root=self.people_root
         )
-        return self.people_root / name
+        return self.people_root / role / name
 
     def create_project(self, name):
         destination = self.projects / name
@@ -311,7 +313,7 @@ class PersonModificationTests(unittest.TestCase):
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.people_root / "alex" / "identity.md"
+            return_value=self.people_root / "contact" / "alex" / "identity.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"
@@ -350,7 +352,7 @@ class PersonModificationTests(unittest.TestCase):
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.people_root / "alex" / "identity.md"
+            return_value=self.people_root / "contact" / "alex" / "identity.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"

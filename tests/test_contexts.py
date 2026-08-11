@@ -19,6 +19,9 @@ class ContextLoaderTests(unittest.TestCase):
         self.projects.mkdir()
         self.people = self.root / "people"
         self.people.mkdir()
+        from rotbot.contexts import people
+        for role in people.PERSON_ROLES:
+            (self.people / role).mkdir()
         self.root_patch = patch.object(contexts, "CONTEXT_ROOT", self.root)
         self.root_patch.start()
 
@@ -52,8 +55,8 @@ class ContextLoaderTests(unittest.TestCase):
 
     def test_empty_people_and_unknown_categories_are_not_contexts(self):
         self.assertEqual(contexts.list_contexts(), ())
-        category = self.root / "archive"
-        category.mkdir()
+        category = self.root / ".archive" / "projects"
+        category.mkdir(parents=True)
         directory = category / "outsider"
         directory.mkdir()
         (directory / "identity.md").write_text("identity", encoding="utf-8")

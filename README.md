@@ -169,20 +169,26 @@ context/
 │       ├── vision.md
 │       └── match.md
 └── people/
-    └── NAME/
-        ├── metadata.toml
-        ├── identity.md
-        ├── preferences.md
-        ├── relationship.md
-        ├── state.md
-        ├── experience.md (user role only)
-        └── priorities.md (user role only)
+    ├── contact/
+    │   └── NAME/
+    ├── user/
+    │   └── NAME/
+    └── assistant/
+        └── NAME/
+            ├── metadata.toml
+            ├── identity.md
+            ├── preferences.md
+            ├── relationship.md
+            ├── state.md
+            ├── experience.md (user role only)
+            └── priorities.md (user role only)
 ```
 
 Project contexts are still addressed by name, such as `rotbot` or `signalrot`;
 the `projects/` filesystem category is not part of the public context name.
-Person contexts are stored under `people/` and are created through the same
-interactive add command as project contexts.
+Person contexts are grouped under `people/contact/`, `people/user/`, or
+`people/assistant/`. Their names remain unique across all three roles, and they
+are created through the same interactive add command as project contexts.
 
 | File          | Purpose                                       |
 | ------------- | --------------------------------------------- |
@@ -206,9 +212,11 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context mod [NAME]`     | Add categorized information to a person context |
 | `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
-Archived contexts are moved beneath `context/archive/`, outside RotBot's
-project and person discovery paths. Archiving a project also removes its local
-source and production bindings so the name can be recreated cleanly.
+Archived contexts are moved beneath the hidden `context/.archive/` directory,
+outside RotBot's project and person discovery paths. Each kind has its own
+bucket: `projects/`, `contacts/`, `users/`, or `assistants/`. Archiving a project
+also removes its local source and production bindings so the name can be
+recreated cleanly.
 
 `rot context mod` currently supports people. It reads the selected Markdown
 file's existing `##` headings, adds information beneath one of them, or creates

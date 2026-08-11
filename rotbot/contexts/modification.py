@@ -122,7 +122,14 @@ def _person_document(name, filename, people_root):
         raise PersonModificationError(
             f"Unsupported document for person context '{name}': {filename}"
         )
-    document = people_root / person.name / filename
+    try:
+        directory = people.person_context_directory(
+            person,
+            people_root=people_root
+        )
+    except people.PersonContextError as error:
+        raise PersonModificationError(str(error)) from None
+    document = directory / filename
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid person context document: {filename}")
     return person, document
@@ -237,7 +244,11 @@ def replace_person_metadata(
         raise PersonModificationError(
             "Person context metadata changed before it could be updated."
         )
-    metadata = root / current.name / "metadata.toml"
+    try:
+        directory = people.person_context_directory(current, people_root=root)
+    except people.PersonContextError as error:
+        raise PersonModificationError(str(error)) from None
+    metadata = directory / "metadata.toml"
     if metadata.is_symlink() or not metadata.is_file():
         raise PersonModificationError("Invalid person context metadata.")
     try:

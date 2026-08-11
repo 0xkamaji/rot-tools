@@ -373,7 +373,9 @@ def _add_person_context(name, role, display_name, related_projects=()):
     rot_say(f"Create {role} context '{name}' for {display_name}?")
     rot_continue(
         "Proposed files:\n\n"
-        + "\n".join(f"  context/people/{name}/{filename}" for filename in files)
+        + "\n".join(
+            f"  context/people/{role}/{name}/{filename}" for filename in files
+        )
     )
     if not _confirm("Create this person context?"):
         rot_say("Person context creation cancelled. No files were changed.")

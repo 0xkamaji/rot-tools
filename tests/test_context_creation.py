@@ -464,7 +464,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
         ), patch.object(
             context_creation.people,
             "create_person_context",
-            return_value=Path("context/people/alex")
+            return_value=Path("context/people/user/alex")
         ) as create_person, patch.object(
             context_creation,
             "rot_say"
@@ -489,7 +489,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
         ), patch.object(
             context_creation.people,
             "create_person_context",
-            return_value=Path("context/people/rot")
+            return_value=Path("context/people/assistant/rot")
         ) as create_person, patch.object(
             context_creation,
             "rot_say"
@@ -514,7 +514,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
         ), patch.object(
             context_creation.people,
             "create_person_context",
-            return_value=Path("context/people/sam")
+            return_value=Path("context/people/contact/sam")
         ) as create_person, patch.object(
             context_creation,
             "rot_say"

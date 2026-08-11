@@ -11,6 +11,8 @@ class PersonContextTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name) / "people"
         self.root.mkdir()
+        for role in people.PERSON_ROLES:
+            (self.root / role).mkdir()
 
     def tearDown(self):
         self.temporary_directory.cleanup()
@@ -148,7 +150,10 @@ class PersonContextTests(unittest.TestCase):
                     related_projects=related_projects,
                     people_root=self.root
                 )
-            self.assertFalse((self.root / name).exists())
+            self.assertFalse(any(
+                (self.root / role / name).exists()
+                for role in people.PERSON_ROLES
+            ))
 
     def test_legacy_metadata_without_related_projects_loads_as_empty(self):
         destination = people.create_person_context(
@@ -261,14 +266,14 @@ class PersonContextTests(unittest.TestCase):
 
     def test_person_listing_ignores_invalid_or_unsafe_entries(self):
         people.create_person_context("valid", "contact", people_root=self.root)
-        invalid = self.root / "invalid"
+        invalid = self.root / "contact" / "invalid"
         invalid.mkdir()
         (invalid / "metadata.toml").write_text(
             'type = "project"\nrole = "contact"\nname = "invalid"\n'
             'display_name = "Invalid"\n',
             encoding="utf-8"
         )
-        mismatch = self.root / "mismatch"
+        mismatch = self.root / "contact" / "mismatch"
         mismatch.mkdir()
         (mismatch / "metadata.toml").write_text(
             'type = "person"\nrole = "contact"\nname = "other"\n'
@@ -277,7 +282,10 @@ class PersonContextTests(unittest.TestCase):
         )
         outside = Path(self.temporary_directory.name) / "outside"
         outside.mkdir()
-        (self.root / "linked").symlink_to(outside, target_is_directory=True)
+        (self.root / "contact" / "linked").symlink_to(
+            outside,
+            target_is_directory=True
+        )
 
         self.assertEqual(
             tuple(person.name for person in people.list_person_contexts(people_root=self.root)),
@@ -343,16 +351,22 @@ class PersonContextTests(unittest.TestCase):
         with self.assertRaises(people.PersonContextError):
             people.create_person_context("alex", "admin", people_root=self.root)
 
-        self.assertEqual(tuple(self.root.iterdir()), ())
+        self.assertEqual(
+            {path.name for path in self.root.iterdir()},
+            set(people.PERSON_ROLES)
+        )
 
     def test_unsafe_and_invalid_names_are_rejected(self):
         for name in (None, "", "../alex", "nested/alex", ".hidden", "/tmp/alex"):
             with self.subTest(name=name), self.assertRaises(people.PersonContextError):
                 people.create_person_context(name, "contact", people_root=self.root)
-        self.assertEqual(tuple(self.root.iterdir()), ())
+        self.assertEqual(
+            {path.name for path in self.root.iterdir()},
+            set(people.PERSON_ROLES)
+        )
 
     def test_existing_target_is_not_modified(self):
-        destination = self.root / "alex"
+        destination = self.root / "contact" / "alex"
         destination.mkdir()
         marker = destination / "marker.txt"
         marker.write_text("unchanged", encoding="utf-8")
@@ -362,6 +376,29 @@ class PersonContextTests(unittest.TestCase):
 
         self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
         self.assertEqual({path.name for path in destination.iterdir()}, {"marker.txt"})
+
+    def test_name_is_unique_across_roles_and_role_directory_must_match_metadata(self):
+        destination = people.create_person_context(
+            "alex", "contact", people_root=self.root
+        )
+        with self.assertRaises(people.PersonContextError):
+            people.create_person_context("alex", "assistant", people_root=self.root)
+        self.assertFalse((self.root / "assistant" / "alex").exists())
+
+        moved = self.root / "assistant" / "alex"
+        destination.rename(moved)
+        with self.assertRaisesRegex(people.PersonContextError, "does not match"):
+            people.load_person_context("alex", people_root=self.root)
+
+    def test_duplicate_name_across_role_directories_is_rejected(self):
+        people.create_person_context("alex", "contact", people_root=self.root)
+        duplicate = self.root / "assistant" / "alex"
+        duplicate.mkdir()
+
+        with self.assertRaisesRegex(people.PersonContextError, "multiple role"):
+            people.load_person_context("alex", people_root=self.root)
+        with self.assertRaisesRegex(people.PersonContextError, "multiple role"):
+            people.list_person_contexts(people_root=self.root)
 
     def test_write_failure_removes_partial_person_directory(self):
         original_write = people._write_document
@@ -378,7 +415,7 @@ class PersonContextTests(unittest.TestCase):
             with self.assertRaises(people.PersonContextError):
                 people.create_person_context("alex", "contact", people_root=self.root)
 
-        self.assertFalse((self.root / "alex").exists())
+        self.assertFalse((self.root / "contact" / "alex").exists())
 
 
 if __name__ == "__main__":
