@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+from textwrap import shorten
 
 from agents.runner import stream_agent
 from gui import rot_continue, rot_say
@@ -141,35 +142,35 @@ def _summary_text():
     published = _list_items(refresh, "Published content")
     section_updates = _section_updates(refresh)
 
+    identity_summary = " ".join(_identity_summary(identity))
     lines = [
-        "Identity:",
-        "context/signalrot/signalrot_identity.md",
-        "[loaded]" if identity else "[missing]",
+        "Identity: signalrot_identity.md "
+        f"[{'loaded' if identity else 'missing'}]",
+        "State: signalrot_refresh.md "
+        f"[{'loaded' if refresh else 'missing'}]",
+        f"Refreshed: {refreshed.group(1).strip() if refreshed else 'never'}",
         "",
-        "Current state:",
-        "context/signalrot/signalrot_refresh.md",
-        "[loaded]" if refresh else "[missing]",
+        f"SignalRot: {identity_summary}",
+        f"Sections: {', '.join(sections) if sections else '(unknown)'}",
+        "Published: " + (
+            ", ".join(published)
+            if published
+            else "run rot sr context --refresh"
+        ),
         "",
-        "State last refreshed:",
-        refreshed.group(1).strip() if refreshed else "never",
-        "",
-        "signalrot:"
+        "Updates:"
     ]
-    lines.extend(_identity_summary(identity))
-    lines.extend(("", "Current sections:"))
-    lines.extend(sections or ["(unknown)"])
-    lines.extend(("", "Published:"))
-    lines.extend(published or ["(run rot sr context --refresh)"])
-    lines.extend(("", "Section updates:"))
     if section_updates:
         for section_name, fields in section_updates:
-            lines.extend((
-                section_name,
-                f"  Last: {fields.get('Latest addition or change', 'unknown')}",
-                f"  Updated: {fields.get('Last changed', 'unknown')}"
-            ))
+            latest = shorten(
+                fields.get("Latest addition or change", "unknown"),
+                width=64,
+                placeholder="..."
+            )
+            updated = fields.get("Last changed", "unknown")
+            lines.append(f"  {section_name} [{updated}]: {latest}")
     else:
-        lines.append("(run rot sr context --refresh)")
+        lines.append("  run rot sr context --refresh")
     return "\n".join(lines)
 
 
