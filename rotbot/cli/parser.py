@@ -6,6 +6,7 @@ from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
+from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.loader import context_list, context_show
 from rotbot.integrations.signalrot.commands import (
     sr_context,
@@ -221,7 +222,7 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="List, show, add, or bind contexts"
+        help="List, show, add, bind, or archive contexts"
     )
     context_commands = context_parser.add_subparsers(
         dest="context_command",
@@ -272,12 +273,31 @@ def create_parser():
 
     context_add_parser = context_commands.add_parser(
         "add",
-        help="Create a context from a local project"
+        help="Interactively create a project or person context",
+        description="Interactively create a project or person context."
     )
-    context_add_parser.add_argument("name", help="New context name")
-    context_add_parser.add_argument("path", help="Local project directory")
-    _add_agent_argument(context_add_parser)
+    context_add_parser.add_argument(
+        "-a",
+        "--agent",
+        choices=AGENT_CHOICES,
+        help="Choose the AI agent used to draft a project context"
+    )
     context_add_parser.set_defaults(func=context_add)
+
+    context_delete_parser = context_commands.add_parser(
+        "delete",
+        help="Archive a context so RotBot no longer accesses it",
+        description=(
+            "Archive a project or person context. Archived contexts are retained "
+            "but are not loaded or matched by RotBot."
+        )
+    )
+    context_delete_parser.add_argument(
+        "--name",
+        required=True,
+        help="Name of the project or person context to archive"
+    )
+    context_delete_parser.set_defaults(func=context_delete)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(

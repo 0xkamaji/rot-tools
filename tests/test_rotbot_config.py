@@ -95,6 +95,42 @@ class RotbotConfigTests(unittest.TestCase):
         self.assertEqual(binding["source_path"], "/new/source")
         self.assertEqual(binding["production_path"], "/keep/production")
 
+    def test_remove_context_bindings_preserves_unrelated_configuration(self):
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text(
+            'theme = "keep"\n\n'
+            "[contexts.example]\n"
+            'source_path = "/remove/source"\n'
+            'production_path = "/remove/site"\n\n'
+            "[contexts.other]\n"
+            'source_path = "/keep/other"\n',
+            encoding="utf-8"
+        )
+
+        removed = rotbot_config.remove_context_bindings("example", self.config)
+
+        self.assertTrue(removed)
+        self.assertEqual(rotbot_config.get_context_binding("example", self.config), {})
+        self.assertEqual(
+            rotbot_config.get_context_binding("other", self.config)["source_path"],
+            "/keep/other"
+        )
+        self.assertIn('theme = "keep"', self.config.read_text(encoding="utf-8"))
+
+    def test_remove_missing_context_binding_does_not_create_or_rewrite_config(self):
+        self.assertFalse(
+            rotbot_config.remove_context_bindings("missing", self.config)
+        )
+        self.assertFalse(self.config.exists())
+
+        self.config.parent.mkdir(parents=True)
+        original = 'theme = "unchanged"\n'
+        self.config.write_text(original, encoding="utf-8")
+        self.assertFalse(
+            rotbot_config.remove_context_bindings("missing", self.config)
+        )
+        self.assertEqual(self.config.read_text(encoding="utf-8"), original)
+
     def test_malformed_configuration_is_never_overwritten(self):
         self.config.parent.mkdir(parents=True)
         malformed = "[contexts.signalrot\nsource_path = nope"

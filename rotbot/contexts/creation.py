@@ -4,9 +4,10 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+from types import SimpleNamespace
 
 from rotbot.agents.runner import stream_agent
-from rotbot.contexts import loader
+from rotbot.contexts import loader, people
 from rotbot.contexts.matching import (
     MatchError,
     build_source_match_document,
@@ -271,6 +272,117 @@ def _confirm(message):
     return answer in {"y", "yes"}
 
 
+def _read_input():
+    try:
+        return input("> ").strip()
+    except EOFError:
+        return None
+
+
+def _ask_choice(message, choices, default):
+    while True:
+        rot_say(message)
+        answer = _read_input()
+        if answer is None:
+            return None
+        answer = answer.lower()
+        if not answer:
+            return default
+        for value, accepted in choices.items():
+            if answer in accepted:
+                return value
+        rot_say("Please choose one of the listed options.")
+
+
+def _ask_value(label, default=None):
+    while True:
+        suffix = f" [{default}]" if default is not None else ""
+        rot_say(f"{label}{suffix}:")
+        answer = _read_input()
+        if answer is None:
+            return None
+        if answer:
+            return answer
+        if default is not None:
+            return default
+        rot_say("A value is required.")
+
+
+def _add_person_context(name, role, display_name):
+    try:
+        person = people.build_person_context(name, role, display_name)
+        files = people.render_person_files(person)
+    except people.PersonContextError as error:
+        rot_say(str(error))
+        return 1
+
+    rot_say(f"Create {role} context '{name}' for {display_name}?")
+    rot_continue(
+        "Proposed files:\n\n"
+        + "\n".join(f"  context/people/{name}/{filename}" for filename in files)
+    )
+    if not _confirm("Create this person context?"):
+        rot_say("Person context creation cancelled. No files were changed.")
+        return 0
+
+    try:
+        destination = people.create_person_context(name, role, display_name)
+    except people.PersonContextError as error:
+        rot_say(str(error))
+        return 1
+    rot_say(f"Person context '{name}' created at:\n{destination}")
+    return 0
+
+
+def context_add(args):
+    context_type = _ask_choice(
+        "Context type:\n\n  1. Project\n  2. Person\n\nChoose 1 or 2 [1]:",
+        {"project": {"1", "project"}, "person": {"2", "person"}},
+        "project"
+    )
+    if context_type is None:
+        rot_say("Context creation cancelled. No files were changed.")
+        return 0
+
+    if context_type == "project":
+        path = _ask_value("Project path", ".")
+        if path is None:
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        default_name = Path(path).expanduser().absolute().name or None
+        name = _ask_value("Context name", default_name)
+        if name is None:
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        project_args = SimpleNamespace(
+            name=name,
+            path=path,
+            agent=getattr(args, "agent", None)
+        )
+        return _add_project_context(project_args)
+
+    name = _ask_value("Person context name")
+    if name is None:
+        rot_say("Context creation cancelled. No files were changed.")
+        return 0
+    role = _ask_choice(
+        "Person role:\n\n"
+        "  1. Contact - someone known to a RotBot user\n"
+        "  2. User - someone who operates RotBot\n\n"
+        "Choose 1 or 2 [1]:",
+        {"contact": {"1", "contact"}, "user": {"2", "user"}},
+        "contact"
+    )
+    if role is None:
+        rot_say("Context creation cancelled. No files were changed.")
+        return 0
+    display_name = _ask_value("Display name", name)
+    if display_name is None:
+        rot_say("Context creation cancelled. No files were changed.")
+        return 0
+    return _add_person_context(name, role, display_name)
+
+
 def _destination_exists(destination):
     return os.path.lexists(destination)
 
@@ -331,7 +443,7 @@ def _create_and_bind(name, destination, project, documents, match_document, targ
         raise ContextCreationError(message) from None
 
 
-def context_add(args):
+def _add_project_context(args):
     name = args.name
     try:
         loader.validate_context_name(name)

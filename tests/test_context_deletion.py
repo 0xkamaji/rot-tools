@@ -1,0 +1,171 @@
+import argparse
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from rotbot.contexts import deletion, loader, people
+from rotbot.contexts.config import ConfigError, get_context_binding, set_context_binding
+
+
+class ContextDeletionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.context_root = self.root / "context"
+        self.context_root.mkdir()
+        self.projects = self.context_root / "projects"
+        self.projects.mkdir()
+        self.people = self.context_root / "people"
+        self.people.mkdir()
+        self.config = self.root / "config" / "rotbot" / "config.toml"
+        self.root_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
+        self.root_patch.start()
+
+    def tearDown(self):
+        self.root_patch.stop()
+        self.temporary_directory.cleanup()
+
+    def create_project(self, name="example", marker="original"):
+        destination = self.projects / name
+        destination.mkdir()
+        (destination / "identity.md").write_text("identity", encoding="utf-8")
+        (destination / "state.md").write_text("state", encoding="utf-8")
+        (destination / "marker.txt").write_text(marker, encoding="utf-8")
+        return destination
+
+    def test_project_is_archived_outside_discovery_and_bindings_are_removed(self):
+        source = self.create_project()
+        set_context_binding("example", "source_path", "/old/source", self.config)
+        set_context_binding("example", "production_path", "/old/site", self.config)
+
+        context_type, destination = deletion.archive_context(
+            "example",
+            context_root=self.context_root,
+            target_config=self.config
+        )
+
+        self.assertEqual(context_type, "project")
+        self.assertFalse(source.exists())
+        self.assertEqual(destination.name, "payload")
+        self.assertEqual(destination.parents[2], self.context_root / "archive" / "projects")
+        self.assertEqual(
+            (destination / "marker.txt").read_text(encoding="utf-8"),
+            "original"
+        )
+        self.assertEqual(get_context_binding("example", self.config), {})
+        self.assertEqual(loader.list_contexts(), ())
+        with self.assertRaises(loader.ContextError):
+            loader.load_context("example")
+
+    def test_person_is_archived_without_changing_same_named_project_bindings(self):
+        source = people.create_person_context(
+            "alex", "contact", "Alex", people_root=self.people
+        )
+        set_context_binding("alex", "source_path", "/keep/project", self.config)
+
+        context_type, destination = deletion.archive_context(
+            "alex",
+            context_root=self.context_root,
+            target_config=self.config
+        )
+
+        self.assertEqual(context_type, "person")
+        self.assertFalse(source.exists())
+        self.assertEqual(destination.parents[2], self.context_root / "archive" / "people")
+        self.assertEqual(
+            get_context_binding("alex", self.config)["source_path"],
+            "/keep/project"
+        )
+
+    def test_recreated_context_produces_a_separate_archive_record(self):
+        self.create_project(marker="first")
+        _, first = deletion.archive_context(
+            "example", context_root=self.context_root, target_config=self.config
+        )
+        self.create_project(marker="second")
+        _, second = deletion.archive_context(
+            "example", context_root=self.context_root, target_config=self.config
+        )
+
+        self.assertNotEqual(first.parent, second.parent)
+        self.assertEqual((first / "marker.txt").read_text(encoding="utf-8"), "first")
+        self.assertEqual((second / "marker.txt").read_text(encoding="utf-8"), "second")
+
+    def test_invalid_unknown_ambiguous_and_symlink_contexts_are_rejected(self):
+        for name in ("", "../outside", "nested/name", ".hidden"):
+            with self.subTest(name=name), self.assertRaises(deletion.ContextDeletionError):
+                deletion.archive_context(
+                    name, context_root=self.context_root, target_config=self.config
+                )
+        with self.assertRaises(deletion.ContextDeletionError):
+            deletion.archive_context(
+                "missing", context_root=self.context_root, target_config=self.config
+            )
+
+        self.create_project("shared")
+        people.create_person_context("shared", "contact", people_root=self.people)
+        with self.assertRaisesRegex(deletion.ContextDeletionError, "ambiguous"):
+            deletion.archive_context(
+                "shared", context_root=self.context_root, target_config=self.config
+            )
+        self.assertTrue((self.projects / "shared").exists())
+        self.assertTrue((self.people / "shared").exists())
+
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.projects / "linked").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(deletion.ContextDeletionError):
+            deletion.archive_context(
+                "linked", context_root=self.context_root, target_config=self.config
+            )
+
+        archive_target = self.root / "archive-target"
+        archive_target.mkdir()
+        (self.context_root / "archive").symlink_to(
+            archive_target,
+            target_is_directory=True
+        )
+        self.create_project("safe")
+        with self.assertRaises(deletion.ContextDeletionError):
+            deletion.archive_context(
+                "safe", context_root=self.context_root, target_config=self.config
+            )
+        self.assertTrue((self.projects / "safe").exists())
+
+    def test_binding_failure_rolls_archived_project_back(self):
+        source = self.create_project()
+
+        with patch.object(
+            deletion,
+            "remove_context_bindings",
+            side_effect=ConfigError("config failed")
+        ), self.assertRaises(deletion.ContextDeletionError):
+            deletion.archive_context(
+                "example", context_root=self.context_root, target_config=self.config
+            )
+
+        self.assertTrue(source.is_dir())
+        self.assertEqual(
+            (source / "marker.txt").read_text(encoding="utf-8"),
+            "original"
+        )
+        records = tuple((self.context_root / "archive" / "projects" / "example").iterdir())
+        self.assertEqual(records, ())
+
+    def test_cli_cancellation_changes_nothing(self):
+        source = self.create_project()
+
+        with patch("builtins.input", return_value="no"), patch.object(
+            deletion,
+            "rot_say"
+        ), patch.object(deletion, "rot_continue"):
+            result = deletion.context_delete(argparse.Namespace(name="example"))
+
+        self.assertEqual(result, 0)
+        self.assertTrue(source.exists())
+        self.assertFalse((self.context_root / "archive").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,8 @@ class PackageImportTests(unittest.TestCase):
         "rotbot.contexts.binding",
         "rotbot.contexts.creation",
         "rotbot.contexts.config",
+        "rotbot.contexts.deletion",
+        "rotbot.contexts.people",
         "rotbot.commands.git",
         "rotbot.commands.wtf",
         "rotbot.integrations.signalrot.commands",

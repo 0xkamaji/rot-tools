@@ -92,14 +92,17 @@ class ParserDispatchTests(unittest.TestCase):
             {"binding_type": "production"}
         ),
         (
-            ["context", "add", "example", "/srv/example", "--agent", "codex"],
+            ["context", "add", "--agent", "codex"],
             "context_add",
             {
                 "context_command": "add",
-                "name": "example",
-                "path": "/srv/example",
                 "agent": "codex"
             }
+        ),
+        (
+            ["context", "delete", "--name", "example"],
+            "context_delete",
+            {"context_command": "delete", "name": "example"}
         ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
@@ -160,7 +163,8 @@ class ParserDispatchTests(unittest.TestCase):
     def test_missing_required_arguments_are_rejected(self):
         for argv in (
             [], ["ask"], ["git"], ["context"], ["context", "show"],
-            ["context", "add"], ["context", "add", "example"], ["sr"]
+            ["context", "delete"],
+            ["sr"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -169,7 +173,8 @@ class ParserDispatchTests(unittest.TestCase):
         for argv in (
             ["ask", "hello", "--agent", "invalid"],
             ["push", "--message"],
-            ["pull", "--review"]
+            ["pull", "--review"],
+            ["context", "add", "example", "/srv/example"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -186,6 +191,19 @@ class ParserDispatchTests(unittest.TestCase):
             self.assertIn("usage:", rot_say.call_args.args[0])
             self.assertIn(expected, rot_say.call_args.args[0])
 
+    def test_context_add_help_describes_interactive_creation(self):
+        with patch.object(
+            command_parser,
+            "rot_say"
+        ) as rot_say, self.assertRaises(SystemExit) as raised:
+            command_parser.parse_args(["context", "add", "-h"])
+
+        self.assertEqual(raised.exception.code, 0)
+        message = rot_say.call_args.args[0]
+        self.assertIn("Interactively create a project or person context", message)
+        self.assertNotIn("NAME", message)
+        self.assertNotIn("PATH", message)
+
     def test_verbose_help_renders_every_command(self):
         with patch.object(
             command_parser,
@@ -198,6 +216,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("ROTBOT VERBOSE HELP", message)
         self.assertIn("COMMAND: rotbot git status", message)
         self.assertIn("COMMAND: rotbot context add", message)
+        self.assertIn("COMMAND: rotbot context delete", message)
         self.assertIn("COMMAND: rotbot sr publish", message)
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)

@@ -78,7 +78,7 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ) as rot_say, patch.object(context_creation, "rot_continue") as rot_continue:
-            result = context_creation.context_add(args)
+            result = context_creation._add_project_context(args)
         return result, stream_agent, rot_say, rot_continue
 
     def test_invalid_names_and_existing_context_are_rejected_before_agent(self):
@@ -241,7 +241,7 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=decline):
-            result = context_creation.context_add(self.args())
+            result = context_creation._add_project_context(self.args())
 
         self.assertEqual(result, 0)
         self.assertTrue(any("PROPOSED identity.md" in item for item in preview_seen))
@@ -339,7 +339,7 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=create_racing_context):
-            result = context_creation.context_add(self.args())
+            result = context_creation._add_project_context(self.args())
 
         self.assertEqual(result, 1)
         self.assertEqual(
@@ -368,7 +368,7 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=change_remote):
-            result = context_creation.context_add(self.args())
+            result = context_creation._add_project_context(self.args())
 
         self.assertEqual(result, 1)
         self.assertFalse((self.project_context_root / "example").exists())
@@ -410,6 +410,71 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         stream_agent.assert_not_called()
+
+
+class ContextQuestionnaireTests(unittest.TestCase):
+    def test_project_questions_route_name_path_and_agent(self):
+        answers = ("project", "/srv/example", "example")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation,
+            "_add_project_context",
+            return_value=7
+        ) as add_project, patch.object(context_creation, "rot_say"):
+            result = context_creation.context_add(argparse.Namespace(agent="codex"))
+
+        self.assertEqual(result, 7)
+        project_args = add_project.call_args.args[0]
+        self.assertEqual(project_args.name, "example")
+        self.assertEqual(project_args.path, "/srv/example")
+        self.assertEqual(project_args.agent, "codex")
+
+    def test_person_questions_route_role_and_display_name_without_agent(self):
+        answers = ("person", "alex", "user", "Alex Example", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.people,
+            "create_person_context",
+            return_value=Path("context/people/alex")
+        ) as create_person, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent="codex"))
+
+        self.assertEqual(result, 0)
+        create_person.assert_called_once_with("alex", "user", "Alex Example")
+
+    def test_person_questions_apply_contact_and_display_defaults(self):
+        answers = ("2", "sam", "", "", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.people,
+            "create_person_context",
+            return_value=Path("context/people/sam")
+        ) as create_person, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        create_person.assert_called_once_with("sam", "contact", "sam")
+
+    def test_declined_person_confirmation_creates_nothing(self):
+        answers = ("person", "alex", "contact", "Alex", "no")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.people,
+            "create_person_context"
+        ) as create_person, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        create_person.assert_not_called()
 
 
 if __name__ == "__main__":

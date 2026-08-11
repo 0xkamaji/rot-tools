@@ -154,9 +154,9 @@ export ROTBOT_AGENT=opencode
 
 If no agent is selected, RotBot uses the first supported agent it finds.
 
-## Project context
+## Contexts
 
-Contexts give RotBot durable knowledge about a project.
+Contexts give RotBot durable knowledge about projects and people.
 
 A context generally contains:
 
@@ -169,11 +169,20 @@ context/
 │       ├── vision.md
 │       └── match.md
 └── people/
+    └── NAME/
+        ├── metadata.toml
+        ├── identity.md
+        ├── preferences.md
+        ├── relationship.md
+        ├── state.md
+        ├── experience.md (user role only)
+        └── priorities.md (user role only)
 ```
 
 Project contexts are still addressed by name, such as `rotbot` or `signalrot`;
 the `projects/` filesystem category is not part of the public context name.
-The `people/` category is reserved for future use.
+Person contexts are stored under `people/` and are created through the same
+interactive add command as project contexts.
 
 | File          | Purpose                                       |
 | ------------- | --------------------------------------------- |
@@ -190,7 +199,12 @@ The `people/` category is reserved for future use.
 | `rot context show NAME`      | Display a context                  |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
-| `rot context add NAME PATH`  | Draft a new context from a project |
+| `rot context add`            | Interactively create a project or person context |
+| `rot context delete --name NAME` | Archive a context without destroying it |
+
+Archived contexts are moved beneath `context/archive/`, outside RotBot's
+project and person discovery paths. Archiving a project also removes its local
+source and production bindings so the name can be recreated cleanly.
 
 ### Show a context
 

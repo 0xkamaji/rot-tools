@@ -142,31 +142,7 @@ def _updated_config_text(original, name, key, value):
     return "".join(lines)
 
 
-def set_context_binding(name, key, value, path=None):
-    path = config_path() if path is None else Path(path)
-    if path.is_symlink():
-        raise ConfigError(f"RotBot configuration must not be a symlink:\n{path}")
-
-    load_config(path)
-    get_context_binding(name, path)
-    original = ""
-    mode = 0o600
-    if path.exists():
-        try:
-            original = path.read_text(encoding="utf-8")
-            mode = stat.S_IMODE(path.stat().st_mode)
-        except (OSError, UnicodeError) as error:
-            raise ConfigError(f"Could not read RotBot configuration:\n{path}\n{error}") from None
-
-    updated = _updated_config_text(original, name, key, value)
-    try:
-        proposed = tomllib.loads(updated)
-    except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"Could not safely update RotBot configuration:\n{error}") from None
-
-    contexts = proposed.get("contexts", {})
-    if contexts.get(name, {}).get(key) != value:
-        raise ConfigError("RotBot configuration update did not validate.")
+def _write_config(path, updated, mode):
     temporary_path = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,3 +169,62 @@ def set_context_binding(name, key, value, path=None):
                 temporary_path.unlink()
             except OSError:
                 pass
+
+
+def set_context_binding(name, key, value, path=None):
+    path = config_path() if path is None else Path(path)
+    if path.is_symlink():
+        raise ConfigError(f"RotBot configuration must not be a symlink:\n{path}")
+
+    load_config(path)
+    get_context_binding(name, path)
+    original = ""
+    mode = 0o600
+    if path.exists():
+        try:
+            original = path.read_text(encoding="utf-8")
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except (OSError, UnicodeError) as error:
+            raise ConfigError(f"Could not read RotBot configuration:\n{path}\n{error}") from None
+
+    updated = _updated_config_text(original, name, key, value)
+    try:
+        proposed = tomllib.loads(updated)
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"Could not safely update RotBot configuration:\n{error}") from None
+
+    contexts = proposed.get("contexts", {})
+    if contexts.get(name, {}).get(key) != value:
+        raise ConfigError("RotBot configuration update did not validate.")
+    _write_config(path, updated, mode)
+
+
+def remove_context_bindings(name, path=None):
+    path = config_path() if path is None else Path(path)
+    if path.is_symlink():
+        raise ConfigError(f"RotBot configuration must not be a symlink:\n{path}")
+    document = load_config(path)
+    get_context_binding(name, path)
+    if not path.exists() or name not in document.get("contexts", {}):
+        return False
+
+    try:
+        original = path.read_text(encoding="utf-8")
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except (OSError, UnicodeError) as error:
+        raise ConfigError(f"Could not read RotBot configuration:\n{path}\n{error}") from None
+    lines = original.splitlines(keepends=True)
+    table_range = _table_range(lines, name)
+    if table_range is None:
+        raise ConfigError(f"Could not safely remove context configuration: {name}")
+    start, end = table_range
+    del lines[start:end]
+    updated = "".join(lines)
+    try:
+        proposed = tomllib.loads(updated) if updated.strip() else {}
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"Could not safely update RotBot configuration:\n{error}") from None
+    if name in proposed.get("contexts", {}):
+        raise ConfigError("RotBot configuration removal did not validate.")
+    _write_config(path, updated, mode)
+    return True
