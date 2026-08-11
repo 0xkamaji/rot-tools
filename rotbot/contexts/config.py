@@ -9,6 +9,7 @@ import tomllib
 
 CONFIG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONFIG_KEYS = ("source_path", "production_path")
+DEFAULT_KEYS = ("assistant", "user", "machine")
 
 
 class ConfigError(Exception):
@@ -40,14 +41,7 @@ def load_config(path=None):
         raise ConfigError(f"Could not read RotBot configuration:\n{path}\n{error}") from None
 
 
-def get_context_binding(name, path=None):
-    document = load_config(path)
-    contexts = document.get("contexts", {})
-    if not isinstance(contexts, dict):
-        raise ConfigError("RotBot configuration 'contexts' value must be a table.")
-    binding = contexts.get(name)
-    if binding is None:
-        return {}
+def _validate_context_binding(name, binding):
     if not isinstance(binding, dict):
         raise ConfigError(f"RotBot context configuration must be a table: {name}")
     for key, value in binding.items():
@@ -61,6 +55,39 @@ def get_context_binding(name, path=None):
             ):
                 raise ConfigError(f"RotBot context path must be absolute: {name}.{key}")
     return binding
+
+
+def get_context_bindings(path=None):
+    contexts = load_config(path).get("contexts", {})
+    if not isinstance(contexts, dict):
+        raise ConfigError("RotBot configuration 'contexts' value must be a table.")
+    for name, binding in contexts.items():
+        if not isinstance(name, str) or not CONFIG_NAME_PATTERN.fullmatch(name):
+            raise ConfigError(f"Invalid context name in RotBot configuration: {name}")
+        _validate_context_binding(name, binding)
+    return contexts
+
+
+def get_context_binding(name, path=None):
+    document = load_config(path)
+    contexts = document.get("contexts", {})
+    if not isinstance(contexts, dict):
+        raise ConfigError("RotBot configuration 'contexts' value must be a table.")
+    binding = contexts.get(name)
+    return {} if binding is None else _validate_context_binding(name, binding)
+
+
+def get_defaults(path=None):
+    defaults = load_config(path).get("defaults", {})
+    if not isinstance(defaults, dict):
+        raise ConfigError("RotBot configuration 'defaults' value must be a table.")
+    for key in DEFAULT_KEYS:
+        if key not in defaults:
+            continue
+        value = defaults[key]
+        if not isinstance(value, str) or not CONFIG_NAME_PATTERN.fullmatch(value):
+            raise ConfigError(f"Invalid RotBot default {key}: {value}")
+    return {key: defaults[key] for key in DEFAULT_KEYS if key in defaults}
 
 
 def _table_header(name):

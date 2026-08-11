@@ -9,13 +9,16 @@
 ############################################################
 
 from rotbot.cli.parser import parse_args
+from rotbot.commands.git import PUSH_CANCELLED
 
 
 def main():
     args = parse_args()
     result = args.func(args)
 
-    return result if isinstance(result, int) else 0
+    if result is PUSH_CANCELLED:
+        return 0
+    return result if type(result) is int else 2
     
 
 if __name__ == "__main__":

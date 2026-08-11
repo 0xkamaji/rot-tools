@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 from rotbot import __main__ as rotbot
 from rotbot.cli import parser as command_parser
+from rotbot.commands.git import PUSH_CANCELLED
 
 
 class ParserDispatchTests(unittest.TestCase):
@@ -59,6 +60,11 @@ class ParserDispatchTests(unittest.TestCase):
         ),
         (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
+        (
+            ["context", "inspect"],
+            "context_inspect",
+            {"context_command": "inspect"}
+        ),
         (
             ["context", "show", "signalrot"],
             "context_show",
@@ -261,6 +267,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("ROTBOT VERBOSE HELP", message)
         self.assertIn("COMMAND: rotbot git status", message)
         self.assertIn("COMMAND: rotbot context add", message)
+        self.assertIn("COMMAND: rotbot context inspect", message)
         self.assertIn("COMMAND: rotbot machine inspect", message)
         self.assertIn("COMMAND: rotbot context delete", message)
         self.assertIn("COMMAND: rotbot context mod", message)
@@ -300,8 +307,19 @@ class MainDispatchTests(unittest.TestCase):
 
         handler.assert_called_once_with(args)
 
-    def test_main_normalizes_non_integer_handler_result(self):
-        handler = Mock(return_value=None)
+    def test_main_rejects_non_integer_handler_results(self):
+        for result in (None, {}, True, False):
+            with self.subTest(result=result):
+                handler = Mock(return_value=result)
+                args = argparse.Namespace(func=handler)
+
+                with patch.object(rotbot, "parse_args", return_value=args):
+                    self.assertEqual(rotbot.main(), 2)
+
+                handler.assert_called_once_with(args)
+
+    def test_main_preserves_successful_push_cancellation(self):
+        handler = Mock(return_value=PUSH_CANCELLED)
         args = argparse.Namespace(func=handler)
 
         with patch.object(rotbot, "parse_args", return_value=args):

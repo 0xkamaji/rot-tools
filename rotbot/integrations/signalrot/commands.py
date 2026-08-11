@@ -109,6 +109,12 @@ def _review_task(prompt, working_directory, activity, agent_name=None):
 
 
 def sr_status(args):
+    repository = _repo_path()
+    if repository is None:
+        return 2
+    if not _validate_repo(repository):
+        return 2
+
     url = "https://signalrot.net"
     request = Request(url, headers={"User-Agent": "rotbot/1.0"})
     started_at = perf_counter()
@@ -116,14 +122,20 @@ def sr_status(args):
     try:
         with urlopen(request, timeout=10) as response:
             elapsed_ms = round((perf_counter() - started_at) * 1000)
+            status = getattr(response, "status", None)
+            if type(status) is not int:
+                rot_say("SignalRot returned an invalid HTTP status response.")
+                return 2
+            healthy = 200 <= status < 400
             rot_say(
                 "SIGNAL ROT STATUS\n"
                 "-----------------\n"
                 f"Site:     {url}\n"
-                "State:    ONLINE\n"
-                f"HTTP:     {response.status}\n"
+                f"State:    {'ONLINE' if healthy else 'ERROR'}\n"
+                f"HTTP:     {status}\n"
                 f"Response: {elapsed_ms} ms"
             )
+            return 0 if healthy else 1
     except HTTPError as error:
         elapsed_ms = round((perf_counter() - started_at) * 1000)
         rot_say(
@@ -134,6 +146,7 @@ def sr_status(args):
             f"HTTP:     {error.code}\n"
             f"Response: {elapsed_ms} ms"
         )
+        return 1
     except (URLError, TimeoutError) as error:
         rot_say(
             "SIGNAL ROT STATUS\n"
@@ -142,6 +155,7 @@ def sr_status(args):
             "State:    OFFLINE\n"
             f"Reason:   {error.reason if isinstance(error, URLError) else error}"
         )
+        return 1
 
 
 def sr_pull(args):

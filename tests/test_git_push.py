@@ -230,6 +230,81 @@ class GitPushPreflightTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
+    def stage_until_commit(self, working_directory):
+        arguments = argparse.Namespace(
+            review=False,
+            note=None,
+            agent=None,
+            message="test staging"
+        )
+        real_run = subprocess.run
+        calls = []
+
+        def recording_run(command, *args, **kwargs):
+            calls.append((command, kwargs))
+            if command == ["git", "commit", "-m", "test staging"]:
+                return subprocess.CompletedProcess(command, 1)
+            return real_run(command, *args, **kwargs)
+
+        with patch("builtins.input", return_value="yes"), patch.object(
+            git_commands,
+            "_preflight_ssh_push",
+            return_value={}
+        ), patch.object(
+            git_commands.subprocess,
+            "run",
+            side_effect=recording_run
+        ), patch.object(git_commands, "rot_say"):
+            result = git_commands.git_push(arguments, working_directory)
+
+        self.assertEqual(result, 1)
+        return calls
+
+    def staged_paths(self, diff_filter=None):
+        command = ["git", "diff", "--cached", "--name-only"]
+        if diff_filter is not None:
+            command.append(f"--diff-filter={diff_filter}")
+        return subprocess.run(
+            command,
+            cwd=self.repository,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.splitlines()
+
+    def test_staging_from_repository_root_stages_changes(self):
+        calls = self.stage_until_commit(self.repository)
+
+        self.assertIn("tracked.txt", self.staged_paths())
+        add_call = next(call for call in calls if call[0] == ["git", "add", "--all"])
+        self.assertEqual(Path(add_call[1]["cwd"]), self.repository)
+
+    def test_staging_from_nested_directory_includes_repository_root_changes(self):
+        nested = self.repository / "nested" / "directory"
+        nested.mkdir(parents=True)
+        outside = self.repository / "outside.txt"
+        outside.write_text("outside nested directory\n", encoding="utf-8")
+
+        self.stage_until_commit(nested)
+
+        self.assertIn("outside.txt", self.staged_paths())
+
+    def test_staging_includes_deleted_files(self):
+        (self.repository / "tracked.txt").unlink()
+
+        self.stage_until_commit(self.repository)
+
+        self.assertEqual(self.staged_paths("D"), ["tracked.txt"])
+
+    def test_staging_uses_a_non_shell_git_command(self):
+        calls = self.stage_until_commit(self.repository)
+
+        command, kwargs = next(
+            call for call in calls if call[0] == ["git", "add", "--all"]
+        )
+        self.assertEqual(command, ["git", "add", "--all"])
+        self.assertFalse(kwargs.get("shell", False))
+
     def test_failed_preflight_does_not_stage_or_commit_changes(self):
         args = argparse.Namespace(
             review=False,

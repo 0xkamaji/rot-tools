@@ -233,6 +233,7 @@ menu. Direct subcommands remain available for faster scripted use.
 | Command                      | Purpose                            |
 | ---------------------------- | ---------------------------------- |
 | `rot context list`           | List available contexts            |
+| `rot context inspect`        | Inspect the active identities, machine, directory, and project |
 | `rot context show [NAME]`    | Display a context, or choose one from a list |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
@@ -247,6 +248,25 @@ outside RotBot's active discovery paths. Each kind has its own bucket:
 project also removes its local source and production bindings so the name can
 be recreated cleanly. Archiving a portable machine context does not modify its
 installation-specific local metadata file.
+
+Configure the active portable identities in RotBot's machine-local configuration:
+
+```toml
+[defaults]
+assistant = "rot"
+user = "Kamaji"
+machine = "Fresh_Thinkpad_Cachy"
+```
+
+Inspect the context associated with the current working directory:
+
+```bash
+rot context inspect
+```
+
+This inspection is read-only. It reports identity names and project matching
+sources, excludes local/private machine metadata, and does not supply the
+inspected context to AI commands.
 
 Inspect the current host without creating or modifying files:
 

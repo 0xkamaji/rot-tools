@@ -8,6 +8,7 @@ from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
 from rotbot.contexts.deletion import context_delete
+from rotbot.contexts.inspection import context_inspect
 from rotbot.contexts.loader import context_list, context_show
 from rotbot.contexts.menu import context_menu
 from rotbot.contexts.modification import context_mod
@@ -239,7 +240,7 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="List, show, add, modify, bind, or archive contexts"
+        help="Inspect, list, show, add, modify, bind, or archive contexts"
     )
     context_commands = context_parser.add_subparsers(
         dest="context_command"
@@ -251,6 +252,12 @@ def create_parser():
         help="List available contexts"
     )
     context_list_parser.set_defaults(func=context_list)
+
+    context_inspect_parser = context_commands.add_parser(
+        "inspect",
+        help="Inspect the current RotBot context without writing files"
+    )
+    context_inspect_parser.set_defaults(func=context_inspect)
 
     context_show_parser = context_commands.add_parser(
         "show",

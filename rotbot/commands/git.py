@@ -621,26 +621,31 @@ def git_push(args, working_directory=None, review_context=None):
         "--show-toplevel",
         working_directory=command_directory
     )
+    if repository.returncode != 0:
+        rot_say(f"Could not inspect the Git repository.\n{repository.stderr.strip()}")
+        return 1
+    repository_root = repository.stdout.strip()
+
     status = _capture_git(
         "status",
         "--short",
-        working_directory=command_directory
+        working_directory=repository_root
     )
     branch = _capture_git(
         "branch",
         "--show-current",
-        working_directory=command_directory
+        working_directory=repository_root
     )
     upstream = _capture_git(
         "rev-parse",
         "--abbrev-ref",
         "--symbolic-full-name",
         "@{upstream}",
-        working_directory=command_directory
+        working_directory=repository_root
     )
 
-    if repository.returncode != 0 or status.returncode != 0:
-        detail = repository.stderr.strip() or status.stderr.strip()
+    if status.returncode != 0:
+        detail = status.stderr.strip()
         rot_say(f"Could not inspect the Git repository.\n{detail}")
         return 1
 
@@ -666,7 +671,7 @@ def git_push(args, working_directory=None, review_context=None):
         rot_say(
             "GIT PUSH PLAN\n"
             "-------------\n"
-            f"Repository: {repository.stdout.strip()}\n"
+            f"Repository: {repository_root}\n"
             f"Directory:  {command_directory}\n"
             f"Branch:     {branch_name}\n"
             f"Upstream:   {upstream_name}\n"
@@ -680,7 +685,7 @@ def git_push(args, working_directory=None, review_context=None):
             return PUSH_CANCELLED
 
         push_environment = _preflight_ssh_push(
-            repository.stdout.strip(),
+            repository_root,
             branch.stdout.strip(),
             upstream.stdout.strip() if upstream.returncode == 0 else ""
         )
@@ -691,7 +696,7 @@ def git_push(args, working_directory=None, review_context=None):
         result = subprocess.run(
             ["git", "push"],
             check=False,
-            cwd=command_directory,
+            cwd=repository_root,
             env=push_environment
         )
         if result.returncode != 0:
@@ -705,7 +710,7 @@ def git_push(args, working_directory=None, review_context=None):
 
     if review_requested:
         rot_say("Running: git status --short\nRunning: git diff HEAD")
-        diff = _capture_git("diff", "HEAD", working_directory=command_directory)
+        diff = _capture_git("diff", "HEAD", working_directory=repository_root)
 
         if diff.returncode != 0:
             rot_say(f"Could not read the Git diff.\n{diff.stderr.strip()}")
@@ -742,7 +747,7 @@ def git_push(args, working_directory=None, review_context=None):
         review_returncode, review_output, review_elapsed = stream_agent(
             review_prompt,
             "Rotbot is still reviewing...",
-            command_directory,
+            repository_root,
             agent_name=review_agent
         )
         rot_say(f"AI review finished in {review_elapsed:.1f}s.")
@@ -787,14 +792,14 @@ def git_push(args, working_directory=None, review_context=None):
     rot_say(
         "GIT PUSH PLAN\n"
         "-------------\n"
-        f"Repository: {repository.stdout.strip()}\n"
+        f"Repository: {repository_root}\n"
         f"Directory:  {command_directory}\n"
         f"Branch:     {branch_name}\n"
         f"Upstream:   {upstream_name}\n"
         "Changes:\n"
         f"{indented_changes}\n\n"
         "Actions:\n"
-        "  1. git add .\n"
+        "  1. git add --all\n"
         f"  2. {commit_command}\n"
         "  3. git push"
     )
@@ -808,7 +813,7 @@ def git_push(args, working_directory=None, review_context=None):
             return PUSH_CANCELLED
 
     push_environment = _preflight_ssh_push(
-        repository.stdout.strip(),
+        repository_root,
         branch.stdout.strip(),
         upstream.stdout.strip() if upstream.returncode == 0 else ""
     )
@@ -816,7 +821,7 @@ def git_push(args, working_directory=None, review_context=None):
         return 1
 
     commands = (
-        ["git", "add", "."],
+        ["git", "add", "--all"],
         ["git", "commit", "-m", commit_message],
         ["git", "push"]
     )
@@ -826,7 +831,7 @@ def git_push(args, working_directory=None, review_context=None):
         result = subprocess.run(
             command,
             check=False,
-            cwd=command_directory,
+            cwd=repository_root,
             env=push_environment if command == ["git", "push"] else None
         )
 
