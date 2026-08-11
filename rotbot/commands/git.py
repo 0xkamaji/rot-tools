@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import re
 import shlex
 import subprocess
@@ -375,6 +376,111 @@ def _read_input():
         return ""
 
 
+def _push_remote_url(repository, upstream):
+    remote_name = upstream.split("/", 1)[0] if upstream else ""
+    if not remote_name:
+        remotes = _capture_git("remote", working_directory=repository)
+        names = remotes.stdout.split() if remotes.returncode == 0 else []
+        if len(names) != 1:
+            return None
+        remote_name = names[0]
+    remote = _capture_git(
+        "remote",
+        "get-url",
+        "--push",
+        remote_name,
+        working_directory=repository
+    )
+    return remote.stdout.strip() if remote.returncode == 0 else None
+
+
+def _ssh_remote_host(remote_url):
+    if not remote_url:
+        return None
+    match = re.match(r"^ssh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/", remote_url)
+    if match:
+        return match.group(1)
+    match = re.match(r"^(?:[^@/:]+@)?([^/:]+):[^/].+", remote_url)
+    return match.group(1) if match else None
+
+
+def _preflight_ssh_push(repository, upstream):
+    remote_url = _push_remote_url(repository, upstream)
+    host = _ssh_remote_host(remote_url)
+    if host is None:
+        return True
+
+    try:
+        identities = subprocess.run(
+            ["ssh-add", "-l"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+    except FileNotFoundError:
+        rot_say("OpenSSH tools are required to use an SSH Git remote.")
+        return False
+
+    if identities.returncode == 1:
+        default_key = Path.home() / ".ssh" / "id_ed25519"
+        if default_key.is_file():
+            rot_say(f"SSH agent has no identities. Loading default key:\n{default_key}")
+            try:
+                loaded = subprocess.run(
+                    ["ssh-add", str(default_key)],
+                    check=False
+                )
+            except FileNotFoundError:
+                rot_say("OpenSSH tools are required to load an SSH key.")
+                return False
+            if loaded.returncode != 0:
+                rot_say(
+                    "Could not load the default SSH key. No Git changes were made.\n\n"
+                    f"Run in an interactive terminal:\n  ssh-add {default_key}"
+                )
+                return False
+        else:
+            rot_say(
+                "SSH agent has no identities and the default key does not exist:\n"
+                f"{default_key}"
+            )
+            return False
+    elif identities.returncode != 0:
+        rot_say(
+            "Could not access the SSH agent. No Git changes were made.\n\n"
+            "Start an SSH agent and load a key before pushing."
+        )
+        return False
+
+    environment = os.environ.copy()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=10"
+    try:
+        access = subprocess.run(
+            ["git", "ls-remote", remote_url],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repository,
+            env=environment
+        )
+    except FileNotFoundError:
+        rot_say("Git or SSH is not installed or is not available in PATH.")
+        return False
+    if access.returncode != 0:
+        detail = access.stderr.strip()
+        rot_say(
+            f"Could not authenticate to the SSH push remote at {host}. "
+            "No Git changes were made.\n\n"
+            + (f"{detail}\n\n" if detail else "")
+            + "Load the correct key, then retry:\n"
+            f"  ssh-add {Path.home() / '.ssh' / 'id_ed25519'}"
+        )
+        return False
+    rot_say(f"SSH push access verified for {host}.")
+    return True
+
+
 def _edit_commit_message(suggested_message):
     try:
         import readline
@@ -505,6 +611,9 @@ def git_push(args, working_directory=None, review_context=None):
             rot_say("Push cancelled.")
             return PUSH_CANCELLED
 
+        if not _preflight_ssh_push(repository.stdout.strip(), upstream.stdout.strip()):
+            return 1
+
         rot_say("Running: git push")
         result = subprocess.run(
             ["git", "push"],
@@ -623,6 +732,9 @@ def git_push(args, working_directory=None, review_context=None):
         if confirmed not in {"y", "yes"}:
             rot_say("Push cancelled. No Git changes were made.")
             return PUSH_CANCELLED
+
+    if not _preflight_ssh_push(repository.stdout.strip(), upstream.stdout.strip()):
+        return 1
 
     commands = (
         ["git", "add", "."],
