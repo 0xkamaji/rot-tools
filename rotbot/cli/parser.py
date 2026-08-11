@@ -2,7 +2,7 @@ import argparse
 
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
-from rotbot.commands.git import git_pull, git_push
+from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
@@ -78,6 +78,7 @@ def create_parser():
             "  rot push --review\n"
             "  rot git pull\n"
             "  rot git push --review\n"
+            "  rot git status\n"
             "  rot wtf\n"
             "  rot wtf -n \"also count occurrences of chicken\"\n"
             "  rot wtf path/to/file.py\n"
@@ -135,6 +136,17 @@ def create_parser():
     )
     _add_git_push_arguments(git_push_parser)
     git_push_parser.set_defaults(func=git_push)
+
+    git_status_parser = git_commands.add_parser(
+        "status",
+        help="Summarize the current Git repository"
+    )
+    git_status_parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Fetch the configured upstream remote before comparing"
+    )
+    git_status_parser.set_defaults(func=git_status)
 
     wtf_parser = commands.add_parser(
         "wtf",
