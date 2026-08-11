@@ -8,6 +8,8 @@ from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
 from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.loader import context_list, context_show
+from rotbot.contexts.menu import context_menu
+from rotbot.contexts.modification import context_mod
 from rotbot.integrations.signalrot.commands import (
     sr_context,
     sr_diff,
@@ -222,12 +224,12 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="List, show, add, bind, or archive contexts"
+        help="List, show, add, modify, bind, or archive contexts"
     )
     context_commands = context_parser.add_subparsers(
-        dest="context_command",
-        required=True
+        dest="context_command"
     )
+    context_parser.set_defaults(func=context_menu, context_command=None)
 
     context_list_parser = context_commands.add_parser(
         "list",
@@ -239,7 +241,11 @@ def create_parser():
         "show",
         help="Show a context"
     )
-    context_show_parser.add_argument("name", help="Context name")
+    context_show_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Optional context name; omit to choose from a numbered list"
+    )
     context_show_parser.add_argument(
         "--vision",
         action="store_true",
@@ -284,6 +290,21 @@ def create_parser():
     )
     context_add_parser.set_defaults(func=context_add)
 
+    context_mod_parser = context_commands.add_parser(
+        "mod",
+        help="Interactively add information to a person context",
+        description=(
+            "Add information under a Markdown category in a person context. "
+            "Projects are not supported yet."
+        )
+    )
+    context_mod_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Optional person context name; omit to choose from a numbered list"
+    )
+    context_mod_parser.set_defaults(func=context_mod)
+
     context_delete_parser = context_commands.add_parser(
         "delete",
         help="Archive a context so RotBot no longer accesses it",
@@ -293,9 +314,9 @@ def create_parser():
         )
     )
     context_delete_parser.add_argument(
-        "--name",
-        required=True,
-        help="Name of the project or person context to archive"
+        "name",
+        nargs="?",
+        help="Optional context name; omit to choose from a numbered list"
     )
     context_delete_parser.set_defaults(func=context_delete)
 

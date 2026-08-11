@@ -63,6 +63,29 @@ class ContextLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
             contexts.load_context("outsider")
 
+    def test_context_list_renders_projects_and_people_in_type_name_table(self):
+        from rotbot.contexts import people
+
+        self.create_context("zeta")
+        self.create_context("alpha")
+        people.create_person_context(
+            "sam", "contact", "Sam Example", people_root=self.people
+        )
+
+        with patch.object(contexts, "rot_say") as rot_say, patch.object(
+            contexts,
+            "rot_table"
+        ) as rot_table:
+            result = contexts.context_list(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        rot_say.assert_called_once_with("CONTEXTS")
+        rot_table.assert_called_once_with(
+            ("TYPE", "NAME"),
+            (("project", "alpha"), ("project", "zeta"), ("person", "sam")),
+            fill=False
+        )
+
     def test_load_context_reads_identity_and_state(self):
         self.create_context("example", "identity\n", "state\n")
 
@@ -183,6 +206,106 @@ class ContextLoaderTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         self.assertIn("Unknown or invalid context", rot_say.call_args.args[0])
+
+    def test_person_show_displays_only_populated_sections(self):
+        from rotbot.contexts import people
+
+        destination = people.create_person_context(
+            "alex", "contact", "Alex Example", people_root=self.people
+        )
+        identity = destination / "identity.md"
+        identity.write_text(
+            identity.read_text(encoding="utf-8").replace(
+                "<!-- Occupation, education, location, personal history, and "
+                "other relevant life context. -->",
+                "<!-- Occupation, education, location, personal history, and "
+                "other relevant life context. -->\n\n- Grew up near the coast."
+            ),
+            encoding="utf-8"
+        )
+
+        with patch.object(contexts, "rot_say") as rot_say, patch.object(
+            contexts,
+            "rot_continue"
+        ) as rot_continue:
+            result = contexts.context_show(
+                argparse.Namespace(name="alex", vision=False)
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("PERSON CONTEXT: alex (Alex Example)", rot_say.call_args.args[0])
+        output = rot_continue.call_args.args[0]
+        self.assertIn("IDENTITY (identity.md; read-only)", output)
+        self.assertIn("## Background", output)
+        self.assertIn("Grew up near the coast", output)
+        self.assertNotIn("## Skills and Knowledge", output)
+        self.assertNotIn("PREFERENCES", output)
+        self.assertNotIn("<!--", output)
+        self.assertNotIn("metadata.toml", output)
+
+    def test_empty_person_show_reports_no_recorded_information(self):
+        from rotbot.contexts import people
+
+        people.create_person_context(
+            "alex", "contact", "Alex", people_root=self.people
+        )
+        with patch.object(contexts, "rot_say"), patch.object(
+            contexts,
+            "rot_continue"
+        ) as rot_continue:
+            result = contexts.context_show(
+                argparse.Namespace(name="alex", vision=False)
+            )
+
+        self.assertEqual(result, 0)
+        rot_continue.assert_called_once_with("(no recorded information)")
+
+    def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
+        from rotbot.contexts import people
+
+        self.create_context("alpha")
+        people.create_person_context(
+            "alex", "contact", "Alex", people_root=self.people
+        )
+        with patch("builtins.input", return_value="2"), patch.object(
+            contexts,
+            "rot_say"
+        ) as rot_say, patch.object(contexts, "rot_continue") as rot_continue:
+            result = contexts.context_show(
+                argparse.Namespace(name=None, vision=False)
+            )
+
+        self.assertEqual(result, 0)
+        self.assertTrue(any(
+            "1. project: alpha" in call.args[0]
+            and "2. person: alex" in call.args[0]
+            for call in rot_say.call_args_list
+        ))
+        rot_continue.assert_called_with("(no recorded information)")
+
+    def test_show_rejects_ambiguous_name_and_person_vision(self):
+        from rotbot.contexts import people
+
+        self.create_context("shared")
+        people.create_person_context(
+            "shared", "contact", "Shared", people_root=self.people
+        )
+        people.create_person_context(
+            "alex", "contact", "Alex", people_root=self.people
+        )
+        with patch.object(contexts, "rot_say") as rot_say:
+            ambiguous = contexts.context_show(
+                argparse.Namespace(name="shared", vision=False)
+            )
+            ambiguous_message = rot_say.call_args.args[0]
+            person_vision = contexts.context_show(
+                argparse.Namespace(name="alex", vision=True)
+            )
+
+        self.assertEqual(ambiguous, 1)
+        self.assertIn("ambiguous", ambiguous_message)
+        self.assertEqual(person_vision, 1)
+        self.assertIn("only supported for project", rot_say.call_args.args[0])
 
     def test_standard_show_excludes_vision_when_present(self):
         self.create_context(

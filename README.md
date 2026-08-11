@@ -193,18 +193,30 @@ interactive add command as project contexts.
 
 ### Context commands
 
+Run `rot context` without a subcommand to choose an action from an interactive
+menu. Direct subcommands remain available for faster scripted use.
+
 | Command                      | Purpose                            |
 | ---------------------------- | ---------------------------------- |
 | `rot context list`           | List available contexts            |
-| `rot context show NAME`      | Display a context                  |
+| `rot context show [NAME]`    | Display a context, or choose one from a list |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
 | `rot context add`            | Interactively create a project or person context |
-| `rot context delete --name NAME` | Archive a context without destroying it |
+| `rot context mod [NAME]`     | Add categorized information to a person context |
+| `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
 Archived contexts are moved beneath `context/archive/`, outside RotBot's
 project and person discovery paths. Archiving a project also removes its local
 source and production bindings so the name can be recreated cleanly.
+
+`rot context mod` currently supports people. It reads the selected Markdown
+file's existing `##` headings, adds information beneath one of them, or creates
+a new heading with a reusable guidance comment.
+
+When showing a person, RotBot displays only populated Markdown sections. Empty
+template headings, guidance comments, metadata, and role-inapplicable files are
+omitted.
 
 ### Show a context
 

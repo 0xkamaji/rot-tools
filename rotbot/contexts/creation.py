@@ -376,6 +376,10 @@ def context_add(args):
     if role is None:
         rot_say("Context creation cancelled. No files were changed.")
         return 0
+    rot_say(
+        "What should this person be called?\n"
+        f"Leave blank to use their context name: {name}"
+    )
     display_name = _ask_value("Display name", name)
     if display_name is None:
         rot_say("Context creation cancelled. No files were changed.")

@@ -31,20 +31,27 @@ def _safe_directory(path, label):
         raise ContextDeletionError(f"Invalid {label} directory: {path}")
 
 
-def _locate_context(name, context_root):
+def _locate_context(name, context_root, context_type=None):
     try:
         loader.validate_context_name(name)
     except loader.ContextError as error:
         raise ContextDeletionError(str(error)) from None
     _safe_directory(context_root, "context root")
 
+    if context_type is not None and context_type not in CONTEXT_CATEGORIES:
+        raise ContextDeletionError(f"Unsupported context type: {context_type}")
     found = []
-    for context_type, category_name in CONTEXT_CATEGORIES.items():
+    categories = (
+        ((context_type, CONTEXT_CATEGORIES[context_type]),)
+        if context_type is not None
+        else CONTEXT_CATEGORIES.items()
+    )
+    for found_type, category_name in categories:
         category = context_root / category_name
-        _safe_directory(category, f"{context_type} context")
+        _safe_directory(category, f"{found_type} context")
         source = category / name
         if _exists(source):
-            found.append((context_type, source))
+            found.append((found_type, source))
     if not found:
         raise ContextDeletionError(f"Context '{name}' does not exist.")
     if len(found) > 1:
@@ -55,6 +62,28 @@ def _locate_context(name, context_root):
     if source.is_symlink() or not source.is_dir():
         raise ContextDeletionError(f"Invalid {context_type} context: {source}")
     return context_type, source
+
+
+def list_deletable_contexts(*, context_root=None):
+    context_root = loader.CONTEXT_ROOT if context_root is None else Path(context_root)
+    _safe_directory(context_root, "context root")
+    contexts = []
+    for context_type, category_name in CONTEXT_CATEGORIES.items():
+        category = context_root / category_name
+        _safe_directory(category, f"{context_type} context")
+        try:
+            entries = tuple(category.iterdir())
+        except OSError as error:
+            raise ContextDeletionError(f"Could not list {context_type} contexts: {error}") from None
+        for entry in entries:
+            try:
+                loader.validate_context_name(entry.name)
+            except loader.ContextError:
+                continue
+            if not entry.is_symlink() and entry.is_dir():
+                contexts.append((context_type, entry.name))
+    type_order = {name: index for index, name in enumerate(CONTEXT_CATEGORIES)}
+    return tuple(sorted(contexts, key=lambda item: (type_order[item[0]], item[1])))
 
 
 def _ensure_archive_parent(context_root, context_type, name):
@@ -76,9 +105,9 @@ def _archive_id():
     return f"{timestamp}-{uuid.uuid4().hex}"
 
 
-def archive_context(name, *, context_root=None, target_config=None):
+def archive_context(name, *, context_type=None, context_root=None, target_config=None):
     context_root = loader.CONTEXT_ROOT if context_root is None else Path(context_root)
-    context_type, source = _locate_context(name, context_root)
+    context_type, source = _locate_context(name, context_root, context_type)
     target_config = config_path() if target_config is None else Path(target_config)
     if context_type == "project":
         try:
@@ -136,13 +165,48 @@ def _confirm(message):
     return answer in {"y", "yes"}
 
 
+def _choose_context(contexts):
+    rot_say(
+        "Which context would you like to archive?\n\n"
+        + "\n".join(
+            f"  {index}. {context_type}: {name}"
+            for index, (context_type, name) in enumerate(contexts, 1)
+        )
+    )
+    while True:
+        try:
+            answer = input("> ").strip()
+        except EOFError:
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(contexts):
+            return contexts[int(answer) - 1]
+        rot_say(f"Please choose a number from 1 to {len(contexts)}.")
+
+
 def context_delete(args):
     try:
-        context_type, source = _locate_context(args.name, loader.CONTEXT_ROOT)
+        if args.name:
+            context_type, source = _locate_context(args.name, loader.CONTEXT_ROOT)
+            name = args.name
+        else:
+            contexts = list_deletable_contexts()
+            if not contexts:
+                rot_say("No contexts are available to archive.")
+                return 1
+            selected = _choose_context(contexts)
+            if selected is None:
+                rot_say("Context archival cancelled. No files or bindings were changed.")
+                return 0
+            context_type, name = selected
+            context_type, source = _locate_context(
+                name,
+                loader.CONTEXT_ROOT,
+                context_type
+            )
     except ContextDeletionError as error:
         rot_say(str(error))
         return 1
-    rot_say(f"Archive {context_type} context '{args.name}'?")
+    rot_say(f"Archive {context_type} context '{name}'?")
     rot_continue(
         f"Move from:\n  {source}\n\n"
         f"Move under:\n  {loader.CONTEXT_ROOT / ARCHIVE_CATEGORY}\n\n"
@@ -152,11 +216,14 @@ def context_delete(args):
         rot_say("Context archival cancelled. No files or bindings were changed.")
         return 0
     try:
-        archived_type, destination = archive_context(args.name)
+        archived_type, destination = archive_context(
+            name,
+            context_type=context_type
+        )
     except ContextDeletionError as error:
         rot_say(str(error))
         return 1
     rot_say(
-        f"{archived_type.title()} context '{args.name}' archived at:\n{destination}"
+        f"{archived_type.title()} context '{name}' archived at:\n{destination}"
     )
     return 0

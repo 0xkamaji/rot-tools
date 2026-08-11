@@ -133,6 +133,21 @@ class ContextDeletionTests(unittest.TestCase):
             )
         self.assertTrue((self.projects / "safe").exists())
 
+    def test_explicit_type_resolves_same_name_project_and_person(self):
+        self.create_project("shared")
+        people.create_person_context("shared", "contact", people_root=self.people)
+
+        context_type, _destination = deletion.archive_context(
+            "shared",
+            context_type="person",
+            context_root=self.context_root,
+            target_config=self.config
+        )
+
+        self.assertEqual(context_type, "person")
+        self.assertTrue((self.projects / "shared").exists())
+        self.assertFalse((self.people / "shared").exists())
+
     def test_binding_failure_rolls_archived_project_back(self):
         source = self.create_project()
 
@@ -165,6 +180,40 @@ class ContextDeletionTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertTrue(source.exists())
         self.assertFalse((self.context_root / "archive").exists())
+
+    def test_no_name_lists_all_contexts_and_archives_numbered_selection(self):
+        self.create_project("zeta")
+        people.create_person_context("alex", "contact", people_root=self.people)
+
+        with patch("builtins.input", side_effect=("2", "yes")), patch.object(
+            deletion,
+            "archive_context",
+            return_value=("person", Path("archive/person/alex"))
+        ) as archive_context, patch.object(
+            deletion,
+            "rot_say"
+        ) as rot_say, patch.object(deletion, "rot_continue"):
+            result = deletion.context_delete(argparse.Namespace(name=None))
+
+        self.assertEqual(result, 0)
+        archive_context.assert_called_once_with("alex", context_type="person")
+        self.assertTrue(any(
+            "1. project: zeta" in call.args[0]
+            and "2. person: alex" in call.args[0]
+            for call in rot_say.call_args_list
+        ))
+
+    def test_deletable_listing_includes_safe_directories_even_if_incomplete(self):
+        self.create_project("valid")
+        incomplete = self.people / "incomplete"
+        incomplete.mkdir()
+        ordinary = self.projects / "ordinary.txt"
+        ordinary.write_text("not a context", encoding="utf-8")
+
+        self.assertEqual(
+            deletion.list_deletable_contexts(context_root=self.context_root),
+            (("project", "valid"), ("person", "incomplete"))
+        )
 
 
 if __name__ == "__main__":

@@ -455,11 +455,15 @@ class ContextQuestionnaireTests(unittest.TestCase):
         ) as create_person, patch.object(
             context_creation,
             "rot_say"
-        ), patch.object(context_creation, "rot_continue"):
+        ) as rot_say, patch.object(context_creation, "rot_continue"):
             result = context_creation.context_add(argparse.Namespace(agent=None))
 
         self.assertEqual(result, 0)
         create_person.assert_called_once_with("sam", "contact", "sam")
+        self.assertTrue(any(
+            "Leave blank to use their context name: sam" in call.args[0]
+            for call in rot_say.call_args_list
+        ))
 
     def test_declined_person_confirmation_creates_nothing(self):
         answers = ("person", "alex", "contact", "Alex", "no")

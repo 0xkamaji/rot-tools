@@ -111,7 +111,7 @@ def rot_continue(message):
         print(f"{'':<{bot_width}}{' ' * ROTBOT_GAP}{line}")
 
 
-def rot_table(headers, rows):
+def rot_table(headers, rows, *, fill=True):
     terminal_width, bot_width, prefix_width = _bot_layout()
     compact = terminal_width < prefix_width + ROTBOT_MIN_CONTENT_WIDTH
     width = terminal_width if compact else terminal_width - prefix_width
@@ -141,7 +141,8 @@ def rot_table(headers, rows):
             if column_widths[index] < desired[index]
         ]
         if not candidates:
-            column_widths[-1] += cell_space - sum(column_widths)
+            if fill:
+                column_widths[-1] += cell_space - sum(column_widths)
             break
         index = min(candidates, key=lambda item: column_widths[item])
         column_widths[index] += 1

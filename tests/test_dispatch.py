@@ -57,6 +57,7 @@ class ParserDispatchTests(unittest.TestCase):
             "directory_report",
             {"target": "src", "deep": True, "note": "focus here"}
         ),
+        (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
         (
             ["context", "show", "signalrot"],
@@ -67,6 +68,11 @@ class ParserDispatchTests(unittest.TestCase):
             ["context", "show", "signalrot", "--vision"],
             "context_show",
             {"context_command": "show", "name": "signalrot", "vision": True}
+        ),
+        (
+            ["context", "show"],
+            "context_show",
+            {"context_command": "show", "name": None, "vision": False}
         ),
         (
             ["context", "bind"],
@@ -100,9 +106,24 @@ class ParserDispatchTests(unittest.TestCase):
             }
         ),
         (
-            ["context", "delete", "--name", "example"],
+            ["context", "delete", "example"],
             "context_delete",
             {"context_command": "delete", "name": "example"}
+        ),
+        (
+            ["context", "delete"],
+            "context_delete",
+            {"context_command": "delete", "name": None}
+        ),
+        (
+            ["context", "mod"],
+            "context_mod",
+            {"context_command": "mod", "name": None}
+        ),
+        (
+            ["context", "mod", "alex"],
+            "context_mod",
+            {"context_command": "mod", "name": "alex"}
         ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
@@ -162,8 +183,7 @@ class ParserDispatchTests(unittest.TestCase):
 
     def test_missing_required_arguments_are_rejected(self):
         for argv in (
-            [], ["ask"], ["git"], ["context"], ["context", "show"],
-            ["context", "delete"],
+            [], ["ask"], ["git"],
             ["sr"]
         ):
             with self.subTest(argv=argv):
@@ -174,7 +194,9 @@ class ParserDispatchTests(unittest.TestCase):
             ["ask", "hello", "--agent", "invalid"],
             ["push", "--message"],
             ["pull", "--review"],
-            ["context", "add", "example", "/srv/example"]
+            ["context", "add", "example", "/srv/example"],
+            ["context", "mod", "alex", "extra"],
+            ["context", "delete", "example", "extra"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -217,6 +239,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("COMMAND: rotbot git status", message)
         self.assertIn("COMMAND: rotbot context add", message)
         self.assertIn("COMMAND: rotbot context delete", message)
+        self.assertIn("COMMAND: rotbot context mod", message)
         self.assertIn("COMMAND: rotbot sr publish", message)
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
