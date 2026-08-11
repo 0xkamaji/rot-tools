@@ -1,6 +1,7 @@
 import argparse
 
 from agents.runner import ask_agent
+from contexts import context_list, context_show
 from git_commands import git_pull, git_push
 from gui import rot_content_width, rot_say
 from signalrot import sr_context, sr_diff, sr_publish, sr_pull, sr_push, sr_status
@@ -114,6 +115,33 @@ def create_parser():
     _add_agent_argument(wtf_parser)
     _add_note_argument(wtf_parser)
     wtf_parser.set_defaults(func=directory_report)
+
+    context_parser = commands.add_parser(
+        "context",
+        help="List or show available contexts"
+    )
+    context_commands = context_parser.add_subparsers(
+        dest="context_command",
+        required=True
+    )
+
+    context_list_parser = context_commands.add_parser(
+        "list",
+        help="List available contexts"
+    )
+    context_list_parser.set_defaults(func=context_list)
+
+    context_show_parser = context_commands.add_parser(
+        "show",
+        help="Show a context"
+    )
+    context_show_parser.add_argument("name", help="Context name")
+    context_show_parser.add_argument(
+        "--vision",
+        action="store_true",
+        help="Show only the optional vision document"
+    )
+    context_show_parser.set_defaults(func=context_show)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(

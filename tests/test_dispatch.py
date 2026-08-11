@@ -32,6 +32,17 @@ class ParserDispatchTests(unittest.TestCase):
             "directory_report",
             {"target": "src", "deep": True, "note": "focus here"}
         ),
+        (["context", "list"], "context_list", {"context_command": "list"}),
+        (
+            ["context", "show", "signalrot"],
+            "context_show",
+            {"context_command": "show", "name": "signalrot"}
+        ),
+        (
+            ["context", "show", "signalrot", "--vision"],
+            "context_show",
+            {"context_command": "show", "name": "signalrot", "vision": True}
+        ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
             ["sr", "context", "--refresh", "--agent", "codex"],
@@ -89,7 +100,7 @@ class ParserDispatchTests(unittest.TestCase):
                 self.assert_parse_error(argv)
 
     def test_missing_required_arguments_are_rejected(self):
-        for argv in ([], ["ask"], ["sr"]):
+        for argv in ([], ["ask"], ["context"], ["context", "show"], ["sr"]):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
 
