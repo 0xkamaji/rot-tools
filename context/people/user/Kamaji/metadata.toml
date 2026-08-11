@@ -1,0 +1,5 @@
+type = "person"
+role = "user"
+name = "Kamaji"
+display_name = "Kamaji"
+related_projects = ["rotbot", "signalrot"]
