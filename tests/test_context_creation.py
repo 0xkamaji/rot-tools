@@ -453,9 +453,15 @@ class ContextQuestionnaireTests(unittest.TestCase):
         self.assertEqual(project_args.agent, "codex")
 
     def test_person_questions_route_role_and_display_name_without_agent(self):
-        answers = ("person", "alex", "user", "Alex Example", "yes")
+        answers = (
+            "person", "alex", "user", "Alex Example", "1,2", "yes"
+        )
 
         with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=("rotbot", "signalrot")
+        ), patch.object(
             context_creation.people,
             "create_person_context",
             return_value=Path("context/people/alex")
@@ -466,12 +472,21 @@ class ContextQuestionnaireTests(unittest.TestCase):
             result = context_creation.context_add(argparse.Namespace(agent="codex"))
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with("alex", "user", "Alex Example")
+        create_person.assert_called_once_with(
+            "alex",
+            "user",
+            "Alex Example",
+            related_projects=("rotbot", "signalrot")
+        )
 
     def test_person_questions_route_assistant_role(self):
-        answers = ("person", "rot", "assistant", "Rot", "yes")
+        answers = ("person", "rot", "assistant", "Rot", "", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=("rotbot", "signalrot")
+        ), patch.object(
             context_creation.people,
             "create_person_context",
             return_value=Path("context/people/rot")
@@ -482,12 +497,21 @@ class ContextQuestionnaireTests(unittest.TestCase):
             result = context_creation.context_add(argparse.Namespace(agent=None))
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with("rot", "assistant", "Rot")
+        create_person.assert_called_once_with(
+            "rot",
+            "assistant",
+            "Rot",
+            related_projects=()
+        )
 
     def test_person_questions_apply_contact_and_display_defaults(self):
-        answers = ("2", "sam", "", "", "yes")
+        answers = ("2", "sam", "", "", "", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=("rotbot",)
+        ), patch.object(
             context_creation.people,
             "create_person_context",
             return_value=Path("context/people/sam")
@@ -498,16 +522,22 @@ class ContextQuestionnaireTests(unittest.TestCase):
             result = context_creation.context_add(argparse.Namespace(agent=None))
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with("sam", "contact", "sam")
+        create_person.assert_called_once_with(
+            "sam", "contact", "sam", related_projects=()
+        )
         self.assertTrue(any(
             "Leave blank to use their context name: sam" in call.args[0]
             for call in rot_say.call_args_list
         ))
 
     def test_declined_person_confirmation_creates_nothing(self):
-        answers = ("person", "alex", "contact", "Alex", "no")
+        answers = ("person", "alex", "contact", "Alex", "", "no")
 
         with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=("rotbot",)
+        ), patch.object(
             context_creation.people,
             "create_person_context"
         ) as create_person, patch.object(
@@ -518,6 +548,22 @@ class ContextQuestionnaireTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         create_person.assert_not_called()
+
+    def test_related_project_menu_can_exit_without_creation(self):
+        answers = ("person", "alex", "contact", "Alex", "exit")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=("rotbot", "signalrot")
+        ), patch.object(
+            context_creation,
+            "_add_person_context"
+        ) as add_person, patch.object(context_creation, "rot_say"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        add_person.assert_not_called()
 
 
 if __name__ == "__main__":

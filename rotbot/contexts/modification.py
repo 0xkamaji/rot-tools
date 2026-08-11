@@ -214,6 +214,82 @@ def add_person_information(
     return document
 
 
+def replace_person_metadata(
+    name,
+    display_name,
+    related_projects,
+    *,
+    expected_person=None,
+    people_root=None
+):
+    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    try:
+        current = people.load_person_context(name, people_root=root)
+        updated_person = people.build_person_context(
+            current.name,
+            current.role,
+            display_name,
+            related_projects
+        )
+    except people.PersonContextError as error:
+        raise PersonModificationError(str(error)) from None
+    if expected_person is not None and current != expected_person:
+        raise PersonModificationError(
+            "Person context metadata changed before it could be updated."
+        )
+    metadata = root / current.name / "metadata.toml"
+    if metadata.is_symlink() or not metadata.is_file():
+        raise PersonModificationError("Invalid person context metadata.")
+    try:
+        original_stat = metadata.stat()
+        original = metadata.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise PersonModificationError(f"Could not read person context metadata: {error}") from None
+    updated = people.render_person_files(updated_person)["metadata.toml"]
+    if updated == original:
+        return metadata
+
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=metadata.parent,
+            prefix=".metadata.toml.",
+            suffix=".tmp",
+            delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.chmod(temporary_path, stat.S_IMODE(original_stat.st_mode))
+            temporary.write(updated)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        current_stat = metadata.stat()
+        if (
+            metadata.is_symlink()
+            or current_stat.st_dev != original_stat.st_dev
+            or current_stat.st_ino != original_stat.st_ino
+            or current_stat.st_mtime_ns != original_stat.st_mtime_ns
+            or current_stat.st_size != original_stat.st_size
+        ):
+            raise PersonModificationError(
+                "Person context metadata changed before it could be updated."
+            )
+        os.replace(temporary_path, metadata)
+        temporary_path = None
+    except PersonModificationError:
+        raise
+    except OSError as error:
+        raise PersonModificationError(f"Could not update person context metadata: {error}") from None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+    return metadata
+
+
 def _read_input():
     try:
         return input("> ").strip()
@@ -246,6 +322,105 @@ def _confirm(message):
     return answer is not None and answer.lower() in {"y", "yes"}
 
 
+def _apply_metadata_change(person, display_name, related_projects):
+    try:
+        proposed = people.build_person_context(
+            person.name,
+            person.role,
+            display_name,
+            related_projects
+        )
+    except people.PersonContextError as error:
+        rot_say(str(error))
+        return 1
+    metadata = people.render_person_files(proposed)["metadata.toml"].rstrip()
+    rot_say(f"Update metadata for person context '{person.name}'?")
+    rot_continue(metadata)
+    if not _confirm("Apply this metadata modification?"):
+        rot_say("Context modification cancelled. No files were changed.")
+        return 0
+    try:
+        destination = replace_person_metadata(
+            person.name,
+            proposed.display_name,
+            proposed.related_projects,
+            expected_person=person
+        )
+    except PersonModificationError as error:
+        rot_say(str(error))
+        return 1
+    rot_say(f"Person context '{person.name}' metadata updated:\n{destination}")
+    return 0
+
+
+def _modify_person_metadata(person):
+    choice = _choose_number(
+        "What would you like to change in metadata.toml?",
+        (
+            "Change display name",
+            "Add a related project",
+            "Remove a related project"
+        )
+    )
+    if choice is None:
+        rot_say("Context modification cancelled. No files were changed.")
+        return 0
+    if choice == 0:
+        rot_say(f"Enter a new display name [current: {person.display_name}]:")
+        display_name = _read_input()
+        if display_name is None or not display_name:
+            rot_say("Context modification cancelled. No files were changed.")
+            return 0
+        return _apply_metadata_change(
+            person,
+            display_name,
+            person.related_projects
+        )
+
+    if choice == 1:
+        try:
+            projects = tuple(
+                project
+                for project in loader.list_contexts()
+                if project not in person.related_projects
+            )
+        except loader.ContextError as error:
+            rot_say(str(error))
+            return 1
+        if not projects:
+            rot_say("No additional project contexts are available to add.")
+            return 0
+        project_choice = _choose_number(
+            "Which existing project would you like to add?",
+            projects
+        )
+        if project_choice is None:
+            rot_say("Context modification cancelled. No files were changed.")
+            return 0
+        return _apply_metadata_change(
+            person,
+            person.display_name,
+            person.related_projects + (projects[project_choice],)
+        )
+
+    if not person.related_projects:
+        rot_say("This person has no related projects to remove.")
+        return 0
+    project_choice = _choose_number(
+        "Which related project would you like to remove?",
+        person.related_projects
+    )
+    if project_choice is None:
+        rot_say("Context modification cancelled. No files were changed.")
+        return 0
+    removed = person.related_projects[project_choice]
+    return _apply_metadata_change(
+        person,
+        person.display_name,
+        tuple(project for project in person.related_projects if project != removed)
+    )
+
+
 def context_mod(args):
     try:
         if args.name:
@@ -271,17 +446,20 @@ def context_mod(args):
         return 1
 
     filenames = available_documents(person)
+    file_options = filenames + ("metadata.toml",)
     file_choice = _choose_number(
-        f"Which file would you like to add information to for {person.display_name}?",
+        f"Which file would you like to modify for {person.display_name}?",
         tuple(
             f"{filename} - {DOCUMENTS[filename]['description']}"
             for filename in filenames
-        )
+        ) + ("metadata.toml - Change display name or related projects",)
     )
     if file_choice is None:
         rot_say("Context modification cancelled. No files were changed.")
         return 0
-    filename = filenames[file_choice]
+    filename = file_options[file_choice]
+    if filename == "metadata.toml":
+        return _modify_person_metadata(person)
     definition = DOCUMENTS[filename]
     try:
         categories = person_document_categories(person.name, filename)

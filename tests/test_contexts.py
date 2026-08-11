@@ -238,10 +238,15 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("IDENTITY (identity.md; read-only)", output)
         self.assertIn("## Background", output)
         self.assertIn("Grew up near the coast", output)
+        self.assertIn("METADATA (metadata.toml; read-only)", output)
+        self.assertIn('type = "person"', output)
+        self.assertIn('role = "contact"', output)
+        self.assertIn('name = "alex"', output)
+        self.assertIn('display_name = "Alex Example"', output)
+        self.assertIn("related_projects = []", output)
         self.assertNotIn("## Skills and Knowledge", output)
         self.assertNotIn("PREFERENCES", output)
         self.assertNotIn("<!--", output)
-        self.assertNotIn("metadata.toml", output)
 
     def test_empty_person_show_reports_no_recorded_information(self):
         from rotbot.contexts import people
@@ -258,7 +263,10 @@ class ContextLoaderTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        rot_continue.assert_called_once_with("(no recorded information)")
+        output = rot_continue.call_args.args[0]
+        self.assertIn("METADATA (metadata.toml; read-only)", output)
+        self.assertIn("related_projects = []", output)
+        self.assertTrue(output.endswith("(no recorded information)"))
 
     def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
         from rotbot.contexts import people
@@ -281,7 +289,9 @@ class ContextLoaderTests(unittest.TestCase):
             and "2. person: alex" in call.args[0]
             for call in rot_say.call_args_list
         ))
-        rot_continue.assert_called_with("(no recorded information)")
+        self.assertTrue(
+            rot_continue.call_args.args[0].endswith("(no recorded information)")
+        )
 
     def test_show_selection_menu_can_exit_without_displaying(self):
         self.create_context("alpha")

@@ -227,14 +227,21 @@ def _show_project_context(name, vision_only):
 
 
 def _show_person_context(name):
-    from rotbot.contexts.people import PersonContextError, load_person_documents
+    from rotbot.contexts.people import (
+        PersonContextError,
+        load_person_documents,
+        render_person_files
+    )
 
     try:
         person, documents = load_person_documents(name)
     except PersonContextError as error:
         rot_say(str(error))
         return 1
-    blocks = []
+    metadata = render_person_files(person)["metadata.toml"].rstrip()
+    metadata_title = "METADATA (metadata.toml; read-only)"
+    blocks = [f"{metadata_title}\n{'-' * len(metadata_title)}\n{metadata}"]
+    has_recorded_information = False
     for document in documents:
         populated = []
         for heading, content in document.sections:
@@ -243,11 +250,14 @@ def _show_person_context(name):
             )
         if not populated:
             continue
+        has_recorded_information = True
         label = document.filename.removesuffix(".md").upper()
         title = f"{label} ({document.filename}; read-only)"
         blocks.append(f"{title}\n{'-' * len(title)}\n" + "\n\n".join(populated))
+    if not has_recorded_information:
+        blocks.append("(no recorded information)")
     rot_say(f"PERSON CONTEXT: {person.name} ({person.display_name})")
-    rot_continue("\n\n".join(blocks) if blocks else "(no recorded information)")
+    rot_continue("\n\n".join(blocks))
     return 0
 
 

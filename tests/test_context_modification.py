@@ -23,14 +23,28 @@ class PersonModificationTests(unittest.TestCase):
         self.root_patch.stop()
         self.temporary_directory.cleanup()
 
-    def create_person(self, name="alex", role="contact", display_name="Alex"):
+    def create_person(
+        self,
+        name="alex",
+        role="contact",
+        display_name="Alex",
+        related_projects=None
+    ):
         people.create_person_context(
             name,
             role,
             display_name,
+            related_projects,
             people_root=self.people_root
         )
         return self.people_root / name
+
+    def create_project(self, name):
+        destination = self.projects / name
+        destination.mkdir()
+        (destination / "identity.md").write_text("identity", encoding="utf-8")
+        (destination / "state.md").write_text("state", encoding="utf-8")
+        return destination
 
     def test_adds_predefined_category_without_modifying_metadata(self):
         destination = self.create_person()
@@ -76,7 +90,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(content.count("## Background"), 1)
         self.assertLess(content.index("- New detail."), content.index("## Interests"))
 
-    def test_role_controls_available_documents_and_metadata_is_never_available(self):
+    def test_role_controls_available_markdown_documents(self):
         self.create_person()
         contact = people.load_person_context("alex", people_root=self.people_root)
         self.create_person("kamaji", "user", "Kamaji")
@@ -161,6 +175,133 @@ class PersonModificationTests(unittest.TestCase):
 
         self.assertEqual(identity.read_text(encoding="utf-8"), original)
         self.assertEqual(tuple(destination.glob(".identity.md.*.tmp")), ())
+
+    def test_metadata_update_changes_only_allowed_fields(self):
+        destination = self.create_person(
+            related_projects=("rotbot",)
+        )
+        identity = (destination / "identity.md").read_text(encoding="utf-8")
+
+        modification.replace_person_metadata(
+            "alex",
+            "Alex Updated",
+            ("rotbot", "signalrot"),
+            people_root=self.people_root
+        )
+
+        loaded = people.load_person_context("alex", people_root=self.people_root)
+        self.assertEqual(loaded.name, "alex")
+        self.assertEqual(loaded.role, "contact")
+        self.assertEqual(loaded.display_name, "Alex Updated")
+        self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
+        self.assertEqual(
+            (destination / "identity.md").read_text(encoding="utf-8"),
+            identity
+        )
+
+    def test_invalid_metadata_update_preserves_original(self):
+        destination = self.create_person(related_projects=("rotbot",))
+        metadata = destination / "metadata.toml"
+        original = metadata.read_text(encoding="utf-8")
+
+        for display_name, related_projects in (
+            ("", ("rotbot",)),
+            ("Alex", ("../unsafe",)),
+            ("Alex", (42,))
+        ):
+            with self.subTest(
+                display_name=display_name,
+                related_projects=related_projects
+            ), self.assertRaises(modification.PersonModificationError):
+                modification.replace_person_metadata(
+                    "alex",
+                    display_name,
+                    related_projects,
+                    people_root=self.people_root
+                )
+            self.assertEqual(metadata.read_text(encoding="utf-8"), original)
+
+    def test_metadata_menu_changes_display_name(self):
+        self.create_person()
+        answers = ("5", "1", "Alex Updated", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            modification,
+            "rot_say"
+        ), patch.object(modification, "rot_continue"):
+            result = modification.context_mod(argparse.Namespace(name="alex"))
+
+        self.assertEqual(result, 0)
+        loaded = people.load_person_context("alex", people_root=self.people_root)
+        self.assertEqual(loaded.display_name, "Alex Updated")
+
+    def test_metadata_menu_adds_existing_project(self):
+        self.create_person(related_projects=("rotbot",))
+        self.create_project("rotbot")
+        self.create_project("signalrot")
+        answers = ("5", "2", "1", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            modification,
+            "rot_say"
+        ) as rot_say, patch.object(modification, "rot_continue"):
+            result = modification.context_mod(argparse.Namespace(name="alex"))
+
+        self.assertEqual(result, 0)
+        loaded = people.load_person_context("alex", people_root=self.people_root)
+        self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
+        self.assertTrue(any(
+            "signalrot" in call.args[0] and "rotbot" not in call.args[0]
+            for call in rot_say.call_args_list
+        ))
+
+    def test_metadata_menu_removes_related_project(self):
+        self.create_person(related_projects=("rotbot", "signalrot"))
+        answers = ("5", "3", "1", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            modification,
+            "rot_say"
+        ), patch.object(modification, "rot_continue"):
+            result = modification.context_mod(argparse.Namespace(name="alex"))
+
+        self.assertEqual(result, 0)
+        loaded = people.load_person_context("alex", people_root=self.people_root)
+        self.assertEqual(loaded.related_projects, ("signalrot",))
+
+    def test_metadata_submenu_can_exit_without_changes(self):
+        destination = self.create_person(related_projects=("rotbot",))
+        metadata = destination / "metadata.toml"
+        original = metadata.read_text(encoding="utf-8")
+
+        with patch("builtins.input", side_effect=("5", "4")), patch.object(
+            modification,
+            "rot_say"
+        ):
+            result = modification.context_mod(argparse.Namespace(name="alex"))
+
+        self.assertEqual(result, 0)
+        self.assertEqual(metadata.read_text(encoding="utf-8"), original)
+
+    def test_failed_metadata_replace_preserves_original_and_cleans_temp(self):
+        destination = self.create_person()
+        metadata = destination / "metadata.toml"
+        original = metadata.read_text(encoding="utf-8")
+
+        with patch.object(
+            modification.os,
+            "replace",
+            side_effect=OSError("replace failed")
+        ), self.assertRaises(modification.PersonModificationError):
+            modification.replace_person_metadata(
+                "alex",
+                "Alex Updated",
+                (),
+                people_root=self.people_root
+            )
+
+        self.assertEqual(metadata.read_text(encoding="utf-8"), original)
+        self.assertEqual(tuple(destination.glob(".metadata.toml.*.tmp")), ())
 
     def test_omitted_name_lists_people_and_routes_numbered_choices(self):
         self.create_person("alex", "contact", "Alex")
@@ -270,7 +411,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_numbered_modification_menus_offer_graceful_exit(self):
         self.create_person()
-        for answer in ("exit", "5"):
+        for answer in ("exit", "6"):
             with self.subTest(answer=answer), patch(
                 "builtins.input",
                 return_value=answer

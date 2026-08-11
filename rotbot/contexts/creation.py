@@ -310,9 +310,61 @@ def _ask_value(label, default=None):
         rot_say("A value is required.")
 
 
-def _add_person_context(name, role, display_name):
+def _choose_related_projects():
     try:
-        person = people.build_person_context(name, role, display_name)
+        projects = loader.list_contexts()
+    except loader.ContextError as error:
+        rot_say(str(error))
+        return None
+    if not projects:
+        rot_say("No existing project contexts are available to relate to this person.")
+        return ()
+    none_number = len(projects) + 1
+    exit_number = len(projects) + 2
+    prompt = (
+        "Are they related to any existing projects?\n\n"
+        + "\n".join(
+            f"  {index}. {project}" for index, project in enumerate(projects, 1)
+        )
+        + f"\n  {none_number}. None"
+        + f"\n  {exit_number}. Exit\n\n"
+        "Choose one or more numbers separated by commas "
+        f"[{none_number}]:"
+    )
+    while True:
+        rot_say(prompt)
+        answer = _read_input()
+        if answer is None:
+            return None
+        lowered = answer.lower()
+        if lowered in {"", "none", "n", "no", str(none_number)}:
+            return ()
+        if lowered in {"exit", "e", "quit", "q", str(exit_number)}:
+            return None
+        choices = [part.strip() for part in answer.split(",")]
+        if choices and all(
+            choice.isdigit() and 1 <= int(choice) <= len(projects)
+            for choice in choices
+        ):
+            selected = []
+            for choice in choices:
+                project = projects[int(choice) - 1]
+                if project not in selected:
+                    selected.append(project)
+            return tuple(selected)
+        rot_say(
+            "Choose project numbers separated by commas, None, or Exit."
+        )
+
+
+def _add_person_context(name, role, display_name, related_projects=()):
+    try:
+        person = people.build_person_context(
+            name,
+            role,
+            display_name,
+            related_projects
+        )
         files = people.render_person_files(person)
     except people.PersonContextError as error:
         rot_say(str(error))
@@ -328,7 +380,12 @@ def _add_person_context(name, role, display_name):
         return 0
 
     try:
-        destination = people.create_person_context(name, role, display_name)
+        destination = people.create_person_context(
+            name,
+            role,
+            display_name,
+            related_projects=related_projects
+        )
     except people.PersonContextError as error:
         rot_say(str(error))
         return 1
@@ -398,7 +455,11 @@ def context_add(args):
     if display_name is None:
         rot_say("Context creation cancelled. No files were changed.")
         return 0
-    return _add_person_context(name, role, display_name)
+    related_projects = _choose_related_projects()
+    if related_projects is None:
+        rot_say("Context creation cancelled. No files were changed.")
+        return 0
+    return _add_person_context(name, role, display_name, related_projects)
 
 
 def _destination_exists(destination):
