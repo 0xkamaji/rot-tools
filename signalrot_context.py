@@ -8,8 +8,8 @@ from gui import rot_continue, rot_say, rot_table
 
 
 CONTEXT_ROOT = Path(__file__).resolve().parent / "context" / "signalrot"
-IDENTITY_PATH = CONTEXT_ROOT / "signalrot_identity.md"
-REFRESH_PATH = CONTEXT_ROOT / "signalrot_refresh.md"
+IDENTITY_PATH = CONTEXT_ROOT / "identity.md"
+REFRESH_PATH = CONTEXT_ROOT / "state.md"
 TRACKED_SECTIONS = ("OPPSEC", "Hacks", "Signals", "Beats", "Frames", "Contact")
 
 
@@ -142,9 +142,9 @@ def _summary_text():
     published = _list_items(refresh, "Published content")
     identity_summary = " ".join(_identity_summary(identity))
     lines = [
-        "Identity: signalrot_identity.md "
+        "Identity: identity.md "
         f"[{'loaded' if identity else 'missing'}]",
-        "State: signalrot_refresh.md "
+        "State: state.md "
         f"[{'loaded' if refresh else 'missing'}]",
         f"Refreshed: {refreshed.group(1).strip() if refreshed else 'never'}",
         "",
