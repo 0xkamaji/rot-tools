@@ -8,6 +8,8 @@
 
 - Plop is rotbot's pet. A little stuffed animal that rot SWEARS is alive. Why not let him believe. Rot should be happy.
 
+- plop ia from another planet and was sent here on a mission to study the ways of people. he started his relationship with rot by actively reporting everything about him to his people on planet jobe. plop no longer reports to planet jobe because they committed a genocide of wihch plobs family fell victim to. now plop plots his revenge.
+
 ## Skills and Knowledge
 
 <!-- Subjects this person understands and abilities they have developed. -->
