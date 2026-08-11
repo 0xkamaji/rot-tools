@@ -50,6 +50,21 @@ def _add_agent_argument(command_parser):
     )
 
 
+def _add_git_push_arguments(command_parser):
+    command_parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Ask the AI agent to review changes before committing"
+    )
+    command_parser.add_argument(
+        "-m",
+        "--message",
+        help="Use this commit message instead of prompting"
+    )
+    _add_agent_argument(command_parser)
+    _add_note_argument(command_parser)
+
+
 def create_parser():
     parser = RotArgumentParser(
         prog="rotbot",
@@ -61,6 +76,8 @@ def create_parser():
             "  rot pull\n"
             "  rot push\n"
             "  rot push --review\n"
+            "  rot git pull\n"
+            "  rot git push --review\n"
             "  rot wtf\n"
             "  rot wtf -n \"also count occurrences of chicken\"\n"
             "  rot wtf path/to/file.py\n"
@@ -94,19 +111,30 @@ def create_parser():
         "push",
         help="Stage, commit, and push the current Git repository"
     )
-    push_parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Ask the AI agent to review changes before committing"
-    )
-    push_parser.add_argument(
-        "-m",
-        "--message",
-        help="Use this commit message instead of prompting"
-    )
-    _add_agent_argument(push_parser)
-    _add_note_argument(push_parser)
+    _add_git_push_arguments(push_parser)
     push_parser.set_defaults(func=git_push)
+
+    git_parser = commands.add_parser(
+        "git",
+        help="Git repository commands"
+    )
+    git_commands = git_parser.add_subparsers(
+        dest="git_command",
+        required=True
+    )
+
+    git_pull_parser = git_commands.add_parser(
+        "pull",
+        help="Pull the current Git repository"
+    )
+    git_pull_parser.set_defaults(func=git_pull)
+
+    git_push_parser = git_commands.add_parser(
+        "push",
+        help="Stage, commit, and push the current Git repository"
+    )
+    _add_git_push_arguments(git_push_parser)
+    git_push_parser.set_defaults(func=git_push)
 
     wtf_parser = commands.add_parser(
         "wtf",
