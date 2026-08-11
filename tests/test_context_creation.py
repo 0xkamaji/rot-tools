@@ -19,6 +19,8 @@ class ContextCreationTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name)
         self.context_root = self.root / "contexts"
         self.context_root.mkdir()
+        self.project_context_root = self.context_root / "projects"
+        self.project_context_root.mkdir()
         self.project = self.root / "project"
         self.project.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
@@ -88,7 +90,7 @@ class ContextCreationTests(unittest.TestCase):
                 self.assertEqual(result, 1)
                 stream_agent.assert_not_called()
 
-        existing = self.context_root / "existing"
+        existing = self.project_context_root / "existing"
         existing.mkdir()
         (existing / "identity.md").write_text("unchanged", encoding="utf-8")
         result, stream_agent, rot_say, _rot_continue = self.run_add(
@@ -105,7 +107,12 @@ class ContextCreationTests(unittest.TestCase):
     def test_invalid_project_paths_are_rejected_before_agent(self):
         ordinary_file = self.root / "file.txt"
         ordinary_file.write_text("file", encoding="utf-8")
-        for path in (self.root / "missing", ordinary_file, self.context_root):
+        for path in (
+            self.root / "missing",
+            ordinary_file,
+            self.context_root,
+            self.project_context_root
+        ):
             with self.subTest(path=path):
                 result, stream_agent, _rot_say, _rot_continue = self.run_add(
                     args=self.args(path=path)
@@ -187,7 +194,7 @@ class ContextCreationTests(unittest.TestCase):
                     returncode=returncode
                 )
                 self.assertNotEqual(result, 0)
-                self.assertFalse((self.context_root / "example").exists())
+                self.assertFalse((self.project_context_root / "example").exists())
                 self.assertFalse(config_path().exists())
 
     def test_agent_output_rejects_control_characters_and_absolute_paths(self):
@@ -214,7 +221,7 @@ class ContextCreationTests(unittest.TestCase):
                     output=output
                 )
                 self.assertEqual(result, 1)
-                self.assertFalse((self.context_root / "example").exists())
+                self.assertFalse((self.project_context_root / "example").exists())
 
     def test_decline_happens_after_full_preview_and_writes_nothing(self):
         preview_seen = []
@@ -240,7 +247,7 @@ class ContextCreationTests(unittest.TestCase):
         self.assertTrue(any("PROPOSED identity.md" in item for item in preview_seen))
         self.assertTrue(any("PROPOSED state.md" in item for item in preview_seen))
         self.assertTrue(any("PROPOSED match.md" in item for item in preview_seen))
-        self.assertFalse((self.context_root / "example").exists())
+        self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
 
     def test_approved_creation_writes_three_files_and_registers_source(self):
@@ -248,15 +255,19 @@ class ContextCreationTests(unittest.TestCase):
         existing_config.parent.mkdir(parents=True)
         existing_config.write_text('theme = "keep"\n', encoding="utf-8")
 
-        result, _agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+        result, _agent, _rot_say, rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        destination = self.context_root / "example"
+        destination = self.project_context_root / "example"
         self.assertEqual(
             {path.name for path in destination.iterdir()},
             {"identity.md", "state.md", "match.md"}
         )
         self.assertFalse((destination / "vision.md").exists())
+        self.assertTrue(any(
+            "context/projects/example/identity.md" in item.args[0]
+            for item in rot_continue.call_args_list
+        ))
         loaded = contexts.load_context("example")
         self.assertIn("Example is a small test project", loaded.identity)
         self.assertIn("Python entry point", loaded.state)
@@ -292,7 +303,7 @@ class ContextCreationTests(unittest.TestCase):
             result, _agent, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 1)
-        self.assertFalse((self.context_root / "example").exists())
+        self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
 
     def test_file_failure_leaves_configuration_unchanged(self):
@@ -309,11 +320,11 @@ class ContextCreationTests(unittest.TestCase):
             result, _agent, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 1)
-        self.assertFalse((self.context_root / "example").exists())
+        self.assertFalse((self.project_context_root / "example").exists())
         self.assertEqual(config.read_text(encoding="utf-8"), original)
 
     def test_context_appearance_race_prevents_files_and_binding(self):
-        destination = self.context_root / "example"
+        destination = self.project_context_root / "example"
 
         def create_racing_context(_prompt):
             destination.mkdir()
@@ -360,7 +371,7 @@ class ContextCreationTests(unittest.TestCase):
             result = context_creation.context_add(self.args())
 
         self.assertEqual(result, 1)
-        self.assertFalse((self.context_root / "example").exists())
+        self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
 
     def test_malformed_config_and_conflicting_binding_block_agent(self):
@@ -391,7 +402,7 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         stream_agent.assert_not_called()
-        self.assertFalse((self.context_root / "example").exists())
+        self.assertFalse((self.project_context_root / "example").exists())
 
     def test_invalid_xdg_config_home_is_reported_before_agent(self):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "relative"}, clear=True):

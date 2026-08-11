@@ -340,7 +340,8 @@ def context_add(args):
         return 1
 
     context_root = loader.CONTEXT_ROOT.resolve()
-    destination = context_root / name
+    project_context_root = context_root / loader.PROJECT_CONTEXT_CATEGORY
+    destination = loader.project_context_directory(name)
     if _destination_exists(destination):
         rot_say(
             f"Context '{name}' already exists.\n\n"
@@ -357,7 +358,7 @@ def context_add(args):
     except OSError as error:
         rot_say(f"Could not resolve project path:\n{error}")
         return 1
-    if project == context_root:
+    if project in {context_root, project_context_root}:
         rot_say("The context storage directory cannot be used as a project.")
         return 1
     if not os.access(project, os.R_OK | os.X_OK):
@@ -419,9 +420,9 @@ def context_add(args):
     rot_say(f"Create context '{name}' from:\n\n  {project}")
     rot_continue(
         "Proposed files:\n\n"
-        f"  context/{name}/identity.md\n"
-        f"  context/{name}/state.md\n"
-        f"  context/{name}/match.md\n\n"
+        f"  context/projects/{name}/identity.md\n"
+        f"  context/projects/{name}/state.md\n"
+        f"  context/projects/{name}/match.md\n\n"
         "Local registration:\n\n"
         f"  {name}.source_path = {project}"
     )
@@ -474,6 +475,6 @@ def context_add(args):
     rot_say(
         f"Context '{name}' created and its source path registered.\n\n"
         "Optional next step:\n"
-        f"  Create context/{name}/vision.md manually."
+        f"  Create context/projects/{name}/vision.md manually."
     )
     return 0

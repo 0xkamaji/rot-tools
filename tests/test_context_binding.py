@@ -73,6 +73,9 @@ class ContextBindingTests(unittest.TestCase):
             rotbot_config.get_context_binding("example")["source_path"],
             str(self.candidate_path.resolve())
         )
+        config_text = rotbot_config.config_path().read_text(encoding="utf-8")
+        self.assertIn("[contexts.example]", config_text)
+        self.assertNotIn("contexts.projects", config_text)
 
     def test_failed_and_ambiguous_matches_do_not_write(self):
         cases = (

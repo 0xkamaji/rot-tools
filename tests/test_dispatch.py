@@ -186,6 +186,43 @@ class ParserDispatchTests(unittest.TestCase):
             self.assertIn("usage:", rot_say.call_args.args[0])
             self.assertIn(expected, rot_say.call_args.args[0])
 
+    def test_verbose_help_renders_every_command(self):
+        with patch.object(
+            command_parser,
+            "rot_say"
+        ) as rot_say, self.assertRaises(SystemExit) as raised:
+            command_parser.parse_args(["-hv"])
+
+        self.assertEqual(raised.exception.code, 0)
+        message = rot_say.call_args.args[0]
+        self.assertIn("ROTBOT VERBOSE HELP", message)
+        self.assertIn("COMMAND: rotbot git status", message)
+        self.assertIn("COMMAND: rotbot context add", message)
+        self.assertIn("COMMAND: rotbot sr publish", message)
+        self.assertIn("--help-verbose", message)
+        self.assertEqual(message.count("-h, --help"), 1)
+        self.assertEqual(message.count("-hv, --help-verbose"), 1)
+        self.assertEqual(message.count("=" * 60), 14)
+        self.assertLess(
+            message.index("COMMAND: rotbot git status"),
+            message.index("COMMAND: rotbot wtf")
+        )
+
+    def test_verbose_help_can_be_scoped_to_a_command_group(self):
+        with patch.object(
+            command_parser,
+            "rot_say"
+        ) as rot_say, self.assertRaises(SystemExit) as raised:
+            command_parser.parse_args(["git", "--help-verbose"])
+
+        self.assertEqual(raised.exception.code, 0)
+        message = rot_say.call_args.args[0]
+        self.assertIn("COMMAND: rotbot git status", message)
+        self.assertNotIn("COMMAND: rotbot context", message)
+        self.assertEqual(message.count("-h, --help"), 1)
+        self.assertEqual(message.count("-hv, --help-verbose"), 1)
+        self.assertEqual(message.count("=" * 60), 6)
+
 
 class MainDispatchTests(unittest.TestCase):
     def test_main_returns_handler_exit_code(self):

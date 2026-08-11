@@ -38,6 +38,8 @@ class ContextMatchingTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name)
         self.context_root = self.root / "contexts"
         self.context_root.mkdir()
+        self.project_context_root = self.context_root / "projects"
+        self.project_context_root.mkdir()
         self.context_patch = patch.object(contexts, "CONTEXT_ROOT", self.context_root)
         self.context_patch.start()
 
@@ -46,7 +48,7 @@ class ContextMatchingTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def create_context(self, name, match=None):
-        directory = self.context_root / name
+        directory = self.project_context_root / name
         directory.mkdir()
         (directory / "identity.md").write_text(f"{name} identity", encoding="utf-8")
         (directory / "state.md").write_text(f"{name} state", encoding="utf-8")

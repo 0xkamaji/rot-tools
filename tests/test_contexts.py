@@ -15,6 +15,10 @@ class ContextLoaderTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name) / "context"
         self.root.mkdir()
+        self.projects = self.root / "projects"
+        self.projects.mkdir()
+        self.people = self.root / "people"
+        self.people.mkdir()
         self.root_patch = patch.object(contexts, "CONTEXT_ROOT", self.root)
         self.root_patch.start()
 
@@ -29,7 +33,7 @@ class ContextLoaderTests(unittest.TestCase):
         state="state text",
         vision=MISSING
     ):
-        directory = self.root / name
+        directory = self.projects / name
         directory.mkdir()
         (directory / "identity.md").write_text(identity, encoding="utf-8")
         (directory / "state.md").write_text(state, encoding="utf-8")
@@ -40,17 +44,31 @@ class ContextLoaderTests(unittest.TestCase):
     def test_list_contexts_discovers_valid_directories_in_sorted_order(self):
         self.create_context("zeta", vision="future")
         self.create_context("alpha")
-        (self.root / "ordinary.txt").write_text("ignored", encoding="utf-8")
-        (self.root / "missing-state").mkdir()
+        (self.projects / "ordinary.txt").write_text("ignored", encoding="utf-8")
+        (self.projects / "missing-state").mkdir()
         self.create_context(".hidden")
 
         self.assertEqual(contexts.list_contexts(), ("alpha", "zeta"))
+
+    def test_empty_people_and_unknown_categories_are_not_contexts(self):
+        self.assertEqual(contexts.list_contexts(), ())
+        category = self.root / "archive"
+        category.mkdir()
+        directory = category / "outsider"
+        directory.mkdir()
+        (directory / "identity.md").write_text("identity", encoding="utf-8")
+        (directory / "state.md").write_text("state", encoding="utf-8")
+
+        self.assertEqual(contexts.list_contexts(), ())
+        with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
+            contexts.load_context("outsider")
 
     def test_load_context_reads_identity_and_state(self):
         self.create_context("example", "identity\n", "state\n")
 
         loaded = contexts.load_context("example")
 
+        self.assertEqual(loaded.name, "example")
         self.assertEqual(
             loaded,
             contexts.Context("example", "identity\n", "state\n")
@@ -98,7 +116,10 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertEqual(contexts.load_vision("example"), "vision only")
 
     def test_load_context_rejects_invalid_and_unknown_names(self):
-        for name in ("../outside", "/tmp/outside", "nested/context", "."):
+        for name in (
+            "../outside", "/tmp/outside", "nested/context",
+            "projects/example", "."
+        ):
             with self.subTest(name=name), self.assertRaises(contexts.ContextError):
                 contexts.load_context(name)
 
@@ -118,7 +139,7 @@ class ContextLoaderTests(unittest.TestCase):
         outside.mkdir()
         (outside / "identity.md").write_text("identity", encoding="utf-8")
         (outside / "state.md").write_text("state", encoding="utf-8")
-        (self.root / "linked").symlink_to(outside, target_is_directory=True)
+        (self.projects / "linked").symlink_to(outside, target_is_directory=True)
 
         self.assertEqual(contexts.list_contexts(), ())
         with self.assertRaises(contexts.ContextError):

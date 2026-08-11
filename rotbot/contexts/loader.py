@@ -6,6 +6,7 @@ from rotbot.ui.terminal import rot_continue, rot_say
 
 
 CONTEXT_ROOT = Path(__file__).resolve().parents[2] / "context"
+PROJECT_CONTEXT_CATEGORY = "projects"
 CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -25,20 +26,28 @@ def validate_context_name(name):
     return name
 
 
-def context_paths(name):
+def project_context_directory(name):
     validate_context_name(name)
+    return CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY / name
 
+
+def context_paths(name):
     root = CONTEXT_ROOT.resolve()
-    directory = CONTEXT_ROOT / name
+    category = CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY
+    directory = project_context_directory(name)
     try:
+        resolved_category = category.resolve(strict=True)
         resolved_directory = directory.resolve(strict=True)
     except OSError:
         raise ContextError(f"Unknown or invalid context: {name}") from None
 
     if (
-        directory.is_symlink()
+        category.is_symlink()
+        or not resolved_category.is_dir()
+        or resolved_category.parent != root
+        or directory.is_symlink()
         or not resolved_directory.is_dir()
-        or resolved_directory.parent != root
+        or resolved_directory.parent != resolved_category
     ):
         raise ContextError(f"Unknown or invalid context: {name}")
 
@@ -61,7 +70,7 @@ def _context_paths(name):
 
 def list_contexts():
     try:
-        entries = tuple(CONTEXT_ROOT.iterdir())
+        entries = tuple((CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY).iterdir())
     except OSError as error:
         raise ContextError(f"Could not list contexts: {error}") from None
 

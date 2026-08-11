@@ -1,5 +1,4 @@
 # RotBot
-
 ```text
    .-.
   [x_o]
@@ -8,40 +7,20 @@
   ROTBOT
 ```
 
-RotBot is a small, local Python command-line helper for Git repository work,
-deterministic project contexts, AI-assisted inspection, and personal SignalRot
-workflows. It favors simple, inspectable implementations and keeps portable
-context documents separate from machine-local path bindings.
+RotBot is a personal command-line wrapper for Git, AI coding agents, project context, and SignalRot management.
 
-Both command names are supported:
+It provides short commands for common workflows while keeping important actions visible and confirmable.
 
-```bash
-rot --help
-rotbot --help
-```
+## Setup
 
-## Highlights
+### Requirements
 
-- Concise, read-only Git repository status summaries
-- Pull and push workflows available as short commands and under `rot git`
-- Optional OpenCode or Codex reviews before committing changes
-- Deterministic context discovery through portable `match.md` files
-- Separate identity, current-state, and optional vision documents
-- Local source and production bindings stored outside the repository
-- SignalRot-specific status, review, comparison, and publishing workflows
-- No framework or large runtime dependency tree
+* Python 3.11+
+* Git
+* Codex or OpenCode for AI commands
+* `rsync` for SignalRot publishing
 
-## Requirements
-
-- Python 3.11 or newer
-- Git
-- A POSIX-style shell for `setup.sh`
-- OpenCode or Codex only when using AI-assisted commands
-- `rsync` and appropriate local permissions for SignalRot deployment commands
-
-## Installation
-
-Clone the repository and run the local setup script:
+### Install
 
 ```bash
 git clone git@github.com:0xkamaji/rotbot.git
@@ -49,205 +28,319 @@ cd rotbot
 ./setup.sh
 ```
 
-The setup script installs `rot` and `rotbot` into `~/.local/bin` and can add
-that directory to Bash, Zsh, or Fish configuration.
+Confirm the installation:
 
-RotBot can also run directly from the repository:
+```bash
+rot --help
+```
+
+RotBot installs two equivalent commands:
+
+```bash
+rot
+rotbot
+```
+
+It can also run directly from the repository:
 
 ```bash
 python -m rotbot --help
 ```
 
-## Commands
+## Git commands
 
-### Git
+| Command          | Alias      | Purpose                                              |
+| ---------------- | ---------- | ---------------------------------------------------- |
+| `rot git status` | —          | Show branch, changes, remote sync, and latest commit |
+| `rot git pull`   | `rot pull` | Pull changes from the configured upstream            |
+| `rot git push`   | `rot push` | Commit and push local changes                        |
 
-The original short commands remain available:
+### Git status
 
 ```bash
-rot pull
-rot push
-rot push --review
+rot git status
 ```
 
-The same workflows are grouped under `rot git`:
+| Flag      | Purpose                                                         |
+| --------- | --------------------------------------------------------------- |
+| `--fetch` | Fetch before checking whether the repository is ahead or behind |
+
+Without `--fetch`, RotBot compares against the locally cached remote branch.
 
 ```bash
-rot git pull
-rot git push
-rot git push --review
-rot git status
 rot git status --fetch
 ```
 
-`rot git status` is local and read-only. It summarizes the branch, upstream,
-working tree, cached ahead/behind state, and latest commit without contacting a
-remote. Use `--fetch` to refresh the configured upstream remote before comparing.
-
-Push options include:
-
-```text
---review                 Ask an agent to review changes before committing
--m, --message MESSAGE    Supply the commit message directly
--a, --agent AGENT        Select opencode or codex
--n, --note NOTE          Add a request or caveat to the review
-```
-
-### Ask And Inspect
+### Git push
 
 ```bash
-rot ask "Explain this error"
-rot ask "Review this approach" --agent codex
+rot push
+rot push -m "Add Git status command"
+```
 
+| Flag              | Purpose                                          |
+| ----------------- | ------------------------------------------------ |
+| `-m`, `--message` | Supply the commit message                        |
+| `--review`        | Ask an AI agent to review changes before pushing |
+| `--agent AGENT`   | Choose `codex` or `opencode`                     |
+| `--note TEXT`     | Add instructions for the review                  |
+
+Example:
+
+```bash
+rot push --review --agent codex \
+  --note "Focus on CLI compatibility"
+```
+
+The same options work with:
+
+```bash
+rot git push
+```
+
+## Understanding code with `wtf`
+
+`rot wtf` collects relevant project evidence and asks an AI agent to explain it.
+
+```bash
 rot wtf
 rot wtf path/to/file.py
-rot wtf --deep path/to/project
-rot wtf --note "focus on deployment risks"
+rot wtf path/to/directory
 ```
 
-`rot wtf` assembles bounded local evidence and asks the configured agent to
-explain a file or directory. It does not replace normal code review or testing.
+| Flag            | Purpose                         |
+| --------------- | ------------------------------- |
+| `--deep`        | Inspect a directory more deeply |
+| `--note TEXT`   | Tell the agent what to focus on |
+| `--agent AGENT` | Choose `codex` or `opencode`    |
 
-### Contexts
+Examples:
 
 ```bash
-rot context list
-rot context show signalrot
-rot context show rotbot --vision
-rot context bind .
-rot context bind signalrot ~/github/signalrot --as source
-rot context add another-project /path/to/project
+rot wtf rotbot/contexts/matching.py
 ```
 
-A portable context directory has this shape:
+```bash
+rot wtf --deep rotbot/contexts
+```
+
+```bash
+rot wtf --note "Explain how this command reaches its handler"
+```
+
+## Asking an agent
+
+Use `rot ask` to send a direct request to a supported coding agent:
+
+```bash
+rot ask "Explain how context matching works"
+```
+
+| Flag            | Purpose                      |
+| --------------- | ---------------------------- |
+| `--agent AGENT` | Choose `codex` or `opencode` |
+
+Example:
+
+```bash
+rot ask "Review the current CLI structure" --agent codex
+```
+
+Set a default agent with:
+
+```bash
+export ROTBOT_AGENT=opencode
+```
+
+If no agent is selected, RotBot uses the first supported agent it finds.
+
+## Project context
+
+Contexts give RotBot durable knowledge about a project.
+
+A context generally contains:
 
 ```text
-context/NAME/
-├── identity.md    # stable, human-maintained identity
-├── state.md       # current observed state
-├── vision.md      # optional, speculative and nonbinding
-└── match.md       # optional deterministic recognition facts
+context/
+├── projects/
+│   └── NAME/
+│       ├── identity.md
+│       ├── state.md
+│       ├── vision.md
+│       └── match.md
+└── people/
 ```
 
-`identity.md` and `state.md` are the standard AI context. Vision remains
-separate unless explicitly requested, while `match.md` and machine-local paths
-never enter normal context prompts.
+Project contexts are still addressed by name, such as `rotbot` or `signalrot`;
+the `projects/` filesystem category is not part of the public context name.
+The `people/` category is reserved for future use.
 
-`rot context bind` recognizes a source checkout or production directory using
-verified Git remotes, required paths, and supported local Caddy configuration.
-Bindings are confirmed before they are saved.
+| File          | Purpose                                       |
+| ------------- | --------------------------------------------- |
+| `identity.md` | What the project is and its stable principles |
+| `state.md`    | What currently exists                         |
+| `vision.md`   | Where the project is going                    |
+| `match.md`    | Facts used to recognize the project           |
 
-`rot context add` drafts identity and state through the selected coding agent,
-generates `match.md` deterministically, previews the complete proposal, and
-registers the source path only after confirmation. It never creates `vision.md`.
+### Context commands
 
-## SignalRot
+| Command                      | Purpose                            |
+| ---------------------------- | ---------------------------------- |
+| `rot context list`           | List available contexts            |
+| `rot context show NAME`      | Display a context                  |
+| `rot context bind PATH`      | Detect and bind a local project    |
+| `rot context bind NAME PATH` | Bind a specific context            |
+| `rot context add NAME PATH`  | Draft a new context from a project |
 
-SignalRot remains a separate, opinionated integration:
+### Show a context
+
+```bash
+rot context show rotbot
+rot context show signalrot
+```
+
+| Flag       | Purpose                                |
+| ---------- | -------------------------------------- |
+| `--vision` | Include the project’s future direction |
+
+```bash
+rot context show rotbot --vision
+```
+
+### Bind a project
+
+Bind the current directory by matching it against known contexts:
+
+```bash
+rot context bind .
+```
+
+Bind a specific context:
+
+```bash
+rot context bind signalrot ~/github/signalrot
+```
+
+| Option            | Purpose                                  |
+| ----------------- | ---------------------------------------- |
+| `--as source`     | Bind the path as the editable source     |
+| `--as production` | Bind the path as the production location |
+
+Example:
+
+```bash
+rot context bind signalrot ~/github/signalrot --as source
+```
+
+Local paths are saved in RotBot’s local configuration rather than portable context files.
+
+## SignalRot wrapper
+
+The `rot sr` namespace is a specialized wrapper for maintaining SignalRot.
+
+It combines RotBot’s generic Git, context, AI, and confirmation systems with SignalRot-specific operations.
+
+| Command          | Purpose                                           |
+| ---------------- | ------------------------------------------------- |
+| `rot sr status`  | Check whether SignalRot is responding             |
+| `rot sr context` | Show the SignalRot context dashboard              |
+| `rot sr diff`    | Preview differences between source and production |
+| `rot sr pull`    | Pull SignalRot changes                            |
+| `rot sr push`    | Push SignalRot changes                            |
+| `rot sr publish` | Push changes and publish the site                 |
+
+### SignalRot status
 
 ```bash
 rot sr status
+```
+
+Reports the site’s HTTP status and response time.
+
+### SignalRot context
+
+```bash
 rot sr context
+```
+
+| Flag        | Purpose                                          |
+| ----------- | ------------------------------------------------ |
+| `--refresh` | Inspect SignalRot and refresh its recorded state |
+
+```bash
 rot sr context --refresh
+```
+
+This differs from:
+
+```bash
+rot context show signalrot
+```
+
+`rot context show signalrot` displays the portable context files.
+`rot sr context` provides a SignalRot-specific dashboard and refresh workflow.
+
+### Compare source and production
+
+```bash
 rot sr diff
-rot sr pull
-rot sr push
+```
+
+This performs a dry-run comparison and explains what publishing would add, replace, or remove.
+
+### Publish SignalRot
+
+```bash
 rot sr publish
 ```
 
-The distinction is intentional:
+RotBot previews and confirms the Git and deployment operations before changing production.
 
-```text
-rot context show signalrot   Generic portable context display
-rot sr context               SignalRot dashboard and state refresh workflow
+| Flag            | Purpose                                           |
+| --------------- | ------------------------------------------------- |
+| `--review`      | Review changes with an AI agent before publishing |
+| `--agent AGENT` | Choose `codex` or `opencode`                      |
+| `--note TEXT`   | Add review instructions                           |
+
+Example:
+
+```bash
+rot sr publish --review --agent codex \
+  --note "Check for broken links and deployment risks"
 ```
 
-SignalRot source and production paths can be supplied through context bindings
-or environment overrides:
+SignalRot locations can be configured through context bindings or environment variables:
 
 ```bash
 export SIGNALROT_REPO=/path/to/signalrot
 export SIGNALROT_WEB_ROOT=/path/to/live/site
 ```
 
-Environment values take precedence over local bindings.
+Environment variables take precedence over saved bindings.
 
-## Agent Selection
+## Help
 
-RotBot supports OpenCode and Codex. Select an agent per command:
-
-```bash
-rot ask "Summarize this repository" --agent opencode
-rot git push --review --agent codex
-```
-
-Or set a default:
+Use `--help` at any level to see a summary of the commands and options supported
+by the installed version:
 
 ```bash
-export ROTBOT_AGENT=opencode
+rot --help
+rot git --help
+rot git push --help
+rot wtf --help
+rot context --help
+rot sr --help
+rot sr publish --help
 ```
 
-Without an explicit selection, RotBot uses the first supported agent available
-on the local system.
-
-## Local Configuration
-
-Confirmed path bindings are stored outside the repository:
-
-```text
-${XDG_CONFIG_HOME:-~/.config}/rotbot/config.toml
-```
-
-Example:
-
-```toml
-[contexts.signalrot]
-source_path = "/home/user/github/signalrot"
-production_path = "/var/www/signalrot"
-
-[contexts.rotbot]
-source_path = "/home/user/github/rotbot"
-```
-
-RotBot preserves unrelated TOML configuration and updates binding files through
-same-directory atomic replacement.
-
-## Project Layout
-
-```text
-rotbot/
-├── agents/                    Agent selection and execution
-├── cli/                       Argument parsing and dispatch
-├── commands/                  General Git and inspection commands
-├── contexts/                  Loading, matching, binding, and configuration
-├── integrations/signalrot/    SignalRot-specific workflows
-└── ui/                        Terminal presentation
-
-context/                       Portable Markdown context data
-tests/                         Standard-library unittest suite
-```
-
-## Development
-
-Run the complete test suite:
+Use verbose help for a man-page-style view of the current command and every
+subcommand below it, including positional fields, flags, choices, and examples:
 
 ```bash
-python -m unittest discover -s tests -v
+rot -hv
+rot --help-verbose
+rot git -hv
 ```
 
-Compile-check the package and tests:
-
-```bash
-python -m compileall -q rotbot tests rotbot.py
-```
-
-Tests use temporary repositories, local bare remotes, and temporary XDG
-configuration homes. They do not require the developer's real RotBot
-configuration or SignalRot deployment.
-
-## Safety
-
-RotBot keeps ordinary status, matching, loading, and display operations
-read-only. Commands that can change repositories, context files, local bindings,
-or deployments show their intent and require confirmation where applicable.
-Review command output before approving any mutation.
+`rot -hv` prints the complete command tree. A scoped form such as
+`rot git -hv` prints only that command group and its subcommands.

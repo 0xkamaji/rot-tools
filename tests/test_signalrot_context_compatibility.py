@@ -50,6 +50,10 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         block = signalrot_context.signalrot_context_block()
         identity_path, state_path = loader.context_paths("signalrot")
 
+        self.assertEqual(
+            identity_path.parent,
+            loader.CONTEXT_ROOT / "projects" / "signalrot"
+        )
         self.assertIn(
             identity_path.read_text(encoding="utf-8"),
             block
@@ -62,8 +66,8 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
     def test_existing_prompt_block_does_not_include_sibling_vision(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            context_directory = root / "signalrot"
-            context_directory.mkdir()
+            context_directory = root / "projects" / "signalrot"
+            context_directory.mkdir(parents=True)
             identity_path = context_directory / "identity.md"
             state_path = context_directory / "state.md"
             vision_path = context_directory / "vision.md"
@@ -113,8 +117,8 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            context_directory = root / "signalrot"
-            context_directory.mkdir()
+            context_directory = root / "projects" / "signalrot"
+            context_directory.mkdir(parents=True)
             identity_path = context_directory / "identity.md"
             state_path = context_directory / "state.md"
             vision_path = context_directory / "vision.md"
