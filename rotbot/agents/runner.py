@@ -184,7 +184,7 @@ def ask_agent(args):
         else args.question
     )
     rot_say("Let Rot think about that ...")
-    returncode, output, _elapsed = stream_agent(
+    returncode, output, elapsed = stream_agent(
         question,
         "Rot is still thinking...",
         display_question=question,
@@ -193,5 +193,7 @@ def ask_agent(args):
 
     if returncode == 0 and not output.strip():
         rot_say("The AI agent returned no response.")
+    if returncode == 0:
+        rot_say(f"Response received in {elapsed:.1f}s.")
 
     return returncode
