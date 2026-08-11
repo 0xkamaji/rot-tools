@@ -29,6 +29,16 @@ class ParserDispatchTests(unittest.TestCase):
         ),
         (["git", "pull"], "git_pull", {"git_command": "pull"}),
         (
+            ["git", "status"],
+            "git_status",
+            {"git_command": "status", "fetch": False}
+        ),
+        (
+            ["git", "status", "--fetch"],
+            "git_status",
+            {"git_command": "status", "fetch": True}
+        ),
+        (
             [
                 "git", "push", "--review", "--message", "ship it",
                 "--agent", "opencode", "--note", "check tests"
