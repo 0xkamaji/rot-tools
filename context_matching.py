@@ -234,7 +234,7 @@ def _required_path_evidence(root, required_paths):
         found = safe and (
             candidate.is_dir()
             if relative.endswith("/")
-            else candidate.exists()
+            else candidate.is_file()
         )
         all_found = all_found and found
         evidence.append(Evidence(found, f"Found {relative}" if found else f"Missing {relative}"))
@@ -305,6 +305,49 @@ def _source_candidate(name, definition, candidate, git_details):
     evidence.extend(path_evidence)
     strong = git_root == candidate and bool(matching) and paths_ok
     return MatchCandidate(name, "source", candidate, strong, tuple(evidence))
+
+
+def inspect_source_repository(path):
+    candidate = Path(path).expanduser()
+    if not candidate.exists() or not candidate.is_dir():
+        raise MatchError(f"Source path is not a directory:\n{candidate}")
+    candidate = candidate.resolve()
+    git_root, remotes, git_error = _git_details(candidate)
+    if git_error:
+        raise MatchError(git_error)
+    if git_root != candidate:
+        raise MatchError(f"Source path is not the Git repository root:\n{candidate}")
+    normalized = tuple(sorted({remote[2] for remote in remotes}))
+    if not normalized:
+        raise MatchError(
+            "The Git repository has no supported configured remote. "
+            "A reliable source match cannot be generated."
+        )
+    return candidate, normalized
+
+
+def build_source_match_document(git_remotes, required_paths):
+    document = (
+        "# Match\n\n"
+        "## Source\n\n"
+        "Git remotes:\n\n"
+        + "\n".join(f"- {remote}" for remote in git_remotes)
+        + "\n\nRequired paths:\n\n"
+        + "\n".join(f"- {path}" for path in required_paths)
+        + "\n"
+    )
+    parse_match_document(document)
+    return document
+
+
+def match_source_definition(path, name, definition):
+    candidate = Path(path).expanduser()
+    if not candidate.exists() or not candidate.is_dir():
+        raise MatchError(f"Source path is not a directory:\n{candidate}")
+    candidate = candidate.resolve()
+    if definition.source is None or definition.production is not None:
+        raise MatchError("Generated match definition must contain only Source.")
+    return _source_candidate(name, definition.source, candidate, _git_details(candidate))
 
 
 def _caddy_sites(paths):

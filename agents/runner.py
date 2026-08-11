@@ -55,7 +55,8 @@ def stream_agent(
     activity_message,
     working_directory=None,
     display_question=None,
-    agent_name=None
+    agent_name=None,
+    timeout=None
 ):
     automatic_selection = (
         agent_name is None
@@ -107,11 +108,19 @@ def stream_agent(
 
     started_at = perf_counter()
     output_started = False
+    timed_out = False
 
     while True:
         try:
             line = output_queue.get(timeout=2)
         except Empty:
+            if (
+                timeout is not None
+                and not timed_out
+                and perf_counter() - started_at >= timeout
+            ):
+                process.kill()
+                timed_out = True
             if not output_started:
                 elapsed = round(perf_counter() - started_at)
                 rot_status(f"{activity_message} {elapsed}s elapsed")
@@ -146,10 +155,14 @@ def stream_agent(
             activity_message,
             working_directory,
             display_question,
-            agent_name="codex"
+            agent_name="codex",
+            timeout=timeout
         )
 
-    if returncode != 0:
+    if timed_out:
+        returncode = 124
+        rot_say(f"{agent.NAME} timed out after {timeout} seconds.")
+    elif returncode != 0:
         error_detail = "\n".join(
             line.rstrip()
             for line in error_lines[-8:]

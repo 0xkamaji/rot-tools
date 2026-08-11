@@ -2,6 +2,7 @@ import argparse
 
 from agents.runner import ask_agent
 from context_binding import context_bind
+from context_creation import context_add
 from contexts import context_list, context_show
 from git_commands import git_pull, git_push
 from gui import rot_content_width, rot_say
@@ -119,7 +120,7 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="List or show available contexts"
+        help="List, show, add, or bind contexts"
     )
     context_commands = context_parser.add_subparsers(
         dest="context_command",
@@ -167,6 +168,15 @@ def create_parser():
         help="Match only a source or production path"
     )
     context_bind_parser.set_defaults(func=context_bind)
+
+    context_add_parser = context_commands.add_parser(
+        "add",
+        help="Create a context from a local project"
+    )
+    context_add_parser.add_argument("name", help="New context name")
+    context_add_parser.add_argument("path", help="Local project directory")
+    _add_agent_argument(context_add_parser)
+    context_add_parser.set_defaults(func=context_add)
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(

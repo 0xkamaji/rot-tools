@@ -19,9 +19,14 @@ class Context(NamedTuple):
     state: str
 
 
-def _context_paths(name):
+def validate_context_name(name):
     if not isinstance(name, str) or not CONTEXT_NAME_PATTERN.fullmatch(name):
         raise ContextError(f"Invalid context name: {name}")
+    return name
+
+
+def _context_paths(name):
+    validate_context_name(name)
 
     root = CONTEXT_ROOT.resolve()
     directory = CONTEXT_ROOT / name

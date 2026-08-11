@@ -66,6 +66,16 @@ class ParserDispatchTests(unittest.TestCase):
             "context_bind",
             {"binding_type": "production"}
         ),
+        (
+            ["context", "add", "example", "/srv/example", "--agent", "codex"],
+            "context_add",
+            {
+                "context_command": "add",
+                "name": "example",
+                "path": "/srv/example",
+                "agent": "codex"
+            }
+        ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
             ["sr", "context", "--refresh", "--agent", "codex"],
@@ -123,7 +133,10 @@ class ParserDispatchTests(unittest.TestCase):
                 self.assert_parse_error(argv)
 
     def test_missing_required_arguments_are_rejected(self):
-        for argv in ([], ["ask"], ["context"], ["context", "show"], ["sr"]):
+        for argv in (
+            [], ["ask"], ["context"], ["context", "show"],
+            ["context", "add"], ["context", "add", "example"], ["sr"]
+        ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
 
