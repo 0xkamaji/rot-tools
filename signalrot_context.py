@@ -4,7 +4,7 @@ import re
 from textwrap import shorten
 
 from agents.runner import stream_agent
-from gui import rot_continue, rot_say
+from gui import rot_continue, rot_say, rot_table
 
 
 CONTEXT_ROOT = Path(__file__).resolve().parent / "context" / "signalrot"
@@ -140,8 +140,6 @@ def _summary_text():
     refreshed = re.search(r"^Last refreshed:\s*(.+)$", refresh, re.MULTILINE)
     sections = _list_items(refresh, "Current sections") or _identity_sections(identity)
     published = _list_items(refresh, "Published content")
-    section_updates = _section_updates(refresh)
-
     identity_summary = " ".join(_identity_summary(identity))
     lines = [
         "Identity: signalrot_identity.md "
@@ -160,23 +158,33 @@ def _summary_text():
         "",
         "Updates:"
     ]
-    if section_updates:
-        for section_name, fields in section_updates:
-            latest = shorten(
+    return "\n".join(lines)
+
+
+def _updates_rows():
+    refresh = _read_context_file(REFRESH_PATH)
+    rows = []
+    for section_name, fields in _section_updates(refresh):
+        rows.append((
+            section_name,
+            fields.get("Last changed", "unknown"),
+            shorten(
                 fields.get("Latest addition or change", "unknown"),
                 width=64,
                 placeholder="..."
             )
-            updated = fields.get("Last changed", "unknown")
-            lines.append(f"  {section_name} [{updated}]: {latest}")
-    else:
-        lines.append("  run rot sr context --refresh")
-    return "\n".join(lines)
+        ))
+    return rows
 
 
 def show_signalrot_context():
     rot_say("SIGNALROT CONTEXT")
     rot_continue(_summary_text())
+    rows = _updates_rows()
+    if rows:
+        rot_table(("Section", "Last update", "Update information"), rows)
+    else:
+        rot_continue("run rot sr context --refresh")
     return 0
 
 

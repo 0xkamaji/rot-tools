@@ -14,7 +14,7 @@ ROTBOT_ARTIFACT = "[x_o]"
 ROTBOT_DIVIDER = "----------[ rot ]----------"
 ROTBOT_OUTPUT_MARGIN = 4
 ROTBOT_GAP = 3
-ROTBOT_MIN_CONTENT_WIDTH = 20
+ROTBOT_MIN_CONTENT_WIDTH = 35
 _rotbot_shown = False
 
 
@@ -102,6 +102,67 @@ def rot_continue(message):
 
     for line in _wrapped_lines(message, terminal_width - prefix_width):
         print(f"{'':<{bot_width}}{' ' * ROTBOT_GAP}{line}")
+
+
+def rot_table(headers, rows):
+    terminal_width, bot_width, prefix_width = _bot_layout()
+    compact = terminal_width < prefix_width + ROTBOT_MIN_CONTENT_WIDTH
+    width = terminal_width if compact else terminal_width - prefix_width
+    prefix = "" if compact else f"{'':<{bot_width}}{' ' * ROTBOT_GAP}"
+    columns = len(headers)
+    overhead = (columns * 3) + 1
+    cell_space = width - overhead
+
+    if columns == 0:
+        return
+
+    values = [tuple(str(value) for value in row) for row in rows]
+    if cell_space < columns:
+        for row in values:
+            rot_continue(" - ".join(row))
+        return
+
+    desired = [
+        max([len(str(header))] + [len(row[index]) for row in values])
+        for index, header in enumerate(headers)
+    ]
+    column_widths = [1] * columns
+    while sum(column_widths) < cell_space:
+        candidates = [
+            index
+            for index in range(columns)
+            if column_widths[index] < desired[index]
+        ]
+        if not candidates:
+            column_widths[-1] += cell_space - sum(column_widths)
+            break
+        index = min(candidates, key=lambda item: column_widths[item])
+        column_widths[index] += 1
+
+    def print_row(row):
+        wrapped_cells = [
+            _wrapped_lines(value, column_widths[index])
+            for index, value in enumerate(row)
+        ]
+        height = max(len(cell) for cell in wrapped_cells)
+        for line_number in range(height):
+            cells = [
+                cell[line_number] if line_number < len(cell) else ""
+                for cell in wrapped_cells
+            ]
+            rendered = "| " + " | ".join(
+                cell.ljust(column_widths[index])
+                for index, cell in enumerate(cells)
+            ) + " |"
+            print(f"{prefix}{rendered}")
+
+    separator = "|-" + "-|-".join("-" * size for size in column_widths) + "-|"
+    print(f"{prefix}{separator}")
+    print_row(tuple(str(header) for header in headers))
+    print(f"{prefix}{separator}")
+    for row in values:
+        print_row(row)
+        print(f"{prefix}{separator}")
 
 
 def rot_break():
