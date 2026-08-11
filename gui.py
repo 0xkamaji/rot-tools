@@ -52,6 +52,13 @@ def _bot_layout():
     return terminal_width, bot_width, prefix_width
 
 
+def rot_content_width():
+    terminal_width, _bot_width, prefix_width = _bot_layout()
+    if terminal_width < prefix_width + ROTBOT_MIN_CONTENT_WIDTH:
+        return terminal_width
+    return terminal_width - prefix_width
+
+
 def _divider(width):
     if width >= len(ROTBOT_DIVIDER):
         return ROTBOT_DIVIDER

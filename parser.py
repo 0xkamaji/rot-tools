@@ -2,8 +2,24 @@ import argparse
 
 from agents.runner import ask_agent
 from git_commands import git_pull, git_push
+from gui import rot_content_width, rot_say
 from signalrot import sr_context, sr_diff, sr_publish, sr_pull, sr_push, sr_status
 from wtf_report import directory_report
+
+
+class RotArgumentParser(argparse.ArgumentParser):
+    def _get_formatter(self):
+        return self.formatter_class(
+            prog=self.prog,
+            width=rot_content_width()
+        )
+
+    def print_help(self, file=None):
+        rot_say(self.format_help().rstrip())
+
+    def error(self, message):
+        rot_say(f"{self.format_usage().strip()}\n\nError: {message}")
+        self.exit(2)
 
 
 def _add_note_argument(command_parser):
@@ -24,7 +40,7 @@ def _add_agent_argument(command_parser):
 
 
 def create_parser():
-    parser = argparse.ArgumentParser(
+    parser = RotArgumentParser(
         prog="rotbot",
         description="Launch Rotbot using either the 'rotbot' or 'rot' command.",
         epilog=(
