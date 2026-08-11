@@ -8,8 +8,9 @@ Git remotes:
 
 Required paths:
 
-- parser.py
-- contexts.py
-- signalrot.py
+- rotbot/__main__.py
+- rotbot/cli/
+- rotbot/contexts/
+- rotbot/integrations/signalrot/
 - context/
 - tests/

@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import context_creation
-import context_matching
-import contexts
-from rotbot_config import ConfigError, config_path, get_context_binding
+from rotbot.contexts import creation as context_creation
+from rotbot.contexts import loader as contexts
+from rotbot.contexts import matching as context_matching
+from rotbot.contexts.config import ConfigError, config_path, get_context_binding
 
 
 class ContextCreationTests(unittest.TestCase):

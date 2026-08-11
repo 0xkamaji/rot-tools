@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
 
-############################################################
-# Author: Kamaji aka Deadhand aka gh0st aka scraps_dad
-# Creation Date: 08.10.26
-# Description:
-# This is my little rotten AI helper bot - rotbot. 
-# He manages signalrot and rotten signals in his domain
-############################################################
+"""Compatibility launcher for existing setup.sh symlinks."""
 
-from parser import parse_args
+from rotbot.__main__ import main
 
-
-def main():
-    args = parse_args()
-    result = args.func(args)
-
-    return result if isinstance(result, int) else 0
-    
 
 if __name__ == "__main__":
     raise SystemExit(main())

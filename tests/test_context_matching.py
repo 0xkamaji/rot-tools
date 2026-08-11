@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import context_matching
-import contexts
+from rotbot.contexts import loader as contexts
+from rotbot.contexts import matching as context_matching
 
 
 SOURCE_ONLY = """# Match
@@ -286,7 +286,7 @@ class ContextMatchingTests(unittest.TestCase):
     def test_matching_never_invokes_an_agent(self):
         self.create_context("project", SOURCE_ONLY)
         repository = self.create_repository("github.com/example/project")
-        with patch("agents.runner.stream_agent") as stream_agent:
+        with patch("rotbot.agents.runner.stream_agent") as stream_agent:
             context_matching.match_contexts(repository, caddy_paths=())
         stream_agent.assert_not_called()
 

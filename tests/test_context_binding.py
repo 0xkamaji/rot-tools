@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import context_binding
-from context_matching import Evidence, MatchCandidate
-import rotbot_config
+from rotbot.contexts import binding as context_binding
+from rotbot.contexts import config as rotbot_config
+from rotbot.contexts.matching import Evidence, MatchCandidate
 
 
 class ContextBindingTests(unittest.TestCase):

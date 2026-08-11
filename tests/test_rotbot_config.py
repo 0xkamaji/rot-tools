@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import rotbot_config
+from rotbot.contexts import config as rotbot_config
 
 
 class RotbotConfigTests(unittest.TestCase):

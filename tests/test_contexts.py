@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import contexts
+from rotbot.contexts import loader as contexts
 
 
 MISSING = object()
@@ -245,7 +245,7 @@ class ContextLoaderTests(unittest.TestCase):
             for path in directory.iterdir()
         }
 
-        with patch("agents.runner.stream_agent") as stream_agent, patch.object(
+        with patch("rotbot.agents.runner.stream_agent") as stream_agent, patch.object(
             contexts,
             "rot_say"
         ), patch.object(contexts, "rot_continue"):

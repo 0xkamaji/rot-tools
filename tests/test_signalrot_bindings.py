@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import rotbot_config
-import signalrot
+from rotbot.contexts import config as rotbot_config
+from rotbot.integrations.signalrot import commands as signalrot
+from rotbot.integrations.signalrot import paths as signalrot_paths
 
 
 class SignalRotBindingTests(unittest.TestCase):
@@ -62,7 +63,7 @@ class SignalRotBindingTests(unittest.TestCase):
             self.assertEqual(signalrot._web_root(), configured_production.resolve())
 
     def test_missing_bindings_return_actionable_messages(self):
-        with patch.object(signalrot, "rot_say") as rot_say:
+        with patch.object(signalrot_paths, "rot_say") as rot_say:
             self.assertIsNone(signalrot._repo_path())
             source_message = rot_say.call_args.args[0]
             rot_say.reset_mock()
@@ -74,7 +75,7 @@ class SignalRotBindingTests(unittest.TestCase):
         self.assertIn("--as production", production_message)
 
     def test_source_command_stops_when_binding_is_missing(self):
-        with patch.object(signalrot, "rot_say"), patch.object(
+        with patch.object(signalrot_paths, "rot_say"), patch.object(
             signalrot,
             "_validate_repo"
         ) as validate:

@@ -5,8 +5,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import signalrot
-import signalrot_context
+from rotbot.contexts import loader
+from rotbot.integrations.signalrot import commands as signalrot
+from rotbot.integrations.signalrot import context as signalrot_context
 
 
 class SignalRotContextCompatibilityTests(unittest.TestCase):
@@ -47,39 +48,55 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
 
     def test_existing_prompt_block_still_reads_both_signalrot_files(self):
         block = signalrot_context.signalrot_context_block()
+        identity_path, state_path = loader.context_paths("signalrot")
 
         self.assertIn(
-            signalrot_context.IDENTITY_PATH.read_text(encoding="utf-8"),
+            identity_path.read_text(encoding="utf-8"),
             block
         )
         self.assertIn(
-            signalrot_context.REFRESH_PATH.read_text(encoding="utf-8"),
+            state_path.read_text(encoding="utf-8"),
             block
         )
 
     def test_existing_prompt_block_does_not_include_sibling_vision(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            identity_path = root / "identity.md"
-            state_path = root / "state.md"
-            vision_path = root / "vision.md"
-            match_path = root / "match.md"
+            context_directory = root / "signalrot"
+            context_directory.mkdir()
+            identity_path = context_directory / "identity.md"
+            state_path = context_directory / "state.md"
+            vision_path = context_directory / "vision.md"
+            match_path = context_directory / "match.md"
             identity_path.write_text("identity only", encoding="utf-8")
             state_path.write_text("state only", encoding="utf-8")
             vision_path.write_text("vision must stay separate", encoding="utf-8")
             match_path.write_text("match must stay separate", encoding="utf-8")
 
-            with patch.object(
-                signalrot_context,
-                "IDENTITY_PATH",
-                identity_path
-            ), patch.object(signalrot_context, "REFRESH_PATH", state_path):
+            with patch.object(loader, "CONTEXT_ROOT", root):
                 block = signalrot_context.signalrot_context_block()
 
         self.assertIn("identity only", block)
         self.assertIn("state only", block)
         self.assertNotIn("vision must stay separate", block)
         self.assertNotIn("match must stay separate", block)
+
+    def test_signalrot_ai_review_uses_generic_context_prompt(self):
+        identity_path, state_path = loader.context_paths("signalrot")
+        match_path = identity_path.parent / "match.md"
+
+        with patch.object(
+            signalrot,
+            "stream_agent",
+            return_value=(0, "review", 0.1)
+        ) as stream_agent, patch.object(signalrot, "rot_say"):
+            result = signalrot._review_task("Review task", Path.cwd(), "Reviewing...")
+
+        self.assertEqual(result, 0)
+        prompt = stream_agent.call_args.args[0]
+        self.assertIn(identity_path.read_text(encoding="utf-8"), prompt)
+        self.assertIn(state_path.read_text(encoding="utf-8"), prompt)
+        self.assertNotIn(match_path.read_text(encoding="utf-8"), prompt)
 
     def test_refresh_modifies_only_state(self):
         refreshed_at = "2026-08-10 17:16 UTC"
@@ -96,24 +113,21 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            identity_path = root / "identity.md"
-            state_path = root / "state.md"
-            vision_path = root / "vision.md"
-            match_path = root / "match.md"
+            context_directory = root / "signalrot"
+            context_directory.mkdir()
+            identity_path = context_directory / "identity.md"
+            state_path = context_directory / "state.md"
+            vision_path = context_directory / "vision.md"
+            match_path = context_directory / "match.md"
             identity_path.write_text("identity unchanged", encoding="utf-8")
             state_path.write_text("old state", encoding="utf-8")
             vision_path.write_text("vision unchanged", encoding="utf-8")
             match_path.write_text("match unchanged", encoding="utf-8")
 
-            with patch.object(
+            with patch.object(loader, "CONTEXT_ROOT", root), patch.object(
                 signalrot_context,
-                "IDENTITY_PATH",
-                identity_path
-            ), patch.object(
-                signalrot_context,
-                "REFRESH_PATH",
-                state_path
-            ), patch.object(signalrot_context, "datetime") as datetime_mock, patch.object(
+                "datetime"
+            ) as datetime_mock, patch.object(
                 signalrot_context,
                 "stream_agent",
                 return_value=(0, output, 0.5)
@@ -148,7 +162,7 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
                 state_path.read_text(encoding="utf-8"),
                 output + "\n"
             )
-            self.assertFalse((root / "state.tmp").exists())
+            self.assertFalse((context_directory / "state.tmp").exists())
 
 
 if __name__ == "__main__":

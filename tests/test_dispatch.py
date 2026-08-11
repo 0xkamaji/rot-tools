@@ -2,8 +2,8 @@ import argparse
 import unittest
 from unittest.mock import Mock, patch
 
-import parser as command_parser
-import rotbot
+from rotbot import __main__ as rotbot
+from rotbot.cli import parser as command_parser
 
 
 class ParserDispatchTests(unittest.TestCase):
@@ -21,6 +21,21 @@ class ParserDispatchTests(unittest.TestCase):
             ],
             "git_push",
             {
+                "review": True,
+                "message": "ship it",
+                "agent": "opencode",
+                "note": "check tests"
+            }
+        ),
+        (["git", "pull"], "git_pull", {"git_command": "pull"}),
+        (
+            [
+                "git", "push", "--review", "--message", "ship it",
+                "--agent", "opencode", "--note", "check tests"
+            ],
+            "git_push",
+            {
+                "git_command": "push",
                 "review": True,
                 "message": "ship it",
                 "agent": "opencode",
@@ -134,7 +149,7 @@ class ParserDispatchTests(unittest.TestCase):
 
     def test_missing_required_arguments_are_rejected(self):
         for argv in (
-            [], ["ask"], ["context"], ["context", "show"],
+            [], ["ask"], ["git"], ["context"], ["context", "show"],
             ["context", "add"], ["context", "add", "example"], ["sr"]
         ):
             with self.subTest(argv=argv):
