@@ -18,11 +18,16 @@ from rotbot.ui.terminal import rot_continue, rot_say
 ARCHIVE_CATEGORY = ".archive"
 ARCHIVE_CATEGORIES = {
     "project": "projects",
+    "machine": "machines",
     "contact": "contacts",
     "user": "users",
     "assistant": "assistants"
 }
-CONTEXT_CATEGORIES = {"project": "projects", "person": "people"}
+CONTEXT_CATEGORIES = {
+    "project": "projects",
+    "person": "people",
+    "machine": "machines"
+}
 
 
 class ContextDeletionError(Exception):
@@ -95,8 +100,10 @@ def _locate_context(name, context_root, context_type=None):
     if not found:
         raise ContextDeletionError(f"Context '{name}' does not exist.")
     if len(found) > 1:
+        context_types = ", ".join(found_type for found_type, _source in found)
         raise ContextDeletionError(
-            f"Context name '{name}' is ambiguous; both a project and person exist."
+            f"Context name '{name}' is ambiguous; multiple context types exist: "
+            f"{context_types}."
         )
     context_type, source = found[0]
     if source.is_symlink() or not source.is_dir():
@@ -140,7 +147,7 @@ def list_deletable_contexts(*, context_root=None):
 
 
 def _archive_category(context_type, source):
-    category = context_type if context_type == "project" else source.parent.name
+    category = source.parent.name if context_type == "person" else context_type
     try:
         return ARCHIVE_CATEGORIES[category]
     except KeyError:

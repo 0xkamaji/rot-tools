@@ -102,8 +102,25 @@ class ParserDispatchTests(unittest.TestCase):
             "context_add",
             {
                 "context_command": "add",
+                "context_type": None,
+                "name": None,
                 "agent": "codex"
             }
+        ),
+        (
+            ["context", "add", "machine"],
+            "context_add",
+            {"context_type": "machine", "name": None, "agent": None}
+        ),
+        (
+            ["context", "add", "machine", "desktop"],
+            "context_add",
+            {"context_type": "machine", "name": "desktop", "agent": None}
+        ),
+        (
+            ["machine", "inspect"],
+            "machine_inspect",
+            {"command": "machine", "machine_command": "inspect"}
         ),
         (
             ["context", "delete", "example"],
@@ -177,14 +194,14 @@ class ParserDispatchTests(unittest.TestCase):
                     self.assertEqual(getattr(args, name), expected)
 
     def test_unknown_commands_are_rejected(self):
-        for argv in (["unknown"], ["sr", "unknown"]):
+        for argv in (["unknown"], ["sr", "unknown"], ["machine", "unknown"]):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
 
     def test_missing_required_arguments_are_rejected(self):
         for argv in (
             [], ["ask"], ["git"],
-            ["sr"]
+            ["sr"], ["machine"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -195,6 +212,9 @@ class ParserDispatchTests(unittest.TestCase):
             ["push", "--message"],
             ["pull", "--review"],
             ["context", "add", "example", "/srv/example"],
+            ["context", "add", "machine", "desktop", "extra"],
+            ["context", "add", "machine", "desktop", "--inspect"],
+            ["machine", "inspect", "--inspect"],
             ["context", "mod", "alex", "extra"],
             ["context", "delete", "example", "extra"]
         ):
@@ -222,7 +242,10 @@ class ParserDispatchTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 0)
         message = rot_say.call_args.args[0]
-        self.assertIn("Interactively create a project or person context", message)
+        self.assertIn(
+            "Interactively create a project, person, or machine context",
+            message
+        )
         self.assertNotIn("NAME", message)
         self.assertNotIn("PATH", message)
 
@@ -238,13 +261,14 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("ROTBOT VERBOSE HELP", message)
         self.assertIn("COMMAND: rotbot git status", message)
         self.assertIn("COMMAND: rotbot context add", message)
+        self.assertIn("COMMAND: rotbot machine inspect", message)
         self.assertIn("COMMAND: rotbot context delete", message)
         self.assertIn("COMMAND: rotbot context mod", message)
         self.assertIn("COMMAND: rotbot sr publish", message)
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 14)
+        self.assertEqual(message.count("=" * 60), 16)
         self.assertLess(
             message.index("COMMAND: rotbot git status"),
             message.index("COMMAND: rotbot wtf")

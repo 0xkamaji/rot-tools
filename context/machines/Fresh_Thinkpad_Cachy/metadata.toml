@@ -1,0 +1,17 @@
+type = "machine"
+name = "Fresh_Thinkpad_Cachy"
+display_name = "Fresh Thinkpad Cachy"
+device_type = "laptop"
+operating_system = "CachyOS Linux"
+architecture = "x86_64"
+
+[cpu]
+model = "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz"
+physical_cores = 4
+logical_cores = 8
+
+[memory]
+total_gb = 15.24
+
+[[gpus]]
+model = "Lenovo Device 5078"

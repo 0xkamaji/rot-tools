@@ -9,10 +9,10 @@ from rotbot.ui.terminal import rot_say
 
 
 ACTIONS = (
-    ("add", "Create a project or person context"),
-    ("list", "List all available project and person contexts"),
+    ("add", "Create a project, person, or machine context"),
+    ("list", "List all available project, person, and machine contexts"),
     ("mod", "Add categorized information to a person context"),
-    ("show", "Choose and display a project or person context"),
+    ("show", "Choose and display a project, person, or machine context"),
     ("bind", "Recognize and bind the current project directory"),
     ("delete", "Choose a context to archive without destroying it")
 )

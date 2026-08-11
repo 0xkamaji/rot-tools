@@ -133,12 +133,14 @@ def atomic_replace_state(name, content):
 
 
 def context_list(args):
+    from rotbot.contexts.machines import MachineContextError, list_machine_contexts
     from rotbot.contexts.people import PersonContextError, list_person_contexts
 
     try:
         names = list_contexts()
         person_contexts = list_person_contexts()
-    except (ContextError, PersonContextError) as error:
+        machine_contexts = list_machine_contexts()
+    except (ContextError, MachineContextError, PersonContextError) as error:
         rot_say(str(error))
         return 1
 
@@ -146,6 +148,7 @@ def context_list(args):
     rows = (
         tuple(("project", name) for name in names)
         + tuple(("person", person.name) for person in person_contexts)
+        + tuple(("machine", machine.name) for machine in machine_contexts)
     )
     if rows:
         rot_table(("TYPE", "NAME"), rows, fill=False)
@@ -155,11 +158,13 @@ def context_list(args):
 
 
 def _available_context_entries():
+    from rotbot.contexts.machines import list_machine_contexts
     from rotbot.contexts.people import list_person_contexts
 
     return (
         tuple(("project", name) for name in list_contexts())
         + tuple(("person", person.name) for person in list_person_contexts())
+        + tuple(("machine", machine.name) for machine in list_machine_contexts())
     )
 
 
@@ -261,12 +266,32 @@ def _show_person_context(name):
     return 0
 
 
+def _show_machine_context(name):
+    from rotbot.contexts.machines import MachineContextError, load_machine_files
+
+    try:
+        machine, documents = load_machine_files(name)
+    except MachineContextError as error:
+        rot_say(str(error))
+        return 1
+    blocks = []
+    for document in documents:
+        label = document.filename.rsplit(".", 1)[0].upper()
+        title = f"{label} ({document.filename}; read-only)"
+        content = document.content.rstrip() or "(empty)"
+        blocks.append(f"{title}\n{'-' * len(title)}\n{content}")
+    rot_say(f"MACHINE CONTEXT: {machine.name} ({machine.display_name})")
+    rot_continue("\n\n".join(blocks))
+    return 0
+
+
 def context_show(args):
+    from rotbot.contexts.machines import MachineContextError
     from rotbot.contexts.people import PersonContextError
 
     try:
         entries = _available_context_entries()
-    except (ContextError, PersonContextError) as error:
+    except (ContextError, MachineContextError, PersonContextError) as error:
         rot_say(str(error))
         return 1
     if args.name:
@@ -277,9 +302,11 @@ def context_show(args):
             return 1
         matches = tuple(entry for entry in entries if entry[1] == args.name)
         if len(matches) > 1:
+            context_types = ", ".join(context_type for context_type, _name in matches)
             rot_say(
-                f"Context name '{args.name}' is ambiguous; both a project and "
-                "person exist.\n\nRun 'rot context show' without a name to choose one."
+                f"Context name '{args.name}' is ambiguous; multiple context "
+                f"types exist: {context_types}.\n\n"
+                "Run 'rot context show' without a name to choose one."
             )
             return 1
         if not matches:
@@ -297,9 +324,11 @@ def context_show(args):
         context_type, name = selected
 
     vision_only = getattr(args, "vision", False)
+    if context_type != "project" and vision_only:
+        rot_say("--vision is only supported for project contexts.")
+        return 1
     if context_type == "person":
-        if vision_only:
-            rot_say("--vision is only supported for project contexts.")
-            return 1
         return _show_person_context(name)
+    if context_type == "machine":
+        return _show_machine_context(name)
     return _show_project_context(name, vision_only)

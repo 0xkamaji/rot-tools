@@ -7,7 +7,8 @@ import tempfile
 from types import SimpleNamespace
 
 from rotbot.agents.runner import stream_agent
-from rotbot.contexts import loader, people
+from rotbot.commands.machine import inspect_local_machine, show_inspection
+from rotbot.contexts import loader, machines, people
 from rotbot.contexts.matching import (
     MatchError,
     build_source_match_document,
@@ -263,12 +264,14 @@ def _parse_agent_draft(output, project):
     return documents
 
 
-def _confirm(message):
-    rot_say(f"{message} [y/N]")
+def _confirm(message, default=False):
+    rot_say(f"{message} {'[Y/n]' if default else '[y/N]'}")
     try:
         answer = input("> ").strip().lower()
     except EOFError:
         answer = ""
+    if not answer:
+        return default
     return answer in {"y", "yes"}
 
 
@@ -395,17 +398,89 @@ def _add_person_context(name, role, display_name, related_projects=()):
     return 0
 
 
-def context_add(args):
-    context_type = _ask_choice(
-        "Context type:\n\n  1. Project\n  2. Person\n  3. Exit\n\n"
-        "Choose 1, 2, or 3 [1]:",
-        {
-            "project": {"1", "project"},
-            "person": {"2", "person"},
-            None: {"3"}
-        },
-        "project"
+def _add_machine_context(
+    name,
+    display_name,
+    portable_facts=None,
+    local_facts=None,
+    create_local=False
+):
+    try:
+        machine = machines.build_machine_context(
+            name,
+            display_name,
+            portable_facts
+        )
+        files = machines.render_machine_files(machine)
+        local_path = (
+            machines.local_machine_record_path(name)
+            if create_local
+            else None
+        )
+    except machines.MachineContextError as error:
+        rot_say(str(error))
+        return 1
+
+    rot_say(f"Create machine context '{name}' for {display_name}?")
+    rot_continue(
+        "Proposed files:\n\n"
+        + "\n".join(
+            f"  context/machines/{name}/{filename}" for filename in files
+        )
+        + (
+            f"\n\nApproved local metadata:\n\n  {local_path}"
+            if local_path is not None
+            else "\n\nNo local machine metadata will be created."
+        )
     )
+    if not _confirm("Create this machine context?"):
+        rot_say("Machine context creation cancelled. No files were changed.")
+        return 0
+
+    try:
+        destination = machines.create_machine(
+            name,
+            display_name,
+            portable_facts
+        )
+    except machines.MachineContextError as error:
+        rot_say(str(error))
+        return 1
+    if create_local:
+        try:
+            local_destination = machines.create_local_machine_record(
+                name,
+                local_facts
+            )
+        except machines.MachineContextError as error:
+            rot_say(
+                f"Machine context '{name}' was created at:\n{destination}\n\n"
+                f"Local machine metadata could not be created:\n{error}"
+            )
+            return 1
+        rot_say(
+            f"Machine context '{name}' created at:\n{destination}\n\n"
+            f"Local machine metadata created at:\n{local_destination}"
+        )
+        return 0
+    rot_say(f"Machine context '{name}' created at:\n{destination}")
+    return 0
+
+
+def context_add(args):
+    context_type = getattr(args, "context_type", None)
+    if context_type is None:
+        context_type = _ask_choice(
+            "Context type:\n\n  1. Project\n  2. Person\n  3. Machine\n"
+            "  4. Exit\n\nChoose 1, 2, 3, or 4 [1]:",
+            {
+                "project": {"1", "project"},
+                "person": {"2", "person"},
+                "machine": {"3", "machine"},
+                None: {"4"}
+            },
+            "project"
+        )
     if context_type is None:
         rot_say("Context creation cancelled. No files were changed.")
         return 0
@@ -426,6 +501,62 @@ def context_add(args):
             agent=getattr(args, "agent", None)
         )
         return _add_project_context(project_args)
+
+    if context_type == "machine":
+        name = getattr(args, "name", None)
+        if name is None:
+            name = _ask_value("Machine context name")
+        if name is None:
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        display_default = name.replace("-", " ").replace("_", " ").title()
+        display_name = _ask_value("Display name", display_default)
+        if display_name is None:
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        try:
+            machines.build_machine_context(name, display_name)
+        except machines.MachineContextError as error:
+            rot_say(str(error))
+            return 1
+        initialization = _ask_choice(
+            "How should this machine context be initialized?\n\n"
+            "  1. Inspect this system\n"
+            "  2. Leave empty\n"
+            "  3. Exit\n\n"
+            "Choose 1, 2, or 3 [1]:",
+            {
+                "inspect": {"1", "inspect", "inspect this system"},
+                "empty": {"2", "empty", "leave empty"},
+                None: {"3"}
+            },
+            "inspect"
+        )
+        if initialization is None:
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        if initialization == "empty":
+            return _add_machine_context(name, display_name)
+
+        inspection = inspect_local_machine()
+        show_inspection(inspection)
+        portable_facts = (
+            inspection.portable
+            if _confirm("Use the detected portable metadata?", default=True)
+            else None
+        )
+        create_local = False
+        if machines.has_local_facts(inspection.local):
+            create_local = _confirm(
+                "Create local machine metadata with the detected local facts?"
+            )
+        return _add_machine_context(
+            name,
+            display_name,
+            portable_facts,
+            inspection.local if create_local else None,
+            create_local
+        )
 
     name = _ask_value("Person context name")
     if name is None:

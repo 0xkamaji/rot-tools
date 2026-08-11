@@ -7,7 +7,7 @@
   ROTBOT
 ```
 
-RotBot is a personal command-line wrapper for Git, AI coding agents, project context, and SignalRot management.
+RotBot is a personal command-line wrapper for Git, AI coding agents, durable context, and SignalRot management.
 
 It provides short commands for common workflows while keeping important actions visible and confirmable.
 
@@ -156,7 +156,7 @@ If no agent is selected, RotBot uses the first supported agent it finds.
 
 ## Contexts
 
-Contexts give RotBot durable knowledge about projects and people.
+Contexts give RotBot durable knowledge about projects, people, and machines.
 
 A context generally contains:
 
@@ -168,6 +168,11 @@ context/
 │       ├── state.md
 │       ├── vision.md
 │       └── match.md
+├── machines/
+│   └── NAME/
+│       ├── metadata.toml
+│       ├── identity.md
+│       └── software.toml
 └── people/
     ├── contact/
     │   └── NAME/
@@ -189,6 +194,21 @@ the `projects/` filesystem category is not part of the public context name.
 Person contexts are grouped under `people/contact/`, `people/user/`, or
 `people/assistant/`. Their names remain unique across all three roles, and they
 are created through the same interactive add command as project contexts.
+Machine contexts keep safe identity and normalized hardware facts under
+`machines/NAME/`. Private host-specific facts use the same machine name in one
+TOML file under RotBot's platform-aware local configuration directory, such as
+`~/.config/rotbot/machines/NAME.toml`.
+
+During machine creation, choose whether to inspect the current system or leave
+the context empty for manual editing. Inspection is deterministic and local;
+detected portable and private facts are shown separately and require separate
+approval. Private facts default to declined. Local records may describe
+hostnames, addresses, network interfaces, users, and SSH availability, but must
+never contain passwords, private keys, tokens, cookies, recovery codes, or
+other authentication secrets. RotBot never automatically loads local records
+when listing, showing, matching, or building AI prompts.
+
+Project files:
 
 | File          | Purpose                                       |
 | ------------- | --------------------------------------------- |
@@ -196,6 +216,14 @@ are created through the same interactive add command as project contexts.
 | `state.md`    | What currently exists                         |
 | `vision.md`   | Where the project is going                    |
 | `match.md`    | Facts used to recognize the project           |
+
+Machine files:
+
+| File            | Purpose                                      |
+| --------------- | -------------------------------------------- |
+| `metadata.toml` | Portable identity and normalized hardware facts |
+| `identity.md`   | Human-authored purpose and environment context |
+| `software.toml` | Deliberately selected relevant software      |
 
 ### Context commands
 
@@ -208,15 +236,26 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context show [NAME]`    | Display a context, or choose one from a list |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
-| `rot context add`            | Interactively create a project or person context |
+| `rot context add`            | Interactively create a project, person, or machine context |
+| `rot context add machine [NAME]` | Create a machine directly, then inspect or leave empty |
 | `rot context mod [NAME]`     | Add categorized information to a person context |
 | `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
 Archived contexts are moved beneath the hidden `context/.archive/` directory,
-outside RotBot's project and person discovery paths. Each kind has its own
-bucket: `projects/`, `contacts/`, `users/`, or `assistants/`. Archiving a project
-also removes its local source and production bindings so the name can be
-recreated cleanly.
+outside RotBot's active discovery paths. Each kind has its own bucket:
+`projects/`, `machines/`, `contacts/`, `users/`, or `assistants/`. Archiving a
+project also removes its local source and production bindings so the name can
+be recreated cleanly. Archiving a portable machine context does not modify its
+installation-specific local metadata file.
+
+Inspect the current host without creating or modifying files:
+
+```bash
+rot machine inspect
+```
+
+Inspection never asks for a machine name, invokes AI, scans installed packages,
+or inspects a remote machine.
 
 `rot context mod` currently supports people. It reads the selected Markdown
 file's existing `##` headings, adds information beneath one of them, or creates
@@ -235,7 +274,7 @@ rot context show signalrot
 
 | Flag       | Purpose                                |
 | ---------- | -------------------------------------- |
-| `--vision` | Include the project’s future direction |
+| `--vision` | Show only a project's future direction |
 
 ```bash
 rot context show rotbot --vision

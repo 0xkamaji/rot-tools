@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from rotbot.contexts import machines
 from rotbot.contexts import loader as contexts
 
 
@@ -22,6 +23,8 @@ class ContextLoaderTests(unittest.TestCase):
         from rotbot.contexts import people
         for role in people.PERSON_ROLES:
             (self.people / role).mkdir()
+        self.machines = self.root / "machines"
+        self.machines.mkdir()
         self.root_patch = patch.object(contexts, "CONTEXT_ROOT", self.root)
         self.root_patch.start()
 
@@ -66,7 +69,7 @@ class ContextLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
             contexts.load_context("outsider")
 
-    def test_context_list_renders_projects_and_people_in_type_name_table(self):
+    def test_context_list_renders_all_types_in_type_name_table(self):
         from rotbot.contexts import people
 
         self.create_context("zeta")
@@ -74,6 +77,7 @@ class ContextLoaderTests(unittest.TestCase):
         people.create_person_context(
             "sam", "contact", "Sam Example", people_root=self.people
         )
+        machines.create_machine("desktop", machines_root=self.machines)
 
         with patch.object(contexts, "rot_say") as rot_say, patch.object(
             contexts,
@@ -85,7 +89,12 @@ class ContextLoaderTests(unittest.TestCase):
         rot_say.assert_called_once_with("CONTEXTS")
         rot_table.assert_called_once_with(
             ("TYPE", "NAME"),
-            (("project", "alpha"), ("project", "zeta"), ("person", "sam")),
+            (
+                ("project", "alpha"),
+                ("project", "zeta"),
+                ("person", "sam"),
+                ("machine", "desktop")
+            ),
             fill=False
         )
 
@@ -271,6 +280,48 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("related_projects = []", output)
         self.assertTrue(output.endswith("(no recorded information)"))
 
+    def test_machine_show_loads_only_portable_files(self):
+        destination = machines.create_machine(
+            "desktop",
+            "Main Desktop",
+            {"operating_system": "CachyOS"},
+            machines_root=self.machines
+        )
+        local = machines.create_local_machine_record(
+            "desktop",
+            {"connection": {"hostname": "private-host-sentinel"}},
+            target_config=Path(self.temporary_directory.name) / "config" / "config.toml"
+        )
+
+        with patch.object(
+            machines,
+            "load_local_machine_record"
+        ) as load_local, patch.object(contexts, "rot_say") as rot_say, patch.object(
+            contexts,
+            "rot_continue"
+        ) as rot_continue:
+            result = contexts.context_show(
+                argparse.Namespace(name="desktop", vision=False)
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("MACHINE CONTEXT: desktop", rot_say.call_args.args[0])
+        output = rot_continue.call_args.args[0]
+        self.assertIn('operating_system = "CachyOS"', output)
+        self.assertNotIn("private-host-sentinel", output)
+        load_local.assert_not_called()
+
+    def test_machine_vision_is_rejected(self):
+        machines.create_machine("desktop", machines_root=self.machines)
+
+        with patch.object(contexts, "rot_say") as rot_say:
+            result = contexts.context_show(
+                argparse.Namespace(name="desktop", vision=True)
+            )
+
+        self.assertEqual(result, 1)
+        self.assertIn("only supported for project", rot_say.call_args.args[0])
+
     def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
         from rotbot.contexts import people
 
@@ -320,6 +371,7 @@ class ContextLoaderTests(unittest.TestCase):
         people.create_person_context(
             "shared", "contact", "Shared", people_root=self.people
         )
+        machines.create_machine("shared", machines_root=self.machines)
         people.create_person_context(
             "alex", "contact", "Alex", people_root=self.people
         )

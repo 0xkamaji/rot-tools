@@ -3,6 +3,7 @@ import argparse
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
 from rotbot.commands.git import git_pull, git_push, git_status
+from rotbot.commands.machine import machine_inspect
 from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
@@ -222,6 +223,20 @@ def create_parser():
     _add_note_argument(wtf_parser)
     wtf_parser.set_defaults(func=directory_report)
 
+    machine_parser = commands.add_parser(
+        "machine",
+        help="Inspect local machine information"
+    )
+    machine_commands = machine_parser.add_subparsers(
+        dest="machine_command",
+        required=True
+    )
+    machine_inspect_parser = machine_commands.add_parser(
+        "inspect",
+        help="Inspect this machine without writing files"
+    )
+    machine_inspect_parser.set_defaults(func=machine_inspect)
+
     context_parser = commands.add_parser(
         "context",
         help="List, show, add, modify, bind, or archive contexts"
@@ -279,8 +294,19 @@ def create_parser():
 
     context_add_parser = context_commands.add_parser(
         "add",
-        help="Interactively create a project or person context",
-        description="Interactively create a project or person context."
+        help="Interactively create a project, person, or machine context",
+        description="Interactively create a project, person, or machine context."
+    )
+    context_add_parser.add_argument(
+        "context_type",
+        nargs="?",
+        choices=("machine",),
+        help="Optionally create a machine context directly"
+    )
+    context_add_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Optional machine context name"
     )
     context_add_parser.add_argument(
         "-a",
@@ -309,8 +335,8 @@ def create_parser():
         "delete",
         help="Archive a context so RotBot no longer accesses it",
         description=(
-            "Archive a project or person context. Archived contexts are retained "
-            "but are not loaded or matched by RotBot."
+            "Archive a project, person, or machine context. Archived contexts "
+            "are retained but are not loaded or matched by RotBot."
         )
     )
     context_delete_parser.add_argument(

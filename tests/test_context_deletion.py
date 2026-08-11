@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import deletion, loader, people
+from rotbot.contexts import deletion, loader, machines, people
 from rotbot.contexts.config import ConfigError, get_context_binding, set_context_binding
 
 
@@ -20,6 +20,8 @@ class ContextDeletionTests(unittest.TestCase):
         self.people.mkdir()
         for role in people.PERSON_ROLES:
             (self.people / role).mkdir()
+        self.machines = self.context_root / "machines"
+        self.machines.mkdir()
         self.config = self.root / "config" / "rotbot" / "config.toml"
         self.root_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
         self.root_patch.start()
@@ -105,6 +107,49 @@ class ContextDeletionTests(unittest.TestCase):
                     destination.parents[2],
                     self.context_root / ".archive" / bucket
                 )
+
+    def test_machine_is_archived_without_changing_same_named_project_bindings(self):
+        source = machines.create_machine(
+            "desktop", machines_root=self.machines
+        )
+        project = self.create_project("desktop")
+        set_context_binding("desktop", "source_path", "/keep/project", self.config)
+        local = machines.create_local_machine_record(
+            "desktop",
+            {"connection": {"hostname": "desktop-host"}},
+            target_config=self.config
+        )
+
+        with self.assertRaisesRegex(deletion.ContextDeletionError, "ambiguous"):
+            deletion.archive_context(
+                "desktop",
+                context_root=self.context_root,
+                target_config=self.config
+            )
+
+        context_type, destination = deletion.archive_context(
+            "desktop",
+            context_type="machine",
+            context_root=self.context_root,
+            target_config=self.config
+        )
+
+        self.assertEqual(context_type, "machine")
+        self.assertFalse(source.exists())
+        self.assertTrue(project.exists())
+        self.assertTrue(local.exists())
+        self.assertEqual(
+            destination.parents[2],
+            self.context_root / ".archive" / "machines"
+        )
+        self.assertEqual(
+            get_context_binding("desktop", self.config)["source_path"],
+            "/keep/project"
+        )
+        self.assertEqual(
+            machines.list_machine_contexts(machines_root=self.machines),
+            ()
+        )
 
     def test_recreated_context_produces_a_separate_archive_record(self):
         self.create_project(marker="first")
@@ -252,12 +297,17 @@ class ContextDeletionTests(unittest.TestCase):
         self.create_project("valid")
         incomplete = self.people / "contact" / "incomplete"
         incomplete.mkdir()
+        (self.machines / "unconfigured").mkdir()
         ordinary = self.projects / "ordinary.txt"
         ordinary.write_text("not a context", encoding="utf-8")
 
         self.assertEqual(
             deletion.list_deletable_contexts(context_root=self.context_root),
-            (("project", "valid"), ("person", "incomplete"))
+            (
+                ("project", "valid"),
+                ("person", "incomplete"),
+                ("machine", "unconfigured")
+            )
         )
 
     def test_duplicate_person_name_across_roles_is_rejected(self):

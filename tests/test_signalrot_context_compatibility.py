@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import loader
+from rotbot.contexts import loader, machines
 from rotbot.integrations.signalrot import commands as signalrot
 from rotbot.integrations.signalrot import context as signalrot_context
 
@@ -84,6 +84,43 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         self.assertIn("state only", block)
         self.assertNotIn("vision must stay separate", block)
         self.assertNotIn("match must stay separate", block)
+
+    def test_signalrot_prompt_does_not_load_same_named_machine_or_local_record(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            project = root / "context" / "projects" / "signalrot"
+            project.mkdir(parents=True)
+            (project / "identity.md").write_text(
+                "project identity", encoding="utf-8"
+            )
+            (project / "state.md").write_text("project state", encoding="utf-8")
+            machine_root = root / "context" / "machines"
+            machine_root.mkdir()
+            machine = machines.create_machine(
+                "signalrot",
+                machines_root=machine_root
+            )
+            (machine / "identity.md").write_text(
+                "machine identity sentinel", encoding="utf-8"
+            )
+            config = root / "config" / "rotbot" / "config.toml"
+            local = machines.create_local_machine_record(
+                "signalrot",
+                {"connection": {"hostname": "local sentinel"}},
+                target_config=config
+            )
+
+            with patch.object(
+                machines,
+                "load_local_machine_record"
+            ) as load_local, patch.object(loader, "CONTEXT_ROOT", root / "context"):
+                block = signalrot_context.signalrot_context_block()
+
+        self.assertIn("project identity", block)
+        self.assertIn("project state", block)
+        self.assertNotIn("machine identity sentinel", block)
+        self.assertNotIn("local sentinel", block)
+        load_local.assert_not_called()
 
     def test_signalrot_ai_review_uses_generic_context_prompt(self):
         identity_path, state_path = loader.context_paths("signalrot")

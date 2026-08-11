@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from rotbot.commands.machine import MachineInspection
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
 from rotbot.contexts import matching as context_matching
@@ -416,7 +417,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
     def test_context_type_and_person_role_menus_can_exit(self):
         for answers in (
             ("exit",),
-            ("3",),
+            ("4",),
             ("person", "alex", "q"),
             ("person", "alex", "4")
         ):
@@ -429,12 +430,16 @@ class ContextQuestionnaireTests(unittest.TestCase):
             ) as add_project, patch.object(
                 context_creation,
                 "_add_person_context"
-            ) as add_person, patch.object(context_creation, "rot_say"):
+            ) as add_person, patch.object(
+                context_creation,
+                "_add_machine_context"
+            ) as add_machine, patch.object(context_creation, "rot_say"):
                 result = context_creation.context_add(argparse.Namespace(agent=None))
 
             self.assertEqual(result, 0)
             add_project.assert_not_called()
             add_person.assert_not_called()
+            add_machine.assert_not_called()
 
     def test_project_questions_route_name_path_and_agent(self):
         answers = ("project", "/srv/example", "example")
@@ -529,6 +534,151 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "Leave blank to use their context name: sam" in call.args[0]
             for call in rot_say.call_args_list
         ))
+
+    def test_machine_leave_empty_skips_inspection_and_local_metadata(self):
+        answers = ("machine", "desktop", "", "empty", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation,
+            "inspect_local_machine"
+        ) as inspect, patch.object(
+            context_creation.machines,
+            "create_machine",
+            return_value=Path("context/machines/desktop")
+        ) as create_machine, patch.object(
+            context_creation.machines,
+            "create_local_machine_record"
+        ) as create_local, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        inspect.assert_not_called()
+        create_machine.assert_called_once_with("desktop", "Desktop", None)
+        create_local.assert_not_called()
+
+    def test_machine_inspection_uses_approved_portable_and_declines_local_by_default(self):
+        facts = MachineInspection(
+            {"operating_system": "CachyOS", "architecture": "x86_64"},
+            {"connection": {"hostname": "desktop-host"}}
+        )
+        answers = ("machine", "desktop", "Main Desktop", "inspect", "", "", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation,
+            "inspect_local_machine",
+            return_value=facts
+        ) as inspect, patch.object(
+            context_creation,
+            "show_inspection"
+        ) as show, patch.object(
+            context_creation.machines,
+            "create_machine",
+            return_value=Path("context/machines/desktop")
+        ) as create_machine, patch.object(
+            context_creation.machines,
+            "create_local_machine_record"
+        ) as create_local, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        inspect.assert_called_once_with()
+        show.assert_called_once_with(facts)
+        create_machine.assert_called_once_with(
+            "desktop", "Main Desktop", facts.portable
+        )
+        create_local.assert_not_called()
+
+    def test_preselected_machine_name_can_approve_local_metadata(self):
+        facts = MachineInspection(
+            {"architecture": "x86_64"},
+            {"connection": {"hostname": "desktop-host"}}
+        )
+        answers = ("", "inspect", "", "yes", "yes")
+        args = argparse.Namespace(
+            agent=None,
+            context_type="machine",
+            name="desktop"
+        )
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(context_creation, "show_inspection"), patch.object(
+            context_creation.machines,
+            "create_machine",
+            return_value=Path("context/machines/desktop")
+        ) as create_machine, patch.object(
+            context_creation.machines,
+            "create_local_machine_record",
+            return_value=Path("config/rotbot/machines/desktop.toml")
+        ) as create_local, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(args)
+
+        self.assertEqual(result, 0)
+        create_machine.assert_called_once_with("desktop", "Desktop", facts.portable)
+        create_local.assert_called_once_with("desktop", facts.local)
+
+    def test_declined_portable_facts_are_not_written(self):
+        facts = MachineInspection(
+            {"operating_system": "CachyOS"},
+            {}
+        )
+        answers = ("machine", "desktop", "", "inspect", "no", "yes")
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(context_creation, "show_inspection"), patch.object(
+            context_creation.machines,
+            "create_machine",
+            return_value=Path("context/machines/desktop")
+        ) as create_machine, patch.object(
+            context_creation.machines,
+            "create_local_machine_record"
+        ) as create_local, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(argparse.Namespace(agent=None))
+
+        self.assertEqual(result, 0)
+        create_machine.assert_called_once_with("desktop", "Desktop", None)
+        create_local.assert_not_called()
+
+    def test_local_failure_preserves_created_portable_context(self):
+        destination = Path("context/machines/desktop")
+        facts = {"connection": {"hostname": "desktop-host"}}
+        with patch("builtins.input", return_value="yes"), patch.object(
+            context_creation.machines,
+            "create_machine",
+            return_value=destination
+        ) as create_machine, patch.object(
+            context_creation.machines,
+            "create_local_machine_record",
+            side_effect=context_creation.machines.MachineContextError("local failed")
+        ), patch.object(context_creation, "rot_say") as rot_say, patch.object(
+            context_creation,
+            "rot_continue"
+        ):
+            result = context_creation._add_machine_context(
+                "desktop", "Desktop", {}, facts, True
+            )
+
+        self.assertEqual(result, 1)
+        create_machine.assert_called_once()
+        self.assertIn("was created", rot_say.call_args.args[0])
+        self.assertIn("local failed", rot_say.call_args.args[0])
 
     def test_declined_person_confirmation_creates_nothing(self):
         answers = ("person", "alex", "contact", "Alex", "", "no")

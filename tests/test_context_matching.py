@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from rotbot.contexts import loader as contexts
+from rotbot.contexts import machines
 from rotbot.contexts import matching as context_matching
 
 
@@ -40,6 +41,8 @@ class ContextMatchingTests(unittest.TestCase):
         self.context_root.mkdir()
         self.project_context_root = self.context_root / "projects"
         self.project_context_root.mkdir()
+        self.machine_context_root = self.context_root / "machines"
+        self.machine_context_root.mkdir()
         self.context_patch = patch.object(contexts, "CONTEXT_ROOT", self.context_root)
         self.context_patch.start()
 
@@ -68,6 +71,17 @@ class ContextMatchingTests(unittest.TestCase):
         (repository / "parser.py").write_text("", encoding="utf-8")
         (repository / "context").mkdir()
         return repository
+
+    def test_machine_contexts_are_not_project_match_candidates(self):
+        destination = machines.create_machine(
+            "machine-only", machines_root=self.machine_context_root
+        )
+        (destination / "match.md").write_text(SOURCE_ONLY, encoding="utf-8")
+        repository = self.create_repository("git@github.com:example/project.git")
+
+        candidates = context_matching.match_contexts(repository, caddy_paths=())
+
+        self.assertEqual(candidates, ())
 
     def test_parser_supports_source_only_and_production_with_blank_lines(self):
         source = context_matching.parse_match_document(SOURCE_ONLY)
