@@ -96,9 +96,11 @@ rot> python --version
 
 Input is routed deterministically. Session built-ins run first, exact Rot
 commands use Rot's shared CLI parser, malformed Rot namespaces remain parser
-errors, and recognized executables run through the user's shell. Remaining
-natural language continues one OpenCode conversation for the lifetime of the
-current Rot session:
+errors, and recognized executables with shell-shaped arguments run through the
+user's shell. English-like executable names such as `find` use simple flags,
+paths, file arguments, assignments, and shell operators to distinguish command
+shape from prose. Remaining natural language continues one OpenCode conversation
+for the lifetime of the current Rot session:
 
 ```text
 rot> why is the project resolver designed this way?
@@ -112,6 +114,11 @@ Use `? MESSAGE` to force conversation when a word is also an executable, and
 rot> ? find a clearer way to explain project matching
 rot> !git status --short
 ```
+
+Strong first-token typos are compared against Rot commands and executable names
+discovered from the current `PATH`. Rot only suggests a correction; it never
+executes the corrected command automatically. Executable discovery is cached by
+the `PATH` value and refreshes naturally after `PATH` changes.
 
 OpenCode starts lazily on the first conversational message. Interactive Rot
 uses OpenCode's official CLI session support and reuses the returned session ID

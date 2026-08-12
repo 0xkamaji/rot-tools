@@ -1,11 +1,27 @@
 import argparse
 from dataclasses import dataclass
-from difflib import get_close_matches
 from functools import lru_cache
+import os
+import re
 import shlex
 
 from rotbot.cli.parser import create_parser
-from rotbot.session.shell import is_shell_command
+from rotbot.session.shell import available_executables, is_shell_executable
+
+
+BUILTINS = {
+    "help", "status", "history", "pwd", "cd", "clear", "exit", "quit",
+    "export", "unset"
+}
+CONVERSATIONAL_STARTERS = {
+    "why", "what", "how", "who", "where", "when", "can", "could",
+    "would", "should", "do", "does", "is", "are", "explain", "tell",
+    "this", "that", "these", "those", "maybe", "yeah", "please"
+}
+AMBIGUOUS_EXECUTABLES = {
+    "find", "time", "sort", "head", "test", "read", "kill"
+}
+SHELL_OPERATORS = re.compile(r"(?:^|\s)(?:\|\||&&|\||>>|>|<)(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -25,23 +41,83 @@ def rot_command_names():
     return tuple(subparsers.choices)
 
 
-def _command_typo(first, commands):
-    for command in commands:
-        if len(first) != len(command):
-            continue
+def _one_edit_away(typed, candidate):
+    if typed == candidate or abs(len(typed) - len(candidate)) > 1:
+        return False
+    if len(typed) == len(candidate):
         differences = [
-            index for index, pair in enumerate(zip(first, command))
+            index for index, pair in enumerate(zip(typed, candidate))
             if pair[0] != pair[1]
         ]
-        if (
+        if len(differences) == 1:
+            return True
+        return (
             len(differences) == 2
             and differences[1] == differences[0] + 1
-            and first[differences[0]] == command[differences[1]]
-            and first[differences[1]] == command[differences[0]]
-        ):
-            return command
-    match = get_close_matches(first, commands, n=1, cutoff=0.78)
-    return match[0] if match else None
+            and typed[differences[0]] == candidate[differences[1]]
+            and typed[differences[1]] == candidate[differences[0]]
+        )
+    shorter, longer = (
+        (typed, candidate) if len(typed) < len(candidate) else (candidate, typed)
+    )
+    index = 0
+    while index < len(shorter) and shorter[index] == longer[index]:
+        index += 1
+    return shorter[index:] == longer[index + 1:]
+
+
+def _command_typo(first, commands):
+    matches = [command for command in commands if _one_edit_away(first, command)]
+    if not matches:
+        return None
+    return min(
+        matches,
+        key=lambda command: (
+            0 if len(command) == len(first) and sorted(command) == sorted(first)
+            else 1 if len(command) != len(first)
+            else 2,
+            command
+        )
+    )
+
+
+def _conversational_shape(line, arguments):
+    return arguments[0].lower() in CONVERSATIONAL_STARTERS or line.rstrip().endswith("?")
+
+
+def _path_or_file_shape(argument):
+    if argument in {".", ".."} or argument.startswith(("./", "../", "~/", "/")):
+        return True
+    if "*" in argument or "[" in argument:
+        return True
+    name = argument.rsplit("/", 1)[-1]
+    if "?" in argument and ("/" in argument or "." in name):
+        return True
+    return "." in name and not name.startswith(".") and not name.endswith(".")
+
+
+def _strong_shell_shape(line, arguments):
+    rest = arguments[1:]
+    if not rest:
+        return True
+    if SHELL_OPERATORS.search(line):
+        return True
+    if any(argument.startswith("-") for argument in rest):
+        return True
+    if any(_path_or_file_shape(argument) for argument in rest):
+        return True
+    if any(
+        "=" in argument and argument.split("=", 1)[0].isidentifier()
+        for argument in arguments
+    ):
+        return True
+    return False
+
+
+def _shell_shape(line, arguments):
+    return _strong_shell_shape(line, arguments) or (
+        len(arguments) > 1 and is_shell_executable(arguments[1])
+    )
 
 
 def route_input(line):
@@ -61,17 +137,35 @@ def route_input(line):
         return Route("error", f"Could not parse input: {error}")
 
     first = arguments[0].lower()
-    if first in {"help", "status", "history", "pwd", "cd", "clear", "exit", "quit", "export", "unset"}:
+    if first in BUILTINS:
         return Route("builtin", arguments)
 
     commands = rot_command_names()
     if first in commands:
         return Route("rot", arguments)
-    if is_shell_command(arguments):
-        return Route("shell", line)
+    if is_shell_executable(first):
+        shell_shaped = _shell_shape(line, arguments)
+        if _conversational_shape(line, arguments) and not _strong_shell_shape(
+            line, arguments
+        ):
+            return Route("ai", line.strip())
+        if first not in AMBIGUOUS_EXECUTABLES or shell_shaped:
+            return Route("shell", line)
+        return Route("ai", line.strip())
+
+    if _conversational_shape(line, arguments):
+        return Route("ai", line.strip())
 
     match = _command_typo(first, commands)
+    if match is None:
+        match = _command_typo(
+            first,
+            available_executables(os.environ.get("PATH", ""))
+        )
     if match:
         suggestion = " ".join((match, *arguments[1:]))
-        return Route("error", f"Unknown command: {first}\nDid you mean: {suggestion}?")
+        return Route(
+            "error",
+            f"Command not found: {first}\nDid you mean `{suggestion}`?"
+        )
     return Route("ai", line.strip())

@@ -57,6 +57,9 @@ Shell commands may be entered directly:
 
 Natural language continues one OpenCode conversation for this Rot session.
 
+Rot commands run directly. Shell-shaped installed commands run locally.
+Natural language goes to Rot.
+
   ? MESSAGE           Force AI conversation
   ! COMMAND           Force shell execution
 

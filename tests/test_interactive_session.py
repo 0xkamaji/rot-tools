@@ -252,6 +252,23 @@ class RotSessionTests(unittest.TestCase):
         send_ai.assert_not_called()
         run_shell.assert_not_called()
 
+    def test_shell_typo_suggests_without_ai_or_execution(self):
+        with patch(
+            "rotbot.session.router.available_executables", return_value=("cat",)
+        ), patch(
+            "rotbot.session.router.is_shell_executable", return_value=False
+        ), patch.object(
+            self.session, "send_ai"
+        ) as send_ai, patch.object(
+            interactive, "run_shell"
+        ) as run_shell, patch.object(interactive, "rot_say") as rot_say:
+            result = interactive.evaluate_input(self.session, "ct rotbot.py")
+
+        self.assertTrue(result)
+        self.assertIn("Did you mean `cat rotbot.py`?", rot_say.call_args.args[0])
+        send_ai.assert_not_called()
+        run_shell.assert_not_called()
+
     def test_first_ai_turn_uses_context_then_followup_reuses_conversation(self):
         chat = Mock(spec=session_ai.AIConversation)
         with patch.object(session_ai.AIConversation, "create", return_value=chat):

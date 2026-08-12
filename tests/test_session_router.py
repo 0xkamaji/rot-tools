@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,7 +12,9 @@ class InputRouterTests(unittest.TestCase):
         def which(name, path=None):
             return f"/bin/{name}" if name in executables else None
 
-        with patch.object(shell.shutil, "which", side_effect=which):
+        with patch.object(shell.shutil, "which", side_effect=which), patch.object(
+            router, "available_executables", return_value=tuple(executables)
+        ):
             return router.route_input(line)
 
     def test_builtins_have_highest_implicit_priority(self):
@@ -28,6 +31,34 @@ class InputRouterTests(unittest.TestCase):
         self.assertEqual(self.route("ls -lah", {"ls"}).kind, "shell")
         self.assertEqual(self.route("python --version", {"python"}).kind, "shell")
         self.assertEqual(self.route("echo hello").kind, "shell")
+
+    def test_shell_shape_flags_paths_pipes_and_redirects(self):
+        cases = (
+            ("ls -lah", {"ls"}),
+            ('rg "foo" .', {"rg"}),
+            ("python script.py", {"python"}),
+            ('find . -name "*.py"', {"find"}),
+            ("time python foo.py", {"time", "python"}),
+            ("find . | head -20", {"find", "head"}),
+            ("find . > result.txt", {"find"})
+        )
+        for line, executables in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.route(line, executables).kind, "shell")
+
+    def test_english_like_executable_with_prose_shape_routes_to_ai(self):
+        cases = (
+            "find me a better design",
+            "sort this architecture differently",
+            "time for a different approach",
+            "why is this difficult?",
+            "explain the resolver",
+            "this architecture feels weird"
+        )
+        executables = {"find", "sort", "time", "why", "explain"}
+        for line in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.route(line, executables).kind, "ai")
 
     def test_natural_language_and_overrides_are_deterministic(self):
         self.assertEqual(
@@ -46,7 +77,35 @@ class InputRouterTests(unittest.TestCase):
         route = self.route("gti status")
 
         self.assertEqual(route.kind, "error")
-        self.assertIn("Did you mean: git status?", route.value)
+        self.assertIn("Did you mean `git status`?", route.value)
+
+    def test_shell_typos_suggest_real_executables_without_execution(self):
+        for line, expected, executables in (
+            ("ct rotbot.py", "cat rotbot.py", {"cat", "cut"}),
+            ("grpe foo", "grep foo", {"grep"}),
+            ("pyton --version", "python --version", {"python"}),
+            ("systmctl status caddy", "systemctl status caddy", {"systemctl"})
+        ):
+            with self.subTest(line=line):
+                route = self.route(line, executables)
+                self.assertEqual(route.kind, "error")
+                self.assertIn(f"Did you mean `{expected}`?", route.value)
+
+    def test_weak_matches_fall_through_to_ai(self):
+        self.assertEqual(
+            self.route("architecture feels complicated", {"arch"}).kind,
+            "ai"
+        )
+
+    def test_dynamic_path_executable_discovery_is_path_keyed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "newtool"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o700)
+            shell.available_executables.cache_clear()
+            with patch.dict(os.environ, {"PATH": temporary}, clear=True):
+                self.assertIn("newtool", shell.available_executables(temporary))
+                self.assertEqual(router.route_input("newtool --version").kind, "shell")
 
 
 class ShellExecutionTests(unittest.TestCase):

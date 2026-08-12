@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from functools import lru_cache
 
 
 SHELL_BUILTINS = {
@@ -20,13 +21,32 @@ def _command_token(arguments):
 
 def is_shell_command(arguments):
     command = _command_token(arguments)
-    return bool(
-        command
-        and (
-            command in SHELL_BUILTINS
-            or shutil.which(command, path=os.environ.get("PATH")) is not None
-        )
-    )
+    return bool(command and is_shell_executable(command))
+
+
+def is_shell_executable(command, path=None):
+    path = os.environ.get("PATH", "") if path is None else path
+    return command in SHELL_BUILTINS or shutil.which(command, path=path) is not None
+
+
+@lru_cache(maxsize=8)
+def available_executables(path):
+    names = set(SHELL_BUILTINS)
+    for directory_name in path.split(os.pathsep):
+        if not directory_name:
+            directory_name = os.curdir
+        try:
+            entries = os.scandir(directory_name)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    if entry.is_file() and os.access(entry.path, os.X_OK):
+                        names.add(entry.name)
+                except OSError:
+                    continue
+    return tuple(sorted(names))
 
 
 def run_shell(command, cwd, environ=None):
