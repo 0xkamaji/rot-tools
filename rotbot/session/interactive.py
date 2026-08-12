@@ -2,16 +2,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import os
 from pathlib import Path
-import shlex
 
+from rotbot.agents.conversation import ConversationError
 from rotbot.cli.parser import parse_args
 from rotbot.commands.git import PUSH_CANCELLED
+from rotbot.contexts import loader, machines, people
 from rotbot.contexts.inspection import (
     ContextInspectionError,
     InspectedContext,
     inspect_current_context
 )
+from rotbot.session.ai import AIConversation
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
+from rotbot.session.router import route_input
+from rotbot.session.shell import run_shell
 from rotbot.ui.interactive import (
     SessionHeader,
     clear_terminal,
@@ -29,6 +33,8 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   pwd                 Show current directory
   cd PATH             Change current directory
   clear               Clear and redraw the terminal
+  export NAME=VALUE   Set a session environment variable
+  unset NAME          Remove a session environment variable
   exit / quit         End the Rot session
 
 Rot commands can also be entered directly, including:
@@ -43,8 +49,18 @@ Rot commands can also be entered directly, including:
   context show NAME
   machine inspect
 
-Use the same command and options that would follow `rot` in the normal CLI.
-Unknown input is never treated as an implicit shell or AI request."""
+Shell commands may be entered directly:
+
+  ls -lah
+  rg "pattern" .
+  python --version
+
+Natural language continues one OpenCode conversation for this Rot session.
+
+  ? MESSAGE           Force AI conversation
+  ! COMMAND           Force shell execution
+
+Use the same command and options that would follow `rot` in the normal CLI."""
 
 
 @dataclass
@@ -53,6 +69,7 @@ class RotSession:
     cwd: Path
     context: InspectedContext
     command_history: CommandHistory = field(default_factory=CommandHistory)
+    ai: AIConversation | None = None
 
     @classmethod
     def start(cls):
@@ -87,27 +104,67 @@ class RotSession:
         except BaseException:
             os.chdir(previous)
             raise
+        if self.ai is not None:
+            self.ai.mark_context_dirty()
+
+    def send_ai(self, message):
+        if not message:
+            rot_say("Usage: ? MESSAGE")
+            return
+        if self.ai is None:
+            self.ai = AIConversation.create()
+        try:
+            self.ai.send(message, self.context, self.cwd)
+        except ConversationError as error:
+            rot_say(str(error))
+            return
+        except KeyboardInterrupt:
+            self.ai.abort_current()
+            rot_say("AI response interrupted.")
+            return
 
 
 def _run_rot_command(arguments):
     try:
         parsed = parse_args(arguments)
     except SystemExit:
-        return
+        return None
     result = parsed.func(parsed)
     if result is PUSH_CANCELLED:
-        return
+        return 0
+    return result
 
 
 def evaluate_input(session, line, header=None):
-    try:
-        arguments = shlex.split(line)
-    except ValueError as error:
-        rot_say(f"Could not parse command: {error}")
-        return True
-    if not arguments:
+    route = route_input(line)
+    if route.kind == "empty":
         return True
 
+    if route.kind == "error":
+        rot_say(route.value)
+        return True
+    if route.kind == "shell":
+        try:
+            returncode = run_shell(route.value, session.cwd)
+        except KeyboardInterrupt:
+            rot_say("Shell command interrupted.")
+            return True
+        if returncode != 0:
+            rot_say(f"Shell command exited with status {returncode}.")
+        return True
+    if route.kind == "ai":
+        try:
+            session.send_ai(route.value)
+        except (
+            ContextInspectionError,
+            loader.ContextError,
+            machines.MachineContextError,
+            people.PersonContextError
+        ) as error:
+            rot_say(str(error))
+        return True
+
+    arguments = route.value
     command = arguments[0].lower()
     if command in {"exit", "quit"} and len(arguments) == 1:
         return False
@@ -147,6 +204,22 @@ def evaluate_input(session, line, header=None):
         else:
             header.clear(session)
         return True
+    if command == "export":
+        if len(arguments) != 2 or "=" not in arguments[1]:
+            rot_say("Usage: export NAME=VALUE")
+            return True
+        name, value = arguments[1].split("=", 1)
+        if not name.isidentifier():
+            rot_say(f"Invalid environment variable name: {name}")
+            return True
+        os.environ[name] = value
+        return True
+    if command == "unset":
+        if len(arguments) != 2 or not arguments[1].isidentifier():
+            rot_say("Usage: unset NAME")
+            return True
+        os.environ.pop(arguments[1], None)
+        return True
     if command == "cd":
         if len(arguments) != 2:
             rot_say("Usage: cd PATH")
@@ -163,9 +236,27 @@ def evaluate_input(session, line, header=None):
         return True
 
     try:
-        _run_rot_command(arguments)
+        result = _run_rot_command(arguments)
     except KeyboardInterrupt:
         rot_say("Command interrupted.")
+        return True
+    changes_context = (
+        command == "machine"
+        or (
+            command == "context"
+            and (
+                len(arguments) == 1
+                or arguments[1] in {"inspect", "bind", "add", "mod", "delete"}
+            )
+        )
+    )
+    if result == 0 and changes_context and session.ai is not None:
+        try:
+            session.refresh_context()
+        except ContextInspectionError as error:
+            rot_say(f"Could not refresh session context.\n{error}")
+        else:
+            session.ai.mark_context_dirty()
     return True
 
 
@@ -206,6 +297,8 @@ def run_interactive():
             if not evaluate_input(session, line, header=header):
                 return 0
     finally:
+        if session.ai is not None:
+            session.ai.close()
         try:
             session.command_history.save()
         except HistoryError as error:

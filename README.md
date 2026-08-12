@@ -84,7 +84,69 @@ rot> wtf --deep rotbot/contexts
 rot> git status --fetch
 ```
 
-Unknown text is not interpreted as an implicit shell command or AI request.
+Interactive Rot also recognizes installed shell commands and runs them locally
+in the session's current directory, with normal pipes, redirects, environment,
+stdin, stdout, and stderr:
+
+```text
+rot> ls -lah
+rot> rg "CommandHistory" rotbot/ | head -20
+rot> python --version
+```
+
+Input is routed deterministically. Session built-ins run first, exact Rot
+commands use Rot's shared CLI parser, malformed Rot namespaces remain parser
+errors, and recognized executables run through the user's shell. Remaining
+natural language continues one OpenCode conversation for the lifetime of the
+current Rot session:
+
+```text
+rot> why is the project resolver designed this way?
+rot> yeah, but what happens after cd?
+```
+
+Use `? MESSAGE` to force conversation when a word is also an executable, and
+`! COMMAND` to force shell execution when a command overlaps Rot syntax:
+
+```text
+rot> ? find a clearer way to explain project matching
+rot> !git status --short
+```
+
+OpenCode starts lazily on the first conversational message. Interactive Rot
+uses OpenCode's official CLI session support and reuses the returned session ID
+for later conversational turns. After `cd` or a successful context-changing Rot
+command, the next AI turn refreshes shareable Rot context in that same session.
+
+Rot commands, shell commands, their output, and terminal command history are
+not automatically sent to AI. Natural-language fallback is configured without
+shell or edit permission; it is conversation, not authorization to execute.
+
+### Conversation ownership
+
+Rot owns the interactive AI conversation identity, canonical user/assistant
+transcript, semantic context state, and lifecycle. These are held by the active
+`RotSession` for this initial version and end when that Rot session exits.
+
+OpenCode is an execution backend. Its session ID is recorded as backend-state
+metadata beneath the Rot conversation; it is not the Rot conversation ID and is
+not the only copy of what was said. OpenCode may reuse its session as an
+efficient working cache, while Rot remains authoritative for the transcript.
+
+The installed OpenCode version stores sessions and transcripts persistently in
+its local SQLite database under `~/.local/share/opencode/opencode.db`. OpenCode
+exports also expose model-provider metadata. Provider-side inference state and
+operational retention are governed by provider APIs and policies; Rot does not
+currently inspect or delete those records. No local or cloud conversation purge
+command is implemented yet.
+
+These remain separate systems:
+
+```text
+CommandHistory   terminal recall and local input history
+AIConversation   user/assistant conversational transcript
+Rot context      curated user, assistant, machine, and project knowledge
+```
 
 ### Interactive command history
 

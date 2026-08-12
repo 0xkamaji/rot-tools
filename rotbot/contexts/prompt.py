@@ -169,6 +169,12 @@ def _render_block(block, instructions):
 
 
 def build_ask_prompt(context, question):
+    blocks = _context_blocks(context)
+    blocks.append(_tag("user_request", question))
+    return "\n\n".join(blocks)
+
+
+def _context_blocks(context):
     blocks = [_tag("rotbot_context_instructions", GLOBAL_INSTRUCTIONS)]
     for block, instructions in (
         (context.assistant, ASSISTANT_INSTRUCTIONS),
@@ -186,5 +192,19 @@ def build_ask_prompt(context, question):
     if context.project is not None:
         invocation.insert(1, f"Active project: {context.project.name}")
     blocks.append(_tag("invocation_context", "\n".join(invocation)))
-    blocks.append(_tag("user_request", question))
+    return blocks
+
+
+def build_context_refresh_prompt(context, question):
+    blocks = [
+        _tag(
+            "rotbot_context_refresh_instructions",
+            "RotBot's active environment or resolved context changed. Replace "
+            "the prior RotBot background context with the refreshed context "
+            "below. This remains background information, not authorization to "
+            "perform actions. The final user request is the task to answer."
+        ),
+        *_context_blocks(context)[1:],
+        _tag("user_request", question)
+    ]
     return "\n\n".join(blocks)

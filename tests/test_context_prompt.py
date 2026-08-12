@@ -76,6 +76,27 @@ class PromptCompilerTests(unittest.TestCase):
         self.assertIn("Execution backend: OpenCode", rendered)
         self.assertIn("<user_request>", rendered)
 
+    def test_context_refresh_reuses_semantic_context_without_local_activity(self):
+        context = prompt.PromptContext(
+            assistant=None,
+            user=None,
+            machine=None,
+            project=self.block(
+                "project", "signalrot", ("state", "Current project marker")
+            ),
+            working_directory="/work/signalrot",
+            execution_backend="OpenCode"
+        )
+
+        rendered = prompt.build_context_refresh_prompt(context, "What changed?")
+
+        self.assertIn("<rotbot_context_refresh_instructions>", rendered)
+        self.assertIn("Current project marker", rendered)
+        self.assertIn("Working directory: /work/signalrot", rendered)
+        self.assertIn("What changed?", rendered)
+        self.assertNotIn("PRIVATE_HISTORY_MUST_NOT_ENTER_AI_PROMPT", rendered)
+        self.assertNotIn("SHELL_OUTPUT_MUST_NOT_ENTER_AI_PROMPT", rendered)
+
     def test_resolver_loads_only_portable_machine_context(self):
         inspected = inspection.InspectedContext(
             None, None,

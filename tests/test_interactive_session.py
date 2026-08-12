@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 from rotbot import __main__ as rotbot
+from rotbot.session import ai as session_ai
 from rotbot.cli import parser as command_parser
 from rotbot.contexts import inspection
 from rotbot.session import interactive
@@ -164,7 +165,7 @@ class RotSessionTests(unittest.TestCase):
             result = interactive.evaluate_input(self.session, 'context show "broken')
 
         self.assertTrue(result)
-        self.assertIn("Could not parse command", rot_say.call_args.args[0])
+        self.assertIn("Could not parse input", rot_say.call_args.args[0])
 
     def test_all_normal_cli_command_families_use_shared_parser_and_handlers(self):
         cases = (
@@ -186,20 +187,95 @@ class RotSessionTests(unittest.TestCase):
             self.assertTrue(result)
             handler.assert_called_once()
 
-    def test_unknown_prose_uses_parser_error_without_invoking_ai(self):
-        with patch(
+    def test_unknown_prose_routes_to_session_ai(self):
+        with patch.object(self.session, "send_ai") as send_ai, patch(
             "rotbot.agents.runner.ask_agent"
-        ) as ask_agent, patch(
-            "rotbot.agents.runner.stream_agent"
-        ) as stream_agent, patch.object(command_parser, "rot_say") as rot_say:
+        ) as ask_agent:
             result = interactive.evaluate_input(
                 self.session, "what should we work on next?"
             )
 
         self.assertTrue(result)
         ask_agent.assert_not_called()
-        stream_agent.assert_not_called()
-        self.assertIn("invalid choice", rot_say.call_args.args[0])
+        send_ai.assert_called_once_with("what should we work on next?")
+
+    def test_rot_and_shell_routes_never_invoke_ai(self):
+        with patch.object(
+            command_parser, "git_status", return_value=0
+        ) as git_status, patch.object(
+            interactive, "run_shell", return_value=0
+        ) as run_shell, patch.object(self.session, "send_ai") as send_ai, patch(
+            "rotbot.session.shell.shutil.which",
+            side_effect=lambda name, path=None: "/bin/ls" if name == "ls" else None
+        ):
+            interactive.evaluate_input(self.session, "git status")
+            interactive.evaluate_input(self.session, "ls -lah")
+
+        git_status.assert_called_once()
+        run_shell.assert_called_once_with("ls -lah", self.session.cwd)
+        send_ai.assert_not_called()
+
+    def test_overrides_force_ai_and_shell(self):
+        with patch.object(self.session, "send_ai") as send_ai, patch.object(
+            interactive, "run_shell", return_value=0
+        ) as run_shell, patch.object(command_parser, "git_push") as git_push:
+            interactive.evaluate_input(self.session, "? find a better design")
+            interactive.evaluate_input(self.session, "!git push")
+
+        send_ai.assert_called_once_with("find a better design")
+        run_shell.assert_called_once_with("git push", self.session.cwd)
+        git_push.assert_not_called()
+
+    def test_export_and_unset_change_subsequent_shell_environment(self):
+        original = os.environ.get("ROT_INTERACTIVE_TEST")
+        try:
+            interactive.evaluate_input(
+                self.session, "export ROT_INTERACTIVE_TEST=present"
+            )
+            self.assertEqual(os.environ["ROT_INTERACTIVE_TEST"], "present")
+            interactive.evaluate_input(self.session, "unset ROT_INTERACTIVE_TEST")
+            self.assertNotIn("ROT_INTERACTIVE_TEST", os.environ)
+        finally:
+            if original is not None:
+                os.environ["ROT_INTERACTIVE_TEST"] = original
+            else:
+                os.environ.pop("ROT_INTERACTIVE_TEST", None)
+
+    def test_rot_typo_stays_deterministic_without_ai_or_shell(self):
+        with patch.object(command_parser, "rot_say") as parser_say, patch.object(
+            self.session, "send_ai"
+        ) as send_ai, patch.object(interactive, "run_shell") as run_shell:
+            result = interactive.evaluate_input(self.session, "git pusj")
+
+        self.assertTrue(result)
+        self.assertIn("invalid choice", parser_say.call_args.args[0])
+        send_ai.assert_not_called()
+        run_shell.assert_not_called()
+
+    def test_first_ai_turn_uses_context_then_followup_reuses_conversation(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        with patch.object(session_ai.AIConversation, "create", return_value=chat):
+            self.session.send_ai("first question")
+            self.session.send_ai("follow up")
+
+        self.assertIs(self.session.ai, chat)
+        self.assertEqual(chat.send.call_args_list, [
+            call("first question", self.session.context, self.session.cwd),
+            call("follow up", self.session.context, self.session.cwd)
+        ])
+
+    def test_cd_marks_rot_owned_ai_context_dirty(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        self.session.ai = chat
+        refreshed = inspected(self.second, project="signalrot")
+
+        with patch.object(
+            interactive, "inspect_current_context", return_value=refreshed
+        ), patch.object(interactive, "rot_say"):
+            interactive.evaluate_input(self.session, f'cd "{self.second}"')
+
+        self.assertIs(self.session.ai, chat)
+        chat.mark_context_dirty.assert_called_once_with()
 
     def test_exit_and_quit_end_session(self):
         self.assertFalse(interactive.evaluate_input(self.session, "exit"))
@@ -386,6 +462,34 @@ class InteractiveLoopTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIn("could not be saved", rot_say.call_args.args[0])
+
+    def test_deterministic_only_session_never_creates_ai_and_exit_closes_active_ai(self):
+        session = Mock()
+        session.ai = None
+        session.command_history.recent.return_value = []
+        input_backend = Mock()
+        input_backend.read.side_effect = ("pwd", "exit")
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader"), patch.object(
+            interactive, "interactive_input", return_value=input_backend
+        ), patch.object(session_ai.AIConversation, "create") as chat_type, patch.object(
+            interactive, "evaluate_input", side_effect=(True, False)
+        ):
+            result = interactive.run_interactive()
+
+        self.assertEqual(result, 0)
+        chat_type.assert_not_called()
+
+        session.ai = Mock()
+        input_backend.read.side_effect = EOFError()
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader"), patch.object(
+            interactive, "interactive_input", return_value=input_backend
+        ):
+            self.assertEqual(interactive.run_interactive(), 0)
+        session.ai.close.assert_called_once_with()
 
 
 class InteractiveUiTests(unittest.TestCase):
