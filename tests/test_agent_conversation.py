@@ -152,6 +152,17 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(backend.directory, Path("/new"))
         self.assertIsNone(backend.session_id)
 
+    def test_known_remote_state_exposes_observed_backend_session(self):
+        backend = conversation.OpenCodeBackend()
+        self.assertEqual(backend.known_remote_state(), ())
+
+        backend.session_id = "ses_observed"
+        references = backend.known_remote_state()
+
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].state_id, "ses_observed")
+        self.assertEqual(references[0].provider, "opencode")
+
     def test_failure_and_missing_backend_are_conversation_errors(self):
         backend = conversation.OpenCodeBackend()
         with patch.object(conversation, "which", return_value=None), self.assertRaisesRegex(

@@ -2,6 +2,7 @@ import argparse
 
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
+from rotbot.commands.ai import ai_session_show, ai_sessions
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.wtf import directory_report
@@ -164,6 +165,40 @@ def create_parser():
     )
     _add_agent_argument(ask_parser)
     ask_parser.set_defaults(func=ask_agent)
+
+    ai_parser = commands.add_parser(
+        "ai",
+        help="Inspect locally stored Rot AI conversations"
+    )
+    ai_commands = ai_parser.add_subparsers(dest="ai_command")
+    ai_parser.set_defaults(func=show_command_help, command_parser=ai_parser)
+
+    ai_sessions_parser = ai_commands.add_parser(
+        "sessions",
+        help="List locally stored Rot AI conversations"
+    )
+    ai_sessions_parser.set_defaults(func=ai_sessions)
+
+    ai_session_parser = ai_commands.add_parser(
+        "session",
+        help="Inspect one locally stored Rot AI conversation"
+    )
+    ai_session_commands = ai_session_parser.add_subparsers(dest="ai_session_command")
+    ai_session_parser.set_defaults(
+        func=show_command_help,
+        command_parser=ai_session_parser
+    )
+
+    ai_session_show_parser = ai_session_commands.add_parser(
+        "show",
+        help="Show metadata and transcript for one Rot conversation"
+    )
+    ai_session_show_parser.add_argument(
+        "id",
+        nargs="?",
+        help="Optional Rot conversation ID; omit to choose from a numbered list"
+    )
+    ai_session_show_parser.set_defaults(func=ai_session_show)
 
     pull_parser = commands.add_parser(
         "pull",

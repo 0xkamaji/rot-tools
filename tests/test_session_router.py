@@ -26,6 +26,8 @@ class InputRouterTests(unittest.TestCase):
         self.assertEqual(self.route("git status", {"git"}).kind, "rot")
         self.assertEqual(self.route("git pusj", {"git"}).kind, "rot")
         self.assertEqual(self.route("context inspekt").kind, "rot")
+        self.assertEqual(self.route("ai sessions", {"ai"}).kind, "rot")
+        self.assertEqual(self.route("ai sesions", {"ai"}).kind, "rot")
 
     def test_executable_and_shell_builtin_route_to_shell(self):
         self.assertEqual(self.route("ls -lah", {"ls"}).kind, "shell")

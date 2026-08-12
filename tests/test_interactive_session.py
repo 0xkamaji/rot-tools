@@ -365,11 +365,15 @@ class RotSessionTests(unittest.TestCase):
 
     def test_first_ai_turn_uses_context_then_followup_reuses_conversation(self):
         chat = Mock(spec=session_ai.AIConversation)
-        with patch.object(session_ai.AIConversation, "create", return_value=chat):
+        with patch.object(
+            session_ai.AIConversation, "create", return_value=chat
+        ) as create:
             self.session.send_ai("first question")
             self.session.send_ai("follow up")
 
         self.assertIs(self.session.ai, chat)
+        create.assert_called_once()
+        self.assertIsInstance(create.call_args.kwargs["store"], interactive.ConversationStore)
         self.assertEqual(chat.send.call_args_list, [
             call("first question", self.session.context, self.session.cwd, authority="TALK"),
             call("follow up", self.session.context, self.session.cwd, authority="TALK")
@@ -391,6 +395,36 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertEqual(self.session.ai_status, "active")
         response.assert_called_once_with(self.session, "A conversational answer")
+
+    def test_shell_and_rot_commands_do_not_create_ai_conversation_storage(self):
+        with patch.object(
+            command_parser, "git_status", return_value=0
+        ), patch.object(
+            interactive, "run_shell", return_value=0
+        ), patch.object(
+            session_ai.AIConversation, "create"
+        ) as create, patch(
+            "rotbot.session.shell.shutil.which",
+            side_effect=lambda name, path=None: "/bin/ls" if name == "ls" else None
+        ):
+            interactive.evaluate_input(self.session, "git status")
+            interactive.evaluate_input(self.session, "ls -lah")
+
+        create.assert_not_called()
+        self.assertIsNone(self.session.ai)
+
+    def test_ai_sessions_receives_current_rot_conversation_id(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.id = "rotconv_" + "a" * 32
+        chat.remote_state = []
+        self.session.ai = chat
+        with patch.object(
+            command_parser, "ai_sessions", return_value=0
+        ) as sessions:
+            interactive.evaluate_input(self.session, "ai sessions")
+
+        args = sessions.call_args.args[0]
+        self.assertEqual(args.active_conversation_id, chat.id)
 
     def test_cd_marks_rot_owned_ai_context_dirty(self):
         chat = Mock(spec=session_ai.AIConversation)

@@ -190,8 +190,31 @@ history.
 ### Conversation ownership
 
 Rot owns the interactive AI conversation identity, canonical user/assistant
-transcript, semantic context state, and lifecycle. These are held by the active
-`RotSession` for this initial version and end when that Rot session exits.
+transcript, context provenance, and lifecycle. The first conversational turn
+creates a private local record under:
+
+```text
+$XDG_DATA_HOME/rotbot/conversations/rotconv_<id>/
+    metadata.toml
+    transcript.jsonl
+```
+
+Without `XDG_DATA_HOME`, the default root is
+`~/.local/share/rotbot/conversations/`. Directories use mode `0700` and files
+use mode `0600` on Unix-like systems. User messages are appended before calling
+the backend, assistant messages are appended after successful inference, and
+failed or interrupted user turns remain recorded. Graceful exit marks the
+conversation closed but does not delete it.
+
+Inspect the local records with:
+
+```bash
+rot ai sessions
+rot ai session show
+rot ai session show rotconv_<id>
+```
+
+Omit the ID to choose a conversation from a numbered menu.
 
 OpenCode is an execution backend. Its session ID is recorded as backend-state
 metadata beneath the Rot conversation; it is not the Rot conversation ID and is
@@ -205,6 +228,12 @@ operational retention are governed by provider APIs and policies; Rot does not
 currently inspect or delete those records. No local or cloud conversation purge
 command is implemented yet.
 
+Raw Rot conversations are currently retained locally indefinitely. There is no
+automatic summarization, Qwen processing, memory extraction, semantic-context
+promotion, expiration, synchronization, or provider deletion. Saving the local
+transcript does not send additional information to a provider; cloud exposure
+is still determined only by the existing AI routing and context compiler.
+
 These remain separate systems:
 
 ```text
@@ -212,6 +241,13 @@ CommandHistory   terminal recall and local input history
 AIConversation   user/assistant conversational transcript
 Rot context      curated user, assistant, machine, and project knowledge
 ```
+
+Command history records what was typed for terminal recall. AI conversation
+history records only conversational user/Rot turns. Persistent context records
+what Rot durably knows in the portable context tree. Shell commands, shell
+output, deterministic Rot commands, and command history are not copied into AI
+conversation transcripts. Conversation storage stays outside `context/`, is not
+portable semantic context, and is not included by `rot push`.
 
 ### Interactive command history
 

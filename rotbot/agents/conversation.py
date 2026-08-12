@@ -178,6 +178,17 @@ class OpenCodeBackend:
         if self.current_process is not None:
             self.current_process.terminate()
 
+    def known_remote_state(self):
+        if self.session_id is None:
+            return ()
+        return (BackendStateReference(
+            layer="backend",
+            provider="opencode",
+            state_type="session",
+            state_id=self.session_id,
+            persistence="local_persistent"
+        ),)
+
     def close(self):
         self.abort_current()
 

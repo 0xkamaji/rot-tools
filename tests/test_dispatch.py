@@ -14,6 +14,17 @@ class ParserDispatchTests(unittest.TestCase):
             "ask_agent",
             {"question": ["what", "now"], "agent": "codex"}
         ),
+        (["ai", "sessions"], "ai_sessions", {"ai_command": "sessions"}),
+        (
+            ["ai", "session", "show", "rotconv_abc"],
+            "ai_session_show",
+            {"ai_session_command": "show", "id": "rotconv_abc"}
+        ),
+        (
+            ["ai", "session", "show"],
+            "ai_session_show",
+            {"ai_session_command": "show", "id": None}
+        ),
         (["pull"], "git_pull", {"command": "pull"}),
         (
             [
@@ -205,7 +216,10 @@ class ParserDispatchTests(unittest.TestCase):
                     self.assertEqual(getattr(args, name), expected)
 
     def test_unknown_commands_are_rejected(self):
-        for argv in (["unknown"], ["sr", "unknown"], ["machine", "unknown"]):
+        for argv in (
+            ["unknown"], ["ai", "unknown"], ["ai", "session", "unknown"],
+            ["sr", "unknown"], ["machine", "unknown"]
+        ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
 
@@ -225,6 +239,8 @@ class ParserDispatchTests(unittest.TestCase):
     def test_command_groups_show_scoped_next_steps(self):
         cases = (
             (["git"], ("pull", "push", "status")),
+            (["ai"], ("sessions", "session")),
+            (["ai", "session"], ("show",)),
             (["machine"], ("inspect",)),
             (["sr"], ("status", "context", "diff", "pull", "push", "publish"))
         )
@@ -306,6 +322,7 @@ class ParserDispatchTests(unittest.TestCase):
         message = rot_say.call_args.args[0]
         self.assertIn("ROTBOT VERBOSE HELP", message)
         self.assertIn("COMMAND: rotbot git status", message)
+        self.assertIn("COMMAND: rotbot ai session show", message)
         self.assertIn("COMMAND: rotbot context add", message)
         self.assertIn("COMMAND: rotbot context inspect", message)
         self.assertIn("COMMAND: rotbot machine inspect", message)
@@ -315,7 +332,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 16)
+        self.assertEqual(message.count("=" * 60), 18)
         self.assertLess(
             message.index("COMMAND: rotbot git status"),
             message.index("COMMAND: rotbot wtf")

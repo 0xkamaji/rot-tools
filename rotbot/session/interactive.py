@@ -13,6 +13,7 @@ from rotbot.contexts.inspection import (
     inspect_current_context
 )
 from rotbot.session.ai import AIConversation
+from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
 from rotbot.session.router import route_input
 from rotbot.session.shell import run_shell
@@ -52,6 +53,8 @@ Rot commands can also be entered directly, including:
   context list
   context show NAME
   machine inspect
+  ai sessions
+  ai session show ROT_CONVERSATION_ID
 
 Shell commands may be entered directly:
 
@@ -141,7 +144,7 @@ class RotSession:
             rot_say("Usage: ? MESSAGE")
             return
         if self.ai is None:
-            self.ai = AIConversation.create()
+            self.ai = AIConversation.create(store=ConversationStore())
         try:
             result = self.ai.send(
                 message,
@@ -149,7 +152,7 @@ class RotSession:
                 self.cwd,
                 authority=self.authority_mode
             )
-        except ConversationError as error:
+        except (ConversationError, ConversationStoreError) as error:
             rot_say(str(error))
             return
         except KeyboardInterrupt:
@@ -160,11 +163,14 @@ class RotSession:
             render_rot_response(self, result.response)
 
 
-def _run_rot_command(arguments):
+def _run_rot_command(arguments, session=None):
     try:
         parsed = parse_args(arguments)
     except SystemExit:
         return None
+    parsed.active_conversation_id = (
+        session.ai.id if session is not None and session.ai is not None else None
+    )
     result = parsed.func(parsed)
     if result is PUSH_CANCELLED:
         return 0
@@ -295,7 +301,7 @@ def evaluate_input(session, line, header=None):
 
     try:
         previous_project_id = session.context.project_id
-        result = _run_rot_command(arguments)
+        result = _run_rot_command(arguments, session)
     except KeyboardInterrupt:
         rot_say("Command interrupted.")
         return True
@@ -366,7 +372,10 @@ def run_interactive():
                 return 0
     finally:
         if session.ai is not None:
-            session.ai.close()
+            try:
+                session.ai.close()
+            except ConversationStoreError as error:
+                rot_say(f"Warning: AI conversation could not be closed.\n{error}")
         try:
             session.command_history.save()
         except HistoryError as error:
