@@ -47,76 +47,43 @@ class SshPushPreflightTests(unittest.TestCase):
         run.assert_not_called()
         self.assertIn("Could not determine", rot_say.call_args.args[0])
 
-    def test_empty_agent_loads_default_key_and_verifies_remote(self):
-        key = Path.home() / ".ssh" / "id_ed25519"
-        responses = (
-            self.completed(["ssh-add", "-l"], returncode=1),
-            self.completed(["ssh-add", "-t", "1h", str(key)]),
-            self.completed(["git", "ls-remote"], stdout="ref\n")
-        )
-
+    def test_ssh_configured_identity_verifies_without_an_agent(self):
         with patch.object(
             git_commands,
             "_push_remote_url",
-            return_value="git@github.com:example/repo.git"
-        ), patch.object(Path, "is_file", return_value=True), patch.object(
+            return_value="git@github-work:example/repo.git"
+        ), patch.object(
             git_commands.subprocess,
             "run",
-            side_effect=responses
+            return_value=self.completed(["git", "ls-remote"], stdout="ref\n")
         ) as run, patch.object(git_commands, "rot_say") as rot_say:
             result = git_commands._preflight_ssh_push(
                 Path("/repo"), "main", "origin/main"
             )
 
         self.assertIsInstance(result, dict)
-        self.assertEqual(
-            run.call_args_list[1].args[0],
-            ["ssh-add", "-t", "1h", str(key)]
-        )
-        self.assertEqual(run.call_args_list[2].args[0][:2], ["git", "ls-remote"])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][:2], ["git", "ls-remote"])
+        environment = run.call_args.kwargs["env"]
+        self.assertIn("BatchMode=yes", environment["GIT_SSH_COMMAND"])
+        self.assertNotIn("-i", environment["GIT_SSH_COMMAND"].split())
         self.assertIn("verified", rot_say.call_args.args[0])
 
-    def test_key_load_failure_stops_before_remote_check(self):
-        responses = (
-            self.completed(["ssh-add", "-l"], returncode=1),
-            self.completed(["ssh-add", "key"], returncode=1)
-        )
-
-        with patch.dict(git_commands.os.environ, {"GIT_SSH_COMMAND": "custom-ssh"}), patch.object(
-            git_commands,
-            "_push_remote_url",
-            return_value="ssh://git@example.com/repo.git"
-        ), patch.object(Path, "is_file", return_value=True), patch.object(
-            git_commands.subprocess,
-            "run",
-            side_effect=responses
-        ) as run, patch.object(git_commands, "rot_say") as rot_say:
-            result = git_commands._preflight_ssh_push(
-                Path("/repo"), "main", "origin/main"
-            )
-
-        self.assertIsNone(result)
-        self.assertEqual(run.call_count, 2)
-        self.assertIn("Could not load", rot_say.call_args.args[0])
-
     def test_remote_authentication_failure_is_actionable(self):
-        responses = (
-            self.completed(["ssh-add", "-l"], stdout="fingerprint key\n"),
-            self.completed(
-                ["git", "ls-remote"],
-                returncode=128,
-                stderr="Permission denied (publickey)."
-            )
+        response = self.completed(
+            ["git", "ls-remote"],
+            returncode=128,
+            stderr="Permission denied (publickey)."
         )
 
         with patch.object(
             git_commands,
             "_push_remote_url",
             return_value="git@github.com:example/repo.git"
-        ), patch.object(Path, "is_file", return_value=False), patch.object(
+        ), patch.object(
             git_commands.subprocess,
             "run",
-            side_effect=responses
+            return_value=response
         ), patch.object(git_commands, "rot_say") as rot_say:
             result = git_commands._preflight_ssh_push(
                 Path("/repo"), "main", "origin/main"
@@ -125,13 +92,9 @@ class SshPushPreflightTests(unittest.TestCase):
         self.assertIsNone(result)
         message = rot_say.call_args.args[0]
         self.assertIn("Permission denied (publickey)", message)
-        self.assertIn("ssh-add", message)
+        self.assertIn("SSH configuration", message)
 
     def test_custom_ssh_command_is_preserved_for_verification(self):
-        responses = (
-            self.completed(["ssh-add", "-l"], stdout="fingerprint key\n"),
-            self.completed(["git", "ls-remote"], stdout="ref\n")
-        )
         with patch.dict(
             git_commands.os.environ,
             {"GIT_SSH_COMMAND": "ssh-wrapper --policy strict"}
@@ -142,7 +105,7 @@ class SshPushPreflightTests(unittest.TestCase):
         ), patch.object(
             git_commands.subprocess,
             "run",
-            side_effect=responses
+            return_value=self.completed(["git", "ls-remote"], stdout="ref\n")
         ), patch.object(git_commands, "rot_say"):
             environment = git_commands._preflight_ssh_push(
                 Path("/repo"), "main", "origin/main"
@@ -152,28 +115,6 @@ class SshPushPreflightTests(unittest.TestCase):
             environment["GIT_SSH_COMMAND"],
             "ssh-wrapper --policy strict"
         )
-
-    def test_unavailable_agent_uses_default_key_directly(self):
-        key = Path.home() / ".ssh" / "id_ed25519"
-        responses = (
-            self.completed(["ssh-add", "-l"], returncode=2),
-            self.completed(["git", "ls-remote"], stdout="ref\n")
-        )
-        with patch.object(
-            git_commands,
-            "_push_remote_url",
-            return_value="git@example.com:repo.git"
-        ), patch.object(Path, "is_file", return_value=True), patch.object(
-            git_commands.subprocess,
-            "run",
-            side_effect=responses
-        ), patch.object(git_commands, "rot_say"):
-            environment = git_commands._preflight_ssh_push(
-                Path("/repo"), "main", "origin/main"
-            )
-
-        self.assertIn(str(key), environment["GIT_SSH_COMMAND"])
-        self.assertIn("IdentitiesOnly=yes", environment["GIT_SSH_COMMAND"])
 
     def test_push_remote_resolution_supports_remote_names_with_slashes(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

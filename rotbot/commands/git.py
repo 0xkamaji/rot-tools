@@ -420,14 +420,11 @@ def _ssh_remote_host(remote_url):
     return match.group(1) if match else None
 
 
-def _ssh_push_environment(default_key=None):
+def _ssh_push_environment():
     environment = os.environ.copy()
     environment["GIT_TERMINAL_PROMPT"] = "0"
     if "GIT_SSH_COMMAND" not in environment:
-        command = ["ssh"]
-        if default_key is not None:
-            command.extend(["-i", str(default_key), "-o", "IdentitiesOnly=yes"])
-        command.extend(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
         environment["GIT_SSH_COMMAND"] = shlex.join(command)
     return environment
 
@@ -455,97 +452,22 @@ def _preflight_ssh_push(repository, branch, upstream):
     if host is None:
         return os.environ.copy()
 
-    default_key = Path.home() / ".ssh" / "id_ed25519"
     environment = _ssh_push_environment()
-    direct_key = False
-    try:
-        identities = subprocess.run(
-            ["ssh-add", "-l"],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-    except FileNotFoundError:
-        rot_say("OpenSSH tools are required to use an SSH Git remote.")
-        return None
-
-    if identities.returncode == 1:
-        if default_key.is_file():
-            rot_say(
-                "SSH agent has no identities. Loading the default key for one hour:\n"
-                f"{default_key}"
-            )
-            try:
-                loaded = subprocess.run(
-                    ["ssh-add", "-t", "1h", str(default_key)],
-                    check=False
-                )
-            except FileNotFoundError:
-                rot_say("OpenSSH tools are required to load an SSH key.")
-                return None
-            if loaded.returncode != 0:
-                if "GIT_SSH_COMMAND" in os.environ:
-                    rot_say(
-                        "Could not load the default SSH key. No Git changes were made.\n\n"
-                        f"Run in an interactive terminal:\n  ssh-add {default_key}"
-                    )
-                    return None
-                environment = _ssh_push_environment(default_key)
-                direct_key = True
-        else:
-            rot_say(
-                "SSH agent has no identities and the default key does not exist:\n"
-                f"{default_key}"
-            )
-            return None
-    elif identities.returncode != 0:
-        if default_key.is_file() and "GIT_SSH_COMMAND" not in os.environ:
-            rot_say("SSH agent is unavailable. Testing the default key directly.")
-            environment = _ssh_push_environment(default_key)
-            direct_key = True
-        else:
-            rot_say(
-                "Could not access the SSH agent. No Git changes were made.\n\n"
-                "Start an SSH agent and load a key before pushing."
-            )
-            return None
-
     try:
         access = _check_remote_access(repository, remote_url, environment)
     except FileNotFoundError:
         rot_say("Git or SSH is not installed or is not available in PATH.")
         return None
-    if (
-        access.returncode != 0
-        and not direct_key
-        and default_key.is_file()
-        and "GIT_SSH_COMMAND" not in os.environ
-    ):
-        direct_environment = _ssh_push_environment(default_key)
-        try:
-            direct_access = _check_remote_access(
-                repository,
-                remote_url,
-                direct_environment
-            )
-        except FileNotFoundError:
-            direct_access = None
-        if direct_access is not None and direct_access.returncode == 0:
-            access = direct_access
-            environment = direct_environment
-            direct_key = True
     if access.returncode != 0:
         detail = access.stderr.strip()
         rot_say(
             f"Could not authenticate to the SSH push remote at {host}. "
             "No Git changes were made.\n\n"
             + (f"{detail}\n\n" if detail else "")
-            + "Load the correct key, then retry:\n"
-            f"  ssh-add {Path.home() / '.ssh' / 'id_ed25519'}"
+            + "Check the host's SSH configuration and available identities, then retry."
         )
         return None
-    method = "default key" if direct_key else "SSH agent"
-    rot_say(f"SSH push access verified for {host} using the {method}.")
+    rot_say(f"SSH push access verified for {host}.")
     return environment
 
 
