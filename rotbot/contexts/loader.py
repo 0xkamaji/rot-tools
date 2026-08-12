@@ -1,19 +1,22 @@
 import json
+import os
 from pathlib import Path
 import re
 import tomllib
 from typing import NamedTuple
 
+from rotbot.contexts import documents
 from rotbot.contexts.identifiers import (
     ContextIdentifierError,
     legacy_context_id,
     new_context_id,
     validate_context_id
 )
+from rotbot.contexts.paths import contexts_root
 from rotbot.ui.terminal import rot_continue, rot_say, rot_table
 
 
-CONTEXT_ROOT = Path(__file__).resolve().parents[2] / "context"
+CONTEXT_ROOT = contexts_root()
 PROJECT_CONTEXT_CATEGORY = "projects"
 CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -53,6 +56,20 @@ def project_context_directory(name):
     return CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY / name
 
 
+def _existing_project_document(directory, filename):
+    candidates = (
+        directory / "local" / filename,
+        directory / "shareable" / filename,
+        directory / filename
+    )
+    for path in candidates:
+        if path.is_symlink():
+            raise ContextError(f"Invalid {filename.removesuffix('.md')} document for context: {directory.name}")
+        if path.is_file():
+            return path
+    return candidates[0]
+
+
 def context_paths(name):
     root = CONTEXT_ROOT.resolve()
     category = CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY
@@ -73,16 +90,10 @@ def context_paths(name):
     ):
         raise ContextError(f"Unknown or invalid context: {name}")
 
-    identity_path = resolved_directory / "identity.md"
-    state_path = resolved_directory / "state.md"
-    if (
-        identity_path.is_symlink()
-        or state_path.is_symlink()
-        or not identity_path.is_file()
-        or not state_path.is_file()
-    ):
+    identity_path = _existing_project_document(resolved_directory, "identity.md")
+    state_path = _existing_project_document(resolved_directory, "state.md")
+    if not identity_path.is_file() or not state_path.is_file():
         raise ContextError(f"Unknown or invalid context: {name}")
-
     return identity_path, state_path
 
 
@@ -91,8 +102,11 @@ def _context_paths(name):
 
 
 def list_contexts():
+    category = CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY
+    if not category.exists():
+        return ()
     try:
-        entries = tuple((CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY).iterdir())
+        entries = tuple(category.iterdir())
     except OSError as error:
         raise ContextError(f"Could not list contexts: {error}") from None
 
@@ -106,9 +120,27 @@ def list_contexts():
     return tuple(sorted(names))
 
 
-def load_context(name):
-    identity_path, state_path = context_paths(name)
-    metadata_path = identity_path.parent / "metadata.toml"
+def _project_content(directory, filename, view):
+    try:
+        paths = documents.semantic_files(
+            directory, view,
+            {"identity.md", "state.md", "vision.md", "match.md"},
+            include_legacy_local=view == "full"
+        )
+    except documents.ContextDocumentError as error:
+        raise ContextError(str(error)) from None
+    values = [path.read_text(encoding="utf-8") for path in paths if path.name == filename]
+    return "\n\n".join(value.rstrip() for value in values if value.strip()) + (
+        "\n" if any(value.strip() for value in values) else ""
+    )
+
+
+def load_context(name, *, view="full"):
+    identity_path, _state_path = context_paths(name)
+    directory = identity_path.parent
+    if directory.name in {"local", "shareable"}:
+        directory = directory.parent
+    metadata_path = directory / "metadata.toml"
     try:
         if metadata_path.exists():
             if metadata_path.is_symlink() or not metadata_path.is_file():
@@ -121,8 +153,8 @@ def load_context(name):
             context_id = legacy_context_id("project", name)
         return Context(
             name=name,
-            identity=identity_path.read_text(encoding="utf-8"),
-            state=state_path.read_text(encoding="utf-8"),
+            identity=_project_content(directory, "identity.md", view),
+            state=_project_content(directory, "state.md", view),
             id=context_id
         )
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, ContextIdentifierError) as error:
@@ -144,22 +176,26 @@ def load_context_reference(reference):
 
 def load_vision(name):
     identity_path, _state_path = context_paths(name)
-    vision_path = identity_path.parent / "vision.md"
-    if vision_path.is_symlink():
-        raise ContextError(f"Invalid vision document for context: {name}")
-    if not vision_path.exists():
+    directory = identity_path.parent
+    if directory.name in {"local", "shareable"}:
+        directory = directory.parent
+    paths = [
+        path for path in (
+            directory / "shareable" / "vision.md",
+            directory / "local" / "vision.md",
+            directory / "vision.md"
+        ) if path.exists() or path.is_symlink()
+    ]
+    if not paths:
         return None
-    if not vision_path.is_file():
-        raise ContextError(f"Invalid vision document for context: {name}")
-
-    try:
-        return vision_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise ContextError(f"Could not load vision for context '{name}': {error}") from None
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ContextError(f"Invalid vision document for context: {name}")
+    return "\n\n".join(path.read_text(encoding="utf-8").rstrip() for path in paths)
 
 
-def build_context_prompt(name):
-    context = load_context(name)
+def build_context_prompt(name, *, view="full"):
+    context = load_context(name, view=view)
     label = context.name.upper()
     return (
         f"{label} CONTEXT IDENTITY (READ-ONLY)\n"
@@ -173,8 +209,14 @@ def build_context_prompt(name):
 
 def atomic_replace_state(name, content):
     _identity_path, state_path = context_paths(name)
+    directory = state_path.parent.parent if state_path.parent.name in {"local", "shareable"} else state_path.parent
+    local = directory / "local"
+    local.mkdir(mode=0o700, exist_ok=True)
+    state_path = local / "state.md"
     temporary_path = state_path.with_suffix(".tmp")
     temporary_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(temporary_path, 0o600)
     temporary_path.replace(state_path)
 
 

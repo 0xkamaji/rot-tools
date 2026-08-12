@@ -7,9 +7,13 @@ from rotbot.agents.conversation import OpenCodeBackend, TextDelta
 from rotbot.contexts.prompt import (
     build_ask_prompt,
     build_context_refresh_prompt,
-    resolve_prompt_context
+    resolve_egress_context
 )
 from rotbot.session.conversations import ConversationStore
+
+
+# Compatibility name for tests/extensions; both names are the same egress gate.
+resolve_prompt_context = resolve_egress_context
 
 
 def _transcript_block(messages):

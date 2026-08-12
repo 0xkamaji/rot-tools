@@ -62,19 +62,19 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
             "deployment diff"
         )
 
-    def test_existing_prompt_block_still_reads_both_signalrot_files(self):
+    def test_existing_local_signalrot_files_are_excluded_from_prompt(self):
         block = signalrot_context.signalrot_context_block()
         identity_path, state_path = loader.context_paths("signalrot")
 
         self.assertEqual(
             identity_path.parent,
-            loader.CONTEXT_ROOT / "projects" / "signalrot"
+            loader.CONTEXT_ROOT / "projects" / "signalrot" / "local"
         )
-        self.assertIn(
+        self.assertNotIn(
             identity_path.read_text(encoding="utf-8"),
             block
         )
-        self.assertIn(
+        self.assertNotIn(
             state_path.read_text(encoding="utf-8"),
             block
         )
@@ -84,10 +84,17 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
             root = Path(temporary_directory)
             context_directory = root / "projects" / "signalrot"
             context_directory.mkdir(parents=True)
-            identity_path = context_directory / "identity.md"
-            state_path = context_directory / "state.md"
-            vision_path = context_directory / "vision.md"
-            match_path = context_directory / "match.md"
+            shareable = context_directory / "shareable"
+            local = context_directory / "local"
+            shareable.mkdir()
+            local.mkdir()
+            identity_path = shareable / "identity.md"
+            state_path = shareable / "state.md"
+            vision_path = shareable / "vision.md"
+            match_path = shareable / "match.md"
+            (context_directory / "metadata.toml").write_text(
+                loader.render_project_metadata("signalrot"), encoding="utf-8"
+            )
             identity_path.write_text("identity only", encoding="utf-8")
             state_path.write_text("state only", encoding="utf-8")
             vision_path.write_text("vision must stay separate", encoding="utf-8")
@@ -105,18 +112,27 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             project = root / "context" / "projects" / "signalrot"
-            project.mkdir(parents=True)
-            (project / "identity.md").write_text(
+            shareable = project / "shareable"
+            local_project = project / "local"
+            shareable.mkdir(parents=True)
+            local_project.mkdir()
+            (project / "metadata.toml").write_text(
+                loader.render_project_metadata("signalrot"), encoding="utf-8"
+            )
+            (shareable / "identity.md").write_text(
                 "project identity", encoding="utf-8"
             )
-            (project / "state.md").write_text("project state", encoding="utf-8")
+            (shareable / "state.md").write_text("project state", encoding="utf-8")
+            (local_project / "identity.md").write_text(
+                "ROT_LOCAL_SECRET_SENTINEL_93A7", encoding="utf-8"
+            )
             machine_root = root / "context" / "machines"
             machine_root.mkdir()
             machine = machines.create_machine(
                 "signalrot",
                 machines_root=machine_root
             )
-            (machine / "identity.md").write_text(
+            (machine / "local" / "identity.md").write_text(
                 "machine identity sentinel", encoding="utf-8"
             )
             config = root / "config" / "rotbot" / "config.toml"
@@ -136,12 +152,10 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         self.assertIn("project state", block)
         self.assertNotIn("machine identity sentinel", block)
         self.assertNotIn("local sentinel", block)
+        self.assertNotIn("ROT_LOCAL_SECRET_SENTINEL_93A7", block)
         load_local.assert_not_called()
 
     def test_signalrot_ai_review_uses_generic_context_prompt(self):
-        identity_path, state_path = loader.context_paths("signalrot")
-        match_path = identity_path.parent / "match.md"
-
         with patch.object(
             signalrot,
             "stream_agent",
@@ -151,9 +165,8 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         prompt = stream_agent.call_args.args[0]
-        self.assertIn(identity_path.read_text(encoding="utf-8"), prompt)
-        self.assertIn(state_path.read_text(encoding="utf-8"), prompt)
-        self.assertNotIn(match_path.read_text(encoding="utf-8"), prompt)
+        self.assertNotIn("# SignalRot Identity", prompt)
+        self.assertNotIn("# SignalRot Current State", prompt)
 
     def test_refresh_modifies_only_state(self):
         refreshed_at = "2026-08-10 17:16 UTC"
@@ -216,7 +229,7 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
                 "match unchanged"
             )
             self.assertEqual(
-                state_path.read_text(encoding="utf-8"),
+                (context_directory / "local" / "state.md").read_text(encoding="utf-8"),
                 output + "\n"
             )
             self.assertFalse((context_directory / "state.tmp").exists())

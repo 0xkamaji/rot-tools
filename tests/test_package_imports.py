@@ -2,9 +2,12 @@ import importlib
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from rotbot.agents import ask_agent, stream_agent
+from rotbot.contexts import loader
 from rotbot.contexts.matching import match_contexts
 
 
@@ -72,7 +75,26 @@ class PackageImportTests(unittest.TestCase):
 
     def test_rotbot_repository_matches_only_rotbot_context(self):
         repository = Path(__file__).resolve().parent.parent
-        candidates = match_contexts(repository, binding_type="source", caddy_paths=())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "contexts"
+            project = root / "projects" / "rotbot"
+            local = project / "local"
+            local.mkdir(parents=True)
+            (project / "metadata.toml").write_text(
+                loader.render_project_metadata("rotbot"), encoding="utf-8"
+            )
+            (local / "identity.md").write_text("identity", encoding="utf-8")
+            (local / "state.md").write_text("state", encoding="utf-8")
+            (local / "match.md").write_text(
+                "# Match\n\n## Source\n\nGit remotes:\n\n"
+                "- github.com/0xkamaji/rotbot\n\nRequired paths:\n\n"
+                "- rotbot/\n- tests/\n",
+                encoding="utf-8"
+            )
+            with patch.object(loader, "CONTEXT_ROOT", root):
+                candidates = match_contexts(
+                    repository, binding_type="source", caddy_paths=()
+                )
         strong = [candidate.name for candidate in candidates if candidate.strong]
 
         self.assertEqual(strong, ["rotbot"])

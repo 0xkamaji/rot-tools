@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import loader, modification, people
+from rotbot.contexts import entities, loader, modification, people
 
 
 class PersonModificationTests(unittest.TestCase):
@@ -12,16 +12,25 @@ class PersonModificationTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.context_root = Path(self.temporary_directory.name) / "context"
         self.context_root.mkdir()
-        self.people_root = self.context_root / "people"
-        self.people_root.mkdir()
-        for role in people.PERSON_ROLES:
-            (self.people_root / role).mkdir()
+        self.contacts = self.context_root / "contacts"
+        self.contacts.mkdir()
+        self.users = self.context_root / "users"
+        self.users.mkdir()
+        self.assistants = self.context_root / "assistants"
+        self.assistants.mkdir()
         self.projects = self.context_root / "projects"
         self.projects.mkdir()
         self.root_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
         self.root_patch.start()
+        self.builtins_patch = patch.object(
+            entities,
+            "builtin_assistants_root",
+            return_value=self.context_root / ".builtins" / "assistants"
+        )
+        self.builtins_patch.start()
 
     def tearDown(self):
+        self.builtins_patch.stop()
         self.root_patch.stop()
         self.temporary_directory.cleanup()
 
@@ -32,20 +41,25 @@ class PersonModificationTests(unittest.TestCase):
         display_name="Alex",
         related_projects=None
     ):
-        people.create_person_context(
-            name,
-            role,
-            display_name,
-            related_projects,
-            people_root=self.people_root
+        if role == "contact":
+            return people.create_person_context(
+                name, role, display_name, related_projects
+            )
+        entity = (
+            entities.build_user_context(name, display_name, related_projects)
+            if role == "user"
+            else entities.build_assistant_context(name, display_name, related_projects)
         )
-        return self.people_root / role / name
+        return entities.create_entity_context(entity, root=self.context_root)
 
     def create_project(self, name):
         destination = self.projects / name
         destination.mkdir()
-        (destination / "identity.md").write_text("identity", encoding="utf-8")
-        (destination / "state.md").write_text("state", encoding="utf-8")
+        local = destination / "local"
+        local.mkdir()
+        (destination / "shareable").mkdir()
+        (local / "identity.md").write_text("identity", encoding="utf-8")
+        (local / "state.md").write_text("state", encoding="utf-8")
         return destination
 
     def test_adds_predefined_category_without_modifying_metadata(self):
@@ -56,8 +70,7 @@ class PersonModificationTests(unittest.TestCase):
             "alex",
             "identity.md",
             "Background",
-            "Grew up near the coast.",
-            people_root=self.people_root
+            "Grew up near the coast."
         )
 
         content = updated.read_text(encoding="utf-8")
@@ -73,7 +86,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_existing_category_receives_information_before_next_category(self):
         destination = self.create_person()
-        identity = destination / "identity.md"
+        identity = destination / "local" / "identity.md"
         identity.write_text(
             "# Identity\n\n## Background\n\n- Existing.\n\n"
             "## Interests\n\n- Music.\n",
@@ -84,8 +97,7 @@ class PersonModificationTests(unittest.TestCase):
             "alex",
             "identity.md",
             "Background",
-            "New detail.",
-            people_root=self.people_root
+            "New detail."
         )
 
         content = identity.read_text(encoding="utf-8")
@@ -94,11 +106,11 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_role_controls_available_markdown_documents(self):
         self.create_person()
-        contact = people.load_person_context("alex", people_root=self.people_root)
+        contact = people.load_person_context("alex")
         self.create_person("kamaji", "user", "Kamaji")
-        user = people.load_person_context("kamaji", people_root=self.people_root)
+        user = entities.load_user_context("kamaji", root=self.context_root)
         self.create_person("rot", "assistant", "Rot")
-        assistant = people.load_person_context("rot", people_root=self.people_root)
+        assistant = entities.load_assistant_context("rot", root=self.context_root)
 
         self.assertEqual(
             modification.available_documents(contact),
@@ -108,7 +120,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertIn("priorities.md", modification.available_documents(user))
         self.assertEqual(
             modification.available_documents(assistant),
-            ("identity.md", "preferences.md", "relationship.md", "state.md")
+            ("identity.md", "behavior.md", "relationship.md", "state.md")
         )
         self.assertNotIn("metadata.toml", modification.available_documents(user))
         with self.assertRaises(modification.PersonModificationError):
@@ -116,13 +128,12 @@ class PersonModificationTests(unittest.TestCase):
                 "alex",
                 "experience.md",
                 "Professional",
-                "Not allowed.",
-                people_root=self.people_root
+                "Not allowed."
             )
 
     def test_invalid_input_duplicate_categories_and_symlinks_are_rejected(self):
         destination = self.create_person()
-        identity = destination / "identity.md"
+        identity = destination / "local" / "identity.md"
         original = "# Identity\n\n## Background\n\n- One.\n\n## Background\n\n- Two.\n"
         identity.write_text(original, encoding="utf-8")
         with self.assertRaises(modification.PersonModificationError):
@@ -130,8 +141,7 @@ class PersonModificationTests(unittest.TestCase):
                 "alex",
                 "identity.md",
                 "Background",
-                "Three.",
-                people_root=self.people_root
+                "Three."
             )
         self.assertEqual(identity.read_text(encoding="utf-8"), original)
 
@@ -143,8 +153,7 @@ class PersonModificationTests(unittest.TestCase):
                     "alex",
                     "identity.md",
                     category,
-                    information,
-                    people_root=self.people_root
+                    information
                 )
 
         identity.unlink()
@@ -153,13 +162,13 @@ class PersonModificationTests(unittest.TestCase):
         identity.symlink_to(outside)
         with self.assertRaises(modification.PersonModificationError):
             modification.add_person_information(
-                "alex", "identity.md", "Background", "Detail", people_root=self.people_root
+                "alex", "identity.md", "Background", "Detail"
             )
         self.assertEqual(outside.read_text(encoding="utf-8"), "outside")
 
     def test_failed_atomic_replace_preserves_original_and_cleans_temporary_file(self):
         destination = self.create_person()
-        identity = destination / "identity.md"
+        identity = destination / "local" / "identity.md"
         original = identity.read_text(encoding="utf-8")
 
         with patch.object(
@@ -171,8 +180,7 @@ class PersonModificationTests(unittest.TestCase):
                 "alex",
                 "identity.md",
                 "Background",
-                "Detail.",
-                people_root=self.people_root
+                "Detail."
             )
 
         self.assertEqual(identity.read_text(encoding="utf-8"), original)
@@ -182,26 +190,23 @@ class PersonModificationTests(unittest.TestCase):
         destination = self.create_person(
             related_projects=("rotbot",)
         )
-        identity = (destination / "identity.md").read_text(encoding="utf-8")
-        original_id = people.load_person_context(
-            "alex", people_root=self.people_root
-        ).id
+        identity = (destination / "local" / "identity.md").read_text(encoding="utf-8")
+        original_id = people.load_person_context("alex").id
 
         modification.replace_person_metadata(
             "alex",
             "Alex Updated",
-            ("rotbot", "signalrot"),
-            people_root=self.people_root
+            ("rotbot", "signalrot")
         )
 
-        loaded = people.load_person_context("alex", people_root=self.people_root)
+        loaded = people.load_person_context("alex")
         self.assertEqual(loaded.name, "alex")
         self.assertEqual(loaded.role, "contact")
         self.assertEqual(loaded.display_name, "Alex Updated")
         self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
         self.assertEqual(loaded.id, original_id)
         self.assertEqual(
-            (destination / "identity.md").read_text(encoding="utf-8"),
+            (destination / "local" / "identity.md").read_text(encoding="utf-8"),
             identity
         )
 
@@ -222,8 +227,7 @@ class PersonModificationTests(unittest.TestCase):
                 modification.replace_person_metadata(
                     "alex",
                     display_name,
-                    related_projects,
-                    people_root=self.people_root
+                    related_projects
                 )
             self.assertEqual(metadata.read_text(encoding="utf-8"), original)
 
@@ -238,7 +242,7 @@ class PersonModificationTests(unittest.TestCase):
             result = modification.context_mod(argparse.Namespace(name="alex"))
 
         self.assertEqual(result, 0)
-        loaded = people.load_person_context("alex", people_root=self.people_root)
+        loaded = people.load_person_context("alex")
         self.assertEqual(loaded.display_name, "Alex Updated")
 
     def test_metadata_menu_adds_existing_project(self):
@@ -254,7 +258,7 @@ class PersonModificationTests(unittest.TestCase):
             result = modification.context_mod(argparse.Namespace(name="alex"))
 
         self.assertEqual(result, 0)
-        loaded = people.load_person_context("alex", people_root=self.people_root)
+        loaded = people.load_person_context("alex")
         self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
         self.assertTrue(any(
             "signalrot" in call.args[0] and "rotbot" not in call.args[0]
@@ -272,7 +276,7 @@ class PersonModificationTests(unittest.TestCase):
             result = modification.context_mod(argparse.Namespace(name="alex"))
 
         self.assertEqual(result, 0)
-        loaded = people.load_person_context("alex", people_root=self.people_root)
+        loaded = people.load_person_context("alex")
         self.assertEqual(loaded.related_projects, ("signalrot",))
 
     def test_metadata_submenu_can_exit_without_changes(self):
@@ -302,8 +306,7 @@ class PersonModificationTests(unittest.TestCase):
             modification.replace_person_metadata(
                 "alex",
                 "Alex Updated",
-                (),
-                people_root=self.people_root
+                ()
             )
 
         self.assertEqual(metadata.read_text(encoding="utf-8"), original)
@@ -317,7 +320,7 @@ class PersonModificationTests(unittest.TestCase):
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.people_root / "contact" / "alex" / "identity.md"
+            return_value=self.contacts / "alex" / "local" / "identity.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"
@@ -341,7 +344,7 @@ class PersonModificationTests(unittest.TestCase):
     def test_explicit_person_can_add_custom_category(self):
         self.create_person()
         categories = modification.person_document_categories(
-            "alex", "identity.md", people_root=self.people_root
+            "alex", "identity.md"
         )
         custom_option = str(len(categories) + 1)
         answers = (
@@ -356,7 +359,7 @@ class PersonModificationTests(unittest.TestCase):
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.people_root / "contact" / "alex" / "identity.md"
+            return_value=self.contacts / "alex" / "local" / "identity.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"
@@ -380,11 +383,10 @@ class PersonModificationTests(unittest.TestCase):
             "identity.md",
             "Family",
             "Has two siblings.",
-            category_description="Family members and relevant family context.",
-            people_root=self.people_root
+            category_description="Family members and relevant family context."
         )
 
-        content = (destination / "identity.md").read_text(encoding="utf-8")
+        content = (destination / "local" / "identity.md").read_text(encoding="utf-8")
         self.assertIn(
             "## Family\n\n"
             "<!-- Family members and relevant family context. -->\n\n"
@@ -393,7 +395,7 @@ class PersonModificationTests(unittest.TestCase):
         )
         self.assertEqual(
             modification.person_document_categories(
-                "alex", "identity.md", people_root=self.people_root
+                "alex", "identity.md"
             )[-1],
             "Family"
         )
@@ -405,7 +407,7 @@ class PersonModificationTests(unittest.TestCase):
                 1
             )
         destination = self.create_person()
-        identity = destination / "identity.md"
+        identity = destination / "local" / "identity.md"
         original = identity.read_text(encoding="utf-8")
         with patch("builtins.input", side_effect=("1", EOFError())), patch.object(
             modification,

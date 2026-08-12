@@ -23,7 +23,7 @@ class RotbotConfigTests(unittest.TestCase):
     def test_config_path_respects_xdg_config_home(self):
         self.assertEqual(
             rotbot_config.config_path({"XDG_CONFIG_HOME": str(self.root)}),
-            self.root / "rot" / "config.toml"
+            self.root / "rotbot" / "config.toml"
         )
         with self.assertRaises(rotbot_config.ConfigError):
             rotbot_config.config_path({"XDG_CONFIG_HOME": "relative"})

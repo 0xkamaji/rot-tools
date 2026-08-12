@@ -392,13 +392,14 @@ def evaluate_input(session, line, header=None):
             )
         )
     )
-    if result == 0 and changes_context and session.ai is not None:
+    if result == 0 and changes_context:
         try:
             session.refresh_context()
         except ContextInspectionError as error:
             rot_say(f"Could not refresh session context.\n{error}")
         else:
-            session.ai.mark_context_dirty()
+            if session.ai is not None:
+                session.ai.mark_context_dirty()
             if (
                 session.authority_mode == "WORK"
                 and previous_project_id != session.context.project_id

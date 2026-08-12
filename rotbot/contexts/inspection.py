@@ -100,8 +100,7 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
             )
         except entities.EntityContextError as error:
             canonical = entities.context_root(role) / str(name)
-            legacy = loader.CONTEXT_ROOT / "people" / role / str(name)
-            if os.path.lexists(canonical) or os.path.lexists(legacy):
+            if os.path.lexists(canonical):
                 raise ContextInspectionError(str(error)) from None
             stale = True
         else:

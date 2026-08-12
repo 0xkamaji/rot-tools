@@ -73,7 +73,7 @@ class PromptCompilerTests(unittest.TestCase):
 
         for tag in ("assistant", "user", "machine", "project"):
             self.assertNotIn(f"<{tag}_context>", rendered)
-        self.assertIn("Working directory: /tmp", rendered)
+        self.assertNotIn("/tmp", rendered)
         self.assertIn("Execution backend: OpenCode", rendered)
         self.assertIn("<user_request>", rendered)
 
@@ -93,7 +93,7 @@ class PromptCompilerTests(unittest.TestCase):
 
         self.assertIn("<rotbot_context_refresh_instructions>", rendered)
         self.assertIn("Current project marker", rendered)
-        self.assertIn("Working directory: /work/signalrot", rendered)
+        self.assertNotIn("/work/signalrot", rendered)
         self.assertIn("What changed?", rendered)
         self.assertNotIn("PRIVATE_HISTORY_MUST_NOT_ENTER_AI_PROMPT", rendered)
         self.assertNotIn("SHELL_OUTPUT_MUST_NOT_ENTER_AI_PROMPT", rendered)
@@ -161,9 +161,9 @@ class PromptCompilerTests(unittest.TestCase):
             context = prompt.resolve_prompt_context(inspected, "Codex")
             rendered = prompt.build_ask_prompt(context, "Question")
 
-        load_portable.assert_called_once_with("laptop")
+        load_portable.assert_called_once_with("laptop", view="egress")
         load_private.assert_not_called()
-        self.assertIn("PortableOS", rendered)
+        self.assertNotIn("PortableOS", rendered)
         self.assertIn("Portable purpose", rendered)
         self.assertIn("PortableTool", rendered)
         self.assertNotIn("PRIVATE_CONTEXT_MUST_NOT_LEAVE_ROTBOT", rendered)

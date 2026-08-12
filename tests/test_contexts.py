@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import machines
+from rotbot.contexts import entities, machines, people
 from rotbot.contexts import loader as contexts
 
 
@@ -18,17 +18,25 @@ class ContextLoaderTests(unittest.TestCase):
         self.root.mkdir()
         self.projects = self.root / "projects"
         self.projects.mkdir()
-        self.people = self.root / "people"
-        self.people.mkdir()
-        from rotbot.contexts import people
-        for role in people.PERSON_ROLES:
-            (self.people / role).mkdir()
+        self.contacts = self.root / "contacts"
+        self.contacts.mkdir()
+        self.users = self.root / "users"
+        self.users.mkdir()
+        self.assistants = self.root / "assistants"
+        self.assistants.mkdir()
         self.machines = self.root / "machines"
         self.machines.mkdir()
         self.root_patch = patch.object(contexts, "CONTEXT_ROOT", self.root)
         self.root_patch.start()
+        self.builtins_patch = patch.object(
+            entities,
+            "builtin_assistants_root",
+            return_value=self.root / ".builtins" / "assistants"
+        )
+        self.builtins_patch.start()
 
     def tearDown(self):
+        self.builtins_patch.stop()
         self.root_patch.stop()
         self.temporary_directory.cleanup()
 
@@ -41,10 +49,13 @@ class ContextLoaderTests(unittest.TestCase):
     ):
         directory = self.projects / name
         directory.mkdir()
-        (directory / "identity.md").write_text(identity, encoding="utf-8")
-        (directory / "state.md").write_text(state, encoding="utf-8")
+        local = directory / "local"
+        local.mkdir()
+        (directory / "shareable").mkdir()
+        (local / "identity.md").write_text(identity, encoding="utf-8")
+        (local / "state.md").write_text(state, encoding="utf-8")
         if vision is not MISSING:
-            (directory / "vision.md").write_text(vision, encoding="utf-8")
+            (local / "vision.md").write_text(vision, encoding="utf-8")
         return directory
 
     def test_list_contexts_discovers_valid_directories_in_sorted_order(self):
@@ -56,26 +67,30 @@ class ContextLoaderTests(unittest.TestCase):
 
         self.assertEqual(contexts.list_contexts(), ("alpha", "zeta"))
 
-    def test_empty_people_and_unknown_categories_are_not_contexts(self):
+    def test_empty_canonical_categories_and_unknown_categories_are_not_contexts(self):
         self.assertEqual(contexts.list_contexts(), ())
         category = self.root / ".archive" / "projects"
         category.mkdir(parents=True)
         directory = category / "outsider"
         directory.mkdir()
-        (directory / "identity.md").write_text("identity", encoding="utf-8")
-        (directory / "state.md").write_text("state", encoding="utf-8")
+        local = directory / "local"
+        local.mkdir()
+        (local / "identity.md").write_text("identity", encoding="utf-8")
+        (local / "state.md").write_text("state", encoding="utf-8")
 
         self.assertEqual(contexts.list_contexts(), ())
         with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
             contexts.load_context("outsider")
 
     def test_context_list_renders_all_types_in_type_name_table(self):
-        from rotbot.contexts import people
-
         self.create_context("zeta")
         self.create_context("alpha")
-        people.create_person_context(
-            "sam", "contact", "Sam Example", people_root=self.people
+        people.create_person_context("sam", "contact", "Sam Example")
+        entities.create_entity_context(
+            entities.build_user_context("kamaji", "Kamaji"), root=self.root
+        )
+        entities.create_entity_context(
+            entities.build_assistant_context("forge", "Forge"), root=self.root
         )
         machines.create_machine("desktop", machines_root=self.machines)
 
@@ -92,6 +107,8 @@ class ContextLoaderTests(unittest.TestCase):
             (
                 ("project", "alpha"),
                 ("project", "zeta"),
+                ("user", "kamaji"),
+                ("assistant", "forge"),
                 ("contact", "sam"),
                 ("machine", "desktop")
             ),
@@ -143,12 +160,12 @@ class ContextLoaderTests(unittest.TestCase):
 
     def test_load_context_does_not_read_or_return_vision(self):
         directory = self.create_context("example", "identity", "state")
-        (directory / "vision.md").write_bytes(b"\xff")
+        (directory / "local" / "vision.md").write_bytes(b"\xff")
 
         loaded = contexts.load_context("example")
 
         self.assertEqual((loaded.name, loaded.identity, loaded.state), (
-            "example", "identity", "state"
+            "example", "identity\n", "state\n"
         ))
         self.assertIsNotNone(loaded.id)
         self.assertFalse(hasattr(loaded, "vision"))
@@ -164,8 +181,8 @@ class ContextLoaderTests(unittest.TestCase):
 
     def test_load_vision_does_not_read_identity_or_state(self):
         directory = self.create_context("example", vision="vision only")
-        (directory / "identity.md").write_bytes(b"\xff")
-        (directory / "state.md").write_bytes(b"\xff")
+        (directory / "local" / "identity.md").write_bytes(b"\xff")
+        (directory / "local" / "state.md").write_bytes(b"\xff")
 
         self.assertEqual(contexts.load_vision("example"), "vision only")
 
@@ -191,8 +208,10 @@ class ContextLoaderTests(unittest.TestCase):
     def test_list_and_load_reject_context_symlink_outside_root(self):
         outside = Path(self.temporary_directory.name) / "outside"
         outside.mkdir()
-        (outside / "identity.md").write_text("identity", encoding="utf-8")
-        (outside / "state.md").write_text("state", encoding="utf-8")
+        local = outside / "local"
+        local.mkdir()
+        (local / "identity.md").write_text("identity", encoding="utf-8")
+        (local / "state.md").write_text("state", encoding="utf-8")
         (self.projects / "linked").symlink_to(outside, target_is_directory=True)
 
         self.assertEqual(contexts.list_contexts(), ())
@@ -203,7 +222,7 @@ class ContextLoaderTests(unittest.TestCase):
         directory = self.create_context("example")
         outside = Path(self.temporary_directory.name) / "outside-vision.md"
         outside.write_text("outside vision", encoding="utf-8")
-        (directory / "vision.md").symlink_to(outside)
+        (directory / "local" / "vision.md").symlink_to(outside)
 
         self.assertEqual(contexts.list_contexts(), ("example",))
         with self.assertRaisesRegex(contexts.ContextError, "Invalid vision"):
@@ -223,11 +242,11 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("identity", rot_continue.call_args.args[0])
         self.assertIn("state", rot_continue.call_args.args[0])
         self.assertEqual(
-            (directory / "identity.md").read_text(encoding="utf-8"),
+            (directory / "local" / "identity.md").read_text(encoding="utf-8"),
             "identity"
         )
         self.assertEqual(
-            (directory / "state.md").read_text(encoding="utf-8"),
+            (directory / "local" / "state.md").read_text(encoding="utf-8"),
             "state"
         )
 
@@ -239,12 +258,10 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("Unknown or invalid context", rot_say.call_args.args[0])
 
     def test_person_show_displays_only_populated_sections(self):
-        from rotbot.contexts import people
-
         destination = people.create_person_context(
-            "alex", "contact", "Alex Example", people_root=self.people
+            "alex", "contact", "Alex Example"
         )
-        identity = destination / "identity.md"
+        identity = destination / "local" / "identity.md"
         identity.write_text(
             identity.read_text(encoding="utf-8").replace(
                 "<!-- Occupation, education, location, personal history, and "
@@ -280,11 +297,7 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertNotIn("<!--", output)
 
     def test_empty_person_show_reports_no_recorded_information(self):
-        from rotbot.contexts import people
-
-        people.create_person_context(
-            "alex", "contact", "Alex", people_root=self.people
-        )
+        people.create_person_context("alex", "contact", "Alex")
         with patch.object(contexts, "rot_say"), patch.object(
             contexts,
             "rot_continue"
@@ -342,12 +355,8 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("only supported for project", rot_say.call_args.args[0])
 
     def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
-        from rotbot.contexts import people
-
         self.create_context("alpha")
-        people.create_person_context(
-            "alex", "contact", "Alex", people_root=self.people
-        )
+        people.create_person_context("alex", "contact", "Alex")
         with patch("builtins.input", side_effect=("2", "2")), patch.object(
             contexts,
             "rot_say"
@@ -446,16 +455,10 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("No saved contexts", rot_say.call_args.args[0])
 
     def test_show_rejects_ambiguous_name_and_person_vision(self):
-        from rotbot.contexts import people
-
         self.create_context("shared")
-        people.create_person_context(
-            "shared", "contact", "Shared", people_root=self.people
-        )
+        people.create_person_context("shared", "contact", "Shared")
         machines.create_machine("shared", machines_root=self.machines)
-        people.create_person_context(
-            "alex", "contact", "Alex", people_root=self.people
-        )
+        people.create_person_context("alex", "contact", "Alex")
         with patch.object(contexts, "rot_say") as rot_say:
             ambiguous = contexts.context_show(
                 argparse.Namespace(name="shared", vision=False)
@@ -548,8 +551,8 @@ class ContextLoaderTests(unittest.TestCase):
     def test_generic_context_operations_do_not_invoke_agents_or_modify_files(self):
         directory = self.create_context("example", "identity", "state", "vision")
         before = {
-            path.name: path.read_bytes()
-            for path in directory.iterdir()
+            path.relative_to(directory): path.read_bytes()
+            for path in directory.rglob("*") if path.is_file()
         }
 
         with patch("rotbot.agents.runner.stream_agent") as stream_agent, patch.object(
@@ -565,8 +568,8 @@ class ContextLoaderTests(unittest.TestCase):
 
         stream_agent.assert_not_called()
         after = {
-            path.name: path.read_bytes()
-            for path in directory.iterdir()
+            path.relative_to(directory): path.read_bytes()
+            for path in directory.rglob("*") if path.is_file()
         }
         self.assertEqual(after, before)
 

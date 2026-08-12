@@ -190,10 +190,10 @@ TALK · AI: active
 WORK · AI: active
 ```
 
-`AI: idle` means no successful Rot AI conversation/backend session exists yet.
-`AI: active` means Rot owns an active AI conversation with recorded backend
-state. Switching TALK/WORK does not itself start AI or erase conversation
-history.
+`AI: idle` means no request is active and no conversation has started.
+`AI: thinking` means a request is waiting for visible backend output.
+`AI: active` means a conversation exists and is not currently waiting.
+Switching TALK/WORK does not itself start AI or erase conversation history.
 
 ### Conversation ownership
 
@@ -252,10 +252,10 @@ Rot context      curated user, assistant, machine, and project knowledge
 
 Command history records what was typed for terminal recall. AI conversation
 history records only conversational user/Rot turns. Persistent context records
-what Rot durably knows in the portable context tree. Shell commands, shell
+what Rot durably knows in the private local data store. Shell commands, shell
 output, deterministic Rot commands, and command history are not copied into AI
-conversation transcripts. Conversation storage stays outside `context/`, is not
-portable semantic context, and is not included by `rot push`.
+conversation transcripts. Conversation storage is not semantic context and is
+not included by `rot push` or automatically reused as cloud context.
 
 ### Interactive command history
 
@@ -290,7 +290,7 @@ kamaji ❯ history 10
 Submitted `history` and exit commands are retained like other completed input.
 
 History is bounded to the most recent 5000 commands and persists locally in
-`~/.config/rot/history` (or the corresponding `XDG_CONFIG_HOME` location). The
+`~/.config/rotbot/history` (or the corresponding `XDG_CONFIG_HOME` location). The
 file is private local UI state, created with user-only permissions where the
 platform supports them. It is not portable RotBot context and is never included
 in prompts sent to Codex, OpenCode, or another AI backend.
@@ -402,74 +402,50 @@ export ROTBOT_AGENT=opencode
 
 If no agent is selected, RotBot uses the first supported agent it finds.
 
-`rot ask` resolves the current assistant, user, machine, project, and working
-directory, then sends their portable RotBot context with the request. Project
-identity and current state are included when a project resolves; project vision
-is not included automatically.
+`rot ask` resolves the current assistant, user, machine, project, and runtime
+capability state, then compiles the allowlisted external context described
+below. Project vision is not included automatically.
 
 Rot is the persistent assistant identity. Codex and OpenCode are execution
 backends operating through that identity, not replacements for it.
 
-`rot ask` uses portable RotBot context. Local/private context may help RotBot
-resolve the current environment but is not included in prompts sent to AI
-backends. In particular, prompt construction loads only the portable machine
-files under `context/machines/`, never installation-specific local machine
-records.
+`rot ask` and interactive AI use the same deterministic egress gate. Only safe
+entity names, permitted runtime capability state, and semantic files under
+`shareable/` are eligible. UUIDs, local paths, `local/` semantics, and machine
+configuration are excluded by construction.
 
 ## Contexts
 
-Contexts give RotBot durable, authoritative information about users,
-assistants, machines, and projects.
-
-A context generally contains:
+Contexts give RotBot durable information about users, assistants, contacts,
+machines, and projects. Runtime context is private local data, not repository
+source. It lives under `$XDG_DATA_HOME/rotbot/contexts/`, with fallback to
+`~/.local/share/rotbot/contexts/`:
 
 ```text
-context/
-├── users/
-│   └── NAME/
-│       ├── metadata.toml
-│       ├── identity.md
-│       ├── preferences.md
-│       ├── experience.md
-│       ├── priorities.md
-│       ├── relationship.md
-│       └── state.md
-├── assistants/
-│   └── NAME/
-│       ├── metadata.toml
-│       ├── identity.md
-│       ├── behavior.md
-│       ├── relationship.md
-│       ├── capabilities.toml
-│       └── state.md
-├── projects/
-│   └── NAME/
-│       ├── metadata.toml
-│       ├── identity.md
-│       ├── state.md
-│       ├── vision.md
-│       └── match.md
-├── machines/
-│   └── NAME/
-│       ├── metadata.toml
-│       ├── identity.md
-│       └── software.toml
-└── people/
-    └── contact/
-        └── NAME/
+contexts/
+├── users/NAME/{metadata.toml,local/,shareable/}
+├── assistants/NAME/{metadata.toml,capabilities.toml,local/,shareable/}
+├── contacts/NAME/{metadata.toml,local/,shareable/}
+├── machines/NAME/{metadata.toml,local/,shareable/}
+└── projects/NAME/{metadata.toml,local/,shareable/}
 ```
 
-Project contexts are still addressed by name, such as `rotbot` or `signalrot`;
-the `projects/` filesystem category is not part of the public context name.
-Users and assistants are first-class context types under `users/` and
-`assistants/`. Legacy `people/user/` and `people/assistant/` records remain
-readable during migration, but canonical records win by UUID and all new writes
-target the first-class directories. Contacts remain under `people/contact/`
-until a separate contact architecture is designed.
-Machine contexts keep safe identity and normalized hardware facts under
-`machines/NAME/`. Private host-specific facts use the same machine name in one
-TOML file under RotBot's platform-aware local configuration directory, such as
-`~/.config/rot/machines/NAME.toml`.
+Both `local/` and `shareable/` remain private local Rot data and stay outside
+Git. `shareable` does not mean public, publishable, or safe for source control.
+It means only that a semantic file is eligible for an explicitly permitted
+external AI request. Local Rot reasoning may load the union of both namespaces.
+External AI context starts empty and allowlists `shareable/` only. Unclassified
+legacy data migrates to `local/` by default.
+
+Stable UUIDs in `metadata.toml` remain entity identity; paths and display names
+are not identity. Safe outbound entity envelopes expose only type/name labels,
+not UUIDs, private paths, network identifiers, or local configuration.
+
+Machine-specific paths, identity bindings, project bindings, routing, and host
+facts remain under `$XDG_CONFIG_HOME/rotbot/`, normally `~/.config/rotbot/`.
+Configuration is not semantic context and cannot enter the cloud egress
+pipeline. The repository contains only code, schemas/templates, tests, and the
+built-in Rot definition at `builtin/assistants/rot/`.
 
 During machine creation, choose whether to inspect the current system or leave
 the context empty for manual editing. Inspection is deterministic and local;
@@ -541,15 +517,15 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context mod [NAME]`     | Add categorized information to a person context |
 | `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
-Archived contexts are moved beneath the hidden `context/.archive/` directory,
+Archived contexts are moved beneath the hidden `contexts/.archive/` data directory,
 outside RotBot's active discovery paths. Each kind has its own bucket:
 `projects/`, `machines/`, `contacts/`, `users/`, or `assistants/`. Archiving a
 project also removes its local source and production bindings so the name can
 be recreated cleanly. Archiving a portable machine context does not modify its
 installation-specific local metadata file.
 
-Rot stores this installation's active portable context IDs in
-`~/.config/rot/config.toml`:
+Rot stores this installation's active context IDs in
+`~/.config/rotbot/config.toml`:
 
 ```toml
 [user]
@@ -583,10 +559,10 @@ rot machine inspect
 
 Machine inspection always displays current detected state first. It then reports
 whether a configured or locally associated machine context already exists. Any
-new registration or rebind requires explicit confirmation and stores the portable
+new registration or rebind requires explicit confirmation and stores the
 context's UUID. New registration also stores detected private local facts in
-`~/.config/rot/machines/` so later inspections can recognize the host. Declining
-leaves files and configuration unchanged. Existing portable machine contexts are
+`~/.config/rotbot/machines/` so later inspections can recognize the host. Declining
+leaves files and configuration unchanged. Existing machine contexts are
 never overwritten. Inspection never invokes AI, scans installed packages, or
 inspects a remote machine.
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import shutil
 from types import SimpleNamespace
 
 from rotbot.agents.runner import stream_agent
@@ -408,7 +409,8 @@ def _add_person_context(name, role, display_name, related_projects=()):
     rot_continue(
         "Proposed files:\n\n"
         + "\n".join(
-            f"  context/people/{role}/{name}/{filename}" for filename in files
+            f"  {loader.CONTEXT_ROOT / 'contacts' / name / ('metadata.toml' if filename == 'metadata.toml' else 'local/' + filename)}"
+            for filename in files
         )
     )
     if not _confirm("Create this person context?"):
@@ -457,7 +459,8 @@ def _add_machine_context(
     rot_continue(
         "Proposed files:\n\n"
         + "\n".join(
-            f"  context/machines/{name}/{filename}" for filename in files
+            f"  {loader.CONTEXT_ROOT / 'machines' / name / ('metadata.toml' if filename == 'metadata.toml' else 'local/' + filename)}"
+            for filename in files
         )
         + (
             f"\n\nApproved local metadata:\n\n  {local_path}"
@@ -637,19 +640,11 @@ def _destination_exists(destination):
 
 
 def _rollback_context(destination):
-    errors = []
-    for name in (
-        "metadata.toml", "identity.md", "state.md", "match.md",
-        ".metadata.toml.tmp", ".identity.md.tmp", ".state.md.tmp", ".match.md.tmp"
-    ):
-        try:
-            (destination / name).unlink(missing_ok=True)
-        except OSError as error:
-            errors.append(str(error))
     try:
-        destination.rmdir()
+        shutil.rmtree(destination)
+        errors = []
     except OSError as error:
-        errors.append(str(error))
+        errors = [str(error)]
     return tuple(errors)
 
 
@@ -658,6 +653,8 @@ def _write_document(path, content):
         destination.write(content)
         destination.flush()
         os.fsync(destination.fileno())
+    if os.name != "nt":
+        os.chmod(path, 0o600)
 
 
 def _create_and_bind(
@@ -671,18 +668,22 @@ def _create_and_bind(
 ):
     created = False
     try:
-        destination.mkdir()
+        destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        destination.mkdir(mode=0o700)
         created = True
+        _write_document(
+            destination / "metadata.toml", loader.render_project_metadata(name, context_id)
+        )
+        local = destination / "local"
+        local.mkdir(mode=0o700)
+        (destination / "shareable").mkdir(mode=0o700)
         files = {
-            "metadata.toml": loader.render_project_metadata(name, context_id),
             "identity.md": documents["identity"],
             "state.md": documents["state"],
             "match.md": match_document
         }
         for filename, content in files.items():
-            _write_document(destination / f".{filename}.tmp", content)
-        for filename in ("metadata.toml", "match.md", "identity.md", "state.md"):
-            os.replace(destination / f".{filename}.tmp", destination / filename)
+            _write_document(local / filename, content)
 
         current_binding = get_context_binding(name, target_config)
         current_source = current_binding.get("source_path")
@@ -791,10 +792,10 @@ def _add_project_context(args):
     rot_say(f"Create context '{name}' from:\n\n  {project}")
     rot_continue(
         "Proposed files:\n\n"
-        f"  context/projects/{name}/metadata.toml\n"
-        f"  context/projects/{name}/identity.md\n"
-        f"  context/projects/{name}/state.md\n"
-        f"  context/projects/{name}/match.md\n\n"
+        f"  {destination / 'metadata.toml'}\n"
+        f"  {destination / 'local' / 'identity.md'}\n"
+        f"  {destination / 'local' / 'state.md'}\n"
+        f"  {destination / 'local' / 'match.md'}\n\n"
         "Local registration:\n\n"
         f"  {name}.source_path = {project}"
     )
@@ -848,6 +849,6 @@ def _add_project_context(args):
     rot_say(
         f"Context '{name}' created and its source path registered.\n\n"
         "Optional next step:\n"
-        f"  Create context/projects/{name}/vision.md manually."
+        f"  Create {destination / 'local' / 'vision.md'} manually."
     )
     return 0

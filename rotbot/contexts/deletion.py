@@ -4,7 +4,6 @@ from pathlib import Path
 import uuid
 
 from rotbot.contexts import loader
-from rotbot.contexts.people import PERSON_ROLES
 from rotbot.contexts.config import (
     ConfigError,
     config_path,
@@ -27,7 +26,7 @@ CONTEXT_CATEGORIES = {
     "project": "projects",
     "user": "users",
     "assistant": "assistants",
-    "contact": "people",
+    "contact": "contacts",
     "machine": "machines"
 }
 
@@ -45,35 +44,6 @@ def _safe_directory(path, label):
         raise ContextDeletionError(f"Invalid {label} directory: {path}")
 
 
-def _person_role_directories(context_root):
-    people_root = context_root / "people"
-    _safe_directory(people_root, "person context")
-    directories = []
-    for role in PERSON_ROLES:
-        role_directory = people_root / role
-        _safe_directory(role_directory, f"{role} person")
-        directories.append((role, role_directory))
-    return tuple(directories)
-
-
-def _find_person_source(name, context_root):
-    matches = []
-    for role, role_directory in _person_role_directories(context_root):
-        source = role_directory / name
-        if _exists(source):
-            matches.append((role, source))
-    if len(matches) > 1:
-        raise ContextDeletionError(
-            f"Person context name exists in multiple role directories: {name}"
-        )
-    if not matches:
-        return None
-    _role, source = matches[0]
-    if source.is_symlink() or not source.is_dir():
-        raise ContextDeletionError(f"Invalid person context: {source}")
-    return source
-
-
 def _locate_context(name, context_root, context_type=None):
     try:
         loader.validate_context_name(name)
@@ -82,35 +52,23 @@ def _locate_context(name, context_root, context_type=None):
     _safe_directory(context_root, "context root")
 
     if context_type is not None and context_type not in {
-        *CONTEXT_CATEGORIES, "person"
+        *CONTEXT_CATEGORIES
     }:
         raise ContextDeletionError(f"Unsupported context type: {context_type}")
     found = []
     categories = (
-        ((context_type, "people"),)
-        if context_type == "person"
-        else ((context_type, CONTEXT_CATEGORIES[context_type]),)
+        ((context_type, CONTEXT_CATEGORIES[context_type]),)
         if context_type is not None
         else CONTEXT_CATEGORIES.items()
     )
     for found_type, category_name in categories:
-        if found_type in {"contact", "person"}:
-            source = _find_person_source(name, context_root)
-            if found_type == "contact" and source is not None and source.parent.name != "contact":
-                source = None
-            if source is not None and found_type == "person":
-                found_type = source.parent.name
+        category = context_root / category_name
+        candidate = category / name
+        if _exists(category):
+            _safe_directory(category, f"{found_type} context")
+            source = candidate if _exists(candidate) else None
         else:
-            category = context_root / category_name
-            candidate = category / name
-            if _exists(category):
-                _safe_directory(category, f"{found_type} context")
-                source = candidate if _exists(candidate) else None
-            else:
-                source = None
-            if source is None and found_type in {"user", "assistant"}:
-                legacy = context_root / "people" / found_type / name
-                source = legacy if _exists(legacy) else None
+            source = None
         if source is not None:
             found.append((found_type, source))
     if not found:
@@ -131,30 +89,12 @@ def list_deletable_contexts(*, context_root=None):
     context_root = loader.CONTEXT_ROOT if context_root is None else Path(context_root)
     _safe_directory(context_root, "context root")
     contexts = []
-    legacy_names = []
-    for role, category in _person_role_directories(context_root):
-        for entry in category.iterdir():
-            if entry.is_dir() and not entry.is_symlink():
-                legacy_names.append(entry.name)
-    duplicate = next(
-        (name for name in legacy_names if legacy_names.count(name) > 1), None
-    )
-    if duplicate is not None:
-        raise ContextDeletionError(
-            f"Person context name exists in multiple role directories: {duplicate}"
-        )
     for context_type, category_name in CONTEXT_CATEGORIES.items():
-        categories = (
-            (("contact", context_root / "people" / "contact"),)
-            if context_type == "contact"
-            else (
-                (context_type, context_root / category_name),
-                (context_type, context_root / "people" / context_type)
-            ) if context_type in {"user", "assistant"}
-            else ((None, context_root / category_name),)
-        )
+        categories = ((context_type, context_root / category_name),)
         for _role, category in categories:
             if not _exists(category) and context_type in {"user", "assistant"}:
+                continue
+            if not _exists(category):
                 continue
             _safe_directory(category, f"{context_type} context")
             try:

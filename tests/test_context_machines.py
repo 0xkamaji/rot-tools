@@ -27,7 +27,7 @@ class MachineContextTests(unittest.TestCase):
 
         self.assertEqual(
             {path.name for path in destination.iterdir()},
-            {"metadata.toml", "identity.md", "software.toml"}
+            {"metadata.toml", "local", "shareable"}
         )
 
     def test_metadata_serializes_normalized_portable_facts(self):
@@ -216,7 +216,7 @@ class MachineContextTests(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg_home)}, clear=True):
             self.assertEqual(
                 machines.local_machine_record_path("desktop"),
-                xdg_home / "rot" / "machines" / "desktop.toml"
+            xdg_home / "rotbot" / "machines" / "desktop.toml"
             )
         with self.assertRaises(machines.MachineContextError):
             machines.local_machines_directory(target_config=Path("config.toml"))

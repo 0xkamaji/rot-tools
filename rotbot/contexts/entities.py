@@ -4,11 +4,11 @@ import json
 import os
 from pathlib import Path
 import shutil
-import tempfile
 import tomllib
 import uuid
 
-from rotbot.contexts import loader, people
+from rotbot.contexts import documents, loader, people
+from rotbot.contexts.paths import builtin_assistants_root
 from rotbot.contexts.identifiers import (
     ContextIdentifierError,
     legacy_context_id,
@@ -112,9 +112,24 @@ def context_root(context_type, root=None):
     return base / CONTEXT_TYPES[context_type]
 
 
-def _legacy_root(context_type, root=None):
-    base = loader.CONTEXT_ROOT if root is None else Path(root)
-    return base / "people" / ContextType(context_type).value
+def _builtin_directory(reference, context_type):
+    if ContextType(context_type) != ContextType.ASSISTANT:
+        return None
+    category = builtin_assistants_root()
+    if not category.is_dir() or category.is_symlink():
+        return None
+    direct = category / str(reference)
+    if direct.is_dir() and not direct.is_symlink():
+        return direct
+    for entry in category.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            if _read_metadata(entry, ContextType.ASSISTANT).get("id") == reference:
+                return entry
+        except EntityContextError:
+            continue
+    return None
 
 
 def _document_names(context_type):
@@ -150,6 +165,7 @@ def _build_entity(context_type, name, display_name, related_projects, context_id
     if (
         not isinstance(display_name, str)
         or not display_name
+        or len(display_name) > 200
         or any(ord(character) < 32 for character in display_name)
     ):
         raise EntityContextError(f"Invalid {context_type.value} display name.")
@@ -254,6 +270,8 @@ def _read_metadata(directory, context_type):
 
 def _load_canonical(reference, context_type, root=None):
     directory = _canonical_directory(reference, context_type, root)
+    if directory is None and root is None:
+        directory = _builtin_directory(reference, context_type)
     if directory is None:
         return None
     metadata = _read_metadata(directory, context_type)
@@ -262,12 +280,6 @@ def _load_canonical(reference, context_type, root=None):
         metadata.get("name"), metadata.get("display_name"),
         metadata.get("related_projects", []), metadata.get("id")
     )
-    for filename in _document_names(context_type):
-        path = directory / filename
-        if path.is_symlink() or not path.is_file():
-            raise EntityContextError(
-                f"Invalid {context_type.value} document: {entity.name}/{filename}"
-            )
     if context_type == ContextType.ASSISTANT:
         capabilities = directory / "capabilities.toml"
         if capabilities.is_symlink() or not capabilities.is_file():
@@ -277,46 +289,18 @@ def _load_canonical(reference, context_type, root=None):
     return entity
 
 
-def _load_legacy(reference, context_type, root=None):
-    legacy = _legacy_root(context_type, root)
-    if legacy.is_symlink() or not legacy.is_dir():
-        raise EntityContextError(
-            f"Unknown {context_type.value} context reference: {reference}"
-        )
-    matches = []
-    for entry in legacy.iterdir():
-        if entry.is_symlink() or not entry.is_dir():
-            continue
-        try:
-            person = people.load_person_context(
-                entry.name, people_root=legacy.parent
-            )
-        except people.PersonContextError:
-            continue
-        if person.role == context_type.value and reference in {person.name, person.id}:
-            matches.append(person)
-    if len(matches) != 1:
-        label = "Ambiguous" if matches else "Unknown"
-        raise EntityContextError(
-            f"{label} {context_type.value} context reference: {reference}"
-        )
-    person = matches[0]
-    builder = build_user_context if context_type == ContextType.USER else build_assistant_context
-    return builder(
-        person.name, person.display_name, person.related_projects, person.id
-    )
-
-
 def load_user_context(reference, *, root=None):
-    return _load_canonical(reference, ContextType.USER, root) or _load_legacy(
-        reference, ContextType.USER, root
-    )
+    entity = _load_canonical(reference, ContextType.USER, root)
+    if entity is None:
+        raise EntityContextError(f"Unknown user context reference: {reference}")
+    return entity
 
 
 def load_assistant_context(reference, *, root=None):
-    return _load_canonical(reference, ContextType.ASSISTANT, root) or _load_legacy(
-        reference, ContextType.ASSISTANT, root
-    )
+    entity = _load_canonical(reference, ContextType.ASSISTANT, root)
+    if entity is None:
+        raise EntityContextError(f"Unknown assistant context reference: {reference}")
+    return entity
 
 
 def _list(context_type, root=None):
@@ -329,19 +313,15 @@ def _list(context_type, root=None):
             except EntityContextError:
                 continue
     by_id = {entity.id: entity for entity in canonical}
-    legacy = _legacy_root(context_type, root)
-    if legacy.is_dir() and not legacy.is_symlink():
-        try:
-            people_contexts = people.list_person_contexts(people_root=legacy.parent)
-        except people.PersonContextError:
-            people_contexts = ()
-        for person in people_contexts:
-            if person.role != context_type.value or person.id in by_id:
-                continue
-            builder = build_user_context if context_type == ContextType.USER else build_assistant_context
-            by_id[person.id] = builder(
-                person.name, person.display_name, person.related_projects, person.id
-            )
+    if root is None and ContextType(context_type) == ContextType.ASSISTANT:
+        category = builtin_assistants_root()
+        if category.is_dir() and not category.is_symlink():
+            for entry in category.iterdir():
+                try:
+                    entity = _load_canonical(entry.name, context_type, category.parent)
+                except EntityContextError:
+                    continue
+                by_id.setdefault(entity.id, entity)
     return tuple(sorted(by_id.values(), key=lambda item: item.name))
 
 
@@ -353,8 +333,9 @@ def list_assistant_contexts(*, root=None):
     return _list(ContextType.ASSISTANT, root)
 
 
-def load_entity_documents(entity, *, root=None):
+def load_entity_documents(entity, *, root=None, view="full"):
     directory = entity_directory(entity, root)
+    builtin = None
     if directory.exists():
         metadata = _read_metadata(directory, entity.context_type)
         if metadata.get("id") != entity.id:
@@ -362,36 +343,56 @@ def load_entity_documents(entity, *, root=None):
                 f"Canonical and legacy {entity.context_type.value} contexts conflict: "
                 f"{entity.name}"
             )
+        if root is None and entity.context_type == ContextType.ASSISTANT:
+            candidate = _builtin_directory(entity.name, entity.context_type)
+            if candidate is not None:
+                builtin_metadata = _read_metadata(candidate, entity.context_type)
+                if builtin_metadata.get("id") != entity.id:
+                    raise EntityContextError(
+                        f"Built-in and local assistant contexts conflict: {entity.name}"
+                    )
+                builtin = candidate
     else:
-        directory = _legacy_root(entity.context_type, root) / entity.name
-    documents = []
-    for filename in _document_names(entity.context_type):
-        legacy_name = "preferences.md" if filename == "behavior.md" else filename
-        path = directory / (filename if (directory / filename).exists() else legacy_name)
-        if path.is_symlink() or not path.is_file():
-            raise EntityContextError(f"Invalid {entity.context_type.value} document: {entity.name}/{filename}")
+        builtin = _builtin_directory(entity.name, entity.context_type) if root is None else None
+        if builtin is None:
+            raise EntityContextError(
+                f"Unknown {entity.context_type.value} context: {entity.name}"
+            )
+        directory = builtin
+    loaded_documents = []
+    try:
+        paths = []
+        for source in tuple(filter(None, (builtin, directory))):
+            paths.extend(documents.semantic_files(
+                source, view, set(_document_names(entity.context_type)),
+                include_legacy_local=view == "full"
+            ))
+    except documents.ContextDocumentError as error:
+        raise EntityContextError(str(error)) from None
+    for path in paths:
+        filename = path.name
         try:
             content = path.read_text(encoding="utf-8")
-            sections = people.populated_markdown_sections(content, filename)
-        except (OSError, UnicodeError, people.PersonContextError) as error:
+            sections = documents.populated_markdown_sections(content, filename)
+        except (OSError, UnicodeError, documents.ContextDocumentError) as error:
             raise EntityContextError(str(error)) from None
-        documents.append(EntityDocument(filename, sections))
-    return entity, tuple(documents)
+        loaded_documents.append(EntityDocument(filename, sections))
+    return entity, tuple(loaded_documents)
 
 
-def load_user_documents(reference, *, root=None):
-    return load_entity_documents(load_user_context(reference, root=root), root=root)
+def load_user_documents(reference, *, root=None, view="full"):
+    return load_entity_documents(load_user_context(reference, root=root), root=root, view=view)
 
 
-def load_assistant_documents(reference, *, root=None):
-    return load_entity_documents(load_assistant_context(reference, root=root), root=root)
+def load_assistant_documents(reference, *, root=None, view="full"):
+    return load_entity_documents(load_assistant_context(reference, root=root), root=root, view=view)
 
 
 def create_entity_context(entity, *, root=None):
     category = context_root(entity.context_type, root)
     if not os.path.lexists(category):
         try:
-            category.mkdir(parents=True)
+            category.mkdir(parents=True, mode=0o700)
         except OSError as error:
             raise EntityContextError(
                 f"Could not create {entity.context_type.value} context directory: {error}"
@@ -399,72 +400,23 @@ def create_entity_context(entity, *, root=None):
     if category.is_symlink() or not category.is_dir():
         raise EntityContextError(f"Invalid {entity.context_type.value} context directory: {category}")
     destination = category / entity.name
-    legacy_destination = _legacy_root(entity.context_type, root) / entity.name
-    if os.path.lexists(destination) or os.path.lexists(legacy_destination):
+    if os.path.lexists(destination):
         raise EntityContextError(f"{entity.context_type.value.title()} context '{entity.name}' already exists.")
     files = render_entity_files(entity)
     try:
-        destination.mkdir()
+        destination.mkdir(mode=0o700)
+        people._write_document(destination / "metadata.toml", files.pop("metadata.toml"))
+        capabilities = files.pop("capabilities.toml", None)
+        if capabilities is not None:
+            people._write_document(destination / "capabilities.toml", capabilities)
+        local = destination / "local"
+        local.mkdir(mode=0o700)
+        (destination / "shareable").mkdir(mode=0o700)
         for filename, content in files.items():
-            people._write_document(destination / filename, content)
+            people._write_document(local / filename, content)
     except BaseException as error:
-        people._rollback_person(destination, files)
+        shutil.rmtree(destination, ignore_errors=True)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
         raise EntityContextError(f"Could not create {entity.context_type.value} context '{entity.name}': {error}") from None
-    return destination
-
-
-def migrate_legacy_entity(name, context_type, *, root=None):
-    context_type = ContextType(context_type)
-    source = _legacy_root(context_type, root) / name
-    destination = context_root(context_type, root) / name
-    if destination.exists():
-        canonical = _load_canonical(name, context_type, root)
-        if not source.exists():
-            return destination
-        legacy = _load_legacy(name, context_type, root)
-        if canonical.id != legacy.id:
-            raise EntityContextError(
-                f"Migration destination conflicts with legacy {context_type.value}: {name}"
-            )
-        return destination
-    if source.is_symlink() or not source.is_dir():
-        raise EntityContextError(f"Unknown legacy {context_type.value} context: {name}")
-    category = context_root(context_type, root)
-    category.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{name}.", dir=category))
-    try:
-        expected = set(_document_names(context_type)) | {"metadata.toml"}
-        if context_type == ContextType.ASSISTANT:
-            expected.discard("behavior.md")
-            expected.add("preferences.md")
-        for entry in source.iterdir():
-            if entry.name not in expected:
-                continue
-            if entry.is_symlink() or not entry.is_file():
-                raise EntityContextError(
-                    f"Invalid legacy {context_type.value} migration file: {entry}"
-                )
-            target_name = (
-                "behavior.md"
-                if context_type == ContextType.ASSISTANT and entry.name == "preferences.md"
-                else entry.name
-            )
-            shutil.copy2(entry, temporary / target_name)
-        legacy_entity = _load_legacy(name, context_type, root)
-        (temporary / "metadata.toml").write_text(
-            render_metadata(legacy_entity), encoding="utf-8"
-        )
-        if context_type == ContextType.ASSISTANT:
-            capabilities = temporary / "capabilities.toml"
-            if not capabilities.exists():
-                capabilities.write_text(SAFE_CAPABILITIES, encoding="utf-8")
-        os.rename(temporary, destination)
-        temporary = None
-        shutil.rmtree(source)
-    except BaseException:
-        if temporary is not None:
-            shutil.rmtree(temporary, ignore_errors=True)
-        raise
     return destination

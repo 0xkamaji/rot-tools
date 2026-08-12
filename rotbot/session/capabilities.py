@@ -45,7 +45,9 @@ def load_assistant_policy(reference, *, root=None):
         assistant = entities.load_assistant_context(reference, root=root)
         directory = entities.entity_directory(assistant, root)
         if not directory.exists():
-            return safe_policy("Legacy assistant has no canonical capability policy.")
+            directory = entities._builtin_directory(assistant.name, assistant.context_type)
+        if directory is None or not directory.exists():
+            return safe_policy("Assistant has no canonical capability policy.")
         path = directory / "capabilities.toml"
         if path.is_symlink() or not path.is_file():
             return safe_policy("Assistant capability policy is missing.")

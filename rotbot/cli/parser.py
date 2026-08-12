@@ -2,9 +2,10 @@ import argparse
 
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
-from rotbot.commands.ai import ai_session_show, ai_sessions
+from rotbot.commands.ai import ai_context_preview, ai_session_show, ai_sessions
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
+from rotbot.commands.privacy import privacy_inspect
 from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add
@@ -199,6 +200,36 @@ def create_parser():
         help="Optional Rot conversation ID; omit to choose from a numbered list"
     )
     ai_session_show_parser.set_defaults(func=ai_session_show)
+
+    ai_context_parser = ai_commands.add_parser(
+        "context",
+        help="Preview context that may be sent to an AI backend"
+    )
+    ai_context_commands = ai_context_parser.add_subparsers(dest="ai_context_command")
+    ai_context_parser.set_defaults(
+        func=show_command_help,
+        command_parser=ai_context_parser
+    )
+    ai_context_preview_parser = ai_context_commands.add_parser(
+        "preview",
+        help="Preview resolved shareable AI context without invoking a backend"
+    )
+    ai_context_preview_parser.set_defaults(func=ai_context_preview)
+
+    privacy_parser = commands.add_parser(
+        "privacy",
+        help="Inspect local and shareable context file boundaries"
+    )
+    privacy_commands = privacy_parser.add_subparsers(dest="privacy_command")
+    privacy_parser.set_defaults(
+        func=show_command_help,
+        command_parser=privacy_parser
+    )
+    privacy_inspect_parser = privacy_commands.add_parser(
+        "inspect",
+        help="List context filenames by privacy namespace without reading contents"
+    )
+    privacy_inspect_parser.set_defaults(func=privacy_inspect)
 
     pull_parser = commands.add_parser(
         "pull",

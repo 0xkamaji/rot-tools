@@ -7,6 +7,7 @@ import tempfile
 import tomllib
 
 from rotbot.contexts.identifiers import ContextIdentifierError, validate_context_id
+from rotbot.contexts.paths import config_root
 
 
 CONFIG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -31,11 +32,16 @@ def _config_base(environ=None):
 
 
 def config_path(environ=None):
-    return _config_base(environ) / "rot" / "config.toml"
+    try:
+        return config_root(environ) / "config.toml"
+    except Exception as error:
+        if error.__class__.__name__ == "PathConfigurationError":
+            raise ConfigError(str(error)) from None
+        raise
 
 
 def legacy_config_path(environ=None):
-    return _config_base(environ) / "rotbot" / "config.toml"
+    return _config_base(environ) / "rot" / "config.toml"
 
 
 def _config_read_path(path):
@@ -247,7 +253,7 @@ def _config_text_for_update(path):
     try:
         return (
             source.read_text(encoding="utf-8"),
-            stat.S_IMODE(source.stat().st_mode)
+            0o600
         )
     except (OSError, UnicodeError) as error:
         raise ConfigError(f"Could not read RotBot configuration:\n{source}\n{error}") from None

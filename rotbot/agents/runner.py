@@ -9,7 +9,7 @@ from time import perf_counter
 from rotbot.agents.config import CODEX as codex_runner, OPENCODE as opencode_runner
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
-from rotbot.contexts.prompt import build_ask_prompt, resolve_prompt_context
+from rotbot.contexts.prompt import build_ask_prompt, resolve_egress_context
 from rotbot.ui.terminal import (
     rot_break,
     rot_output_end,
@@ -18,6 +18,9 @@ from rotbot.ui.terminal import (
     rot_say,
     rot_status
 )
+
+
+resolve_prompt_context = resolve_egress_context
 
 
 AGENTS = {

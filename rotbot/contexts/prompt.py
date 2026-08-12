@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import html
 
 from rotbot.contexts import entities, loader, machines, people
 
@@ -97,9 +98,9 @@ class PromptContext:
 def _entity_block(reference, context_type):
     try:
         person, documents = (
-            entities.load_assistant_documents(reference)
+            entities.load_assistant_documents(reference, view="egress")
             if context_type == "assistant"
-            else entities.load_user_documents(reference)
+            else entities.load_user_documents(reference, view="egress")
         )
     except entities.EntityContextError:
         raise
@@ -116,11 +117,11 @@ def _entity_block(reference, context_type):
 
 
 def _machine_block(name):
-    machine, documents = machines.load_machine_files(name)
+    machine, documents = machines.load_machine_files(name, view="egress")
     content = {document.filename: document.content.strip() for document in documents}
-    sections = [("portable facts", content["metadata.toml"])]
+    sections = []
     identity_sections = people.populated_markdown_sections(
-        content["identity.md"], "identity.md"
+        content.get("identity.md", ""), "identity.md"
     )
     if identity_sections:
         identity = "\n\n".join(
@@ -128,7 +129,7 @@ def _machine_block(name):
             for heading, text in identity_sections
         )
         sections.append(("identity", identity))
-    if content["software.toml"]:
+    if content.get("software.toml"):
         sections.append(("software", content["software.toml"]))
     return PromptContextBlock(
         "machine", machine.id, machine.display_name, tuple(sections)
@@ -136,7 +137,7 @@ def _machine_block(name):
 
 
 def _project_block(name):
-    project = loader.load_context(name)
+    project = loader.load_context(name, view="egress")
     sections = tuple(
         (label, content.strip())
         for label, content in (("identity", project.identity), ("state", project.state))
@@ -145,7 +146,7 @@ def _project_block(name):
     return PromptContextBlock("project", project.id, project.name, sections)
 
 
-def resolve_prompt_context(inspected, execution_backend, capability_state=None):
+def resolve_egress_context(inspected, execution_backend, capability_state=None):
     return PromptContext(
         assistant=(
             _entity_block(inspected.assistant_id or inspected.assistant, "assistant")
@@ -169,16 +170,18 @@ def resolve_prompt_context(inspected, execution_backend, capability_state=None):
     )
 
 
+resolve_prompt_context = resolve_egress_context
+
+
 def _tag(name, content):
     return f"<{name}>\n\n{content.strip()}\n\n</{name}>"
 
 
 def _render_block(block, instructions):
-    details = [instructions, f"Name: {block.name}"]
-    if block.context_id is not None:
-        details.append(f"Context ID: {block.context_id}")
+    details = [instructions, f"Name: {html.escape(block.name)}"]
     details.extend(
-        f"## {label.replace('_', ' ').title()}\n\n{content}"
+        f"## {html.escape(label.replace('_', ' ').title())}\n\n"
+        f"{html.escape(content)}"
         for label, content in block.sections
     )
     return _tag(f"{block.context_type}_context", "\n\n".join(details))
@@ -186,7 +189,7 @@ def _render_block(block, instructions):
 
 def build_ask_prompt(context, question):
     blocks = _context_blocks(context)
-    blocks.append(_tag("user_request", question))
+    blocks.append(_tag("user_request", html.escape(question)))
     return "\n\n".join(blocks)
 
 
@@ -201,16 +204,12 @@ def _context_blocks(context):
         if block is not None:
             blocks.append(_render_block(block, instructions))
 
-    invocation = [
-        f"Working directory: {context.working_directory}",
-        f"Execution backend: {context.execution_backend}"
-    ]
+    invocation = [f"Execution backend: {context.execution_backend}"]
     if context.project is not None:
         invocation.insert(1, f"Active project: {context.project.name}")
     if context.runtime is not None:
         runtime = (
             RUNTIME_CAPABILITY_INSTRUCTIONS,
-            f"Current assistant ID: {context.runtime.assistant_id or 'unresolved'}",
             f"Current mode: {context.runtime.mode}",
             f"AI file reading: {'available' if context.runtime.file_read else 'unavailable'}",
             f"AI file modification: {'available' if context.runtime.file_write else 'unavailable'}",
@@ -220,6 +219,10 @@ def _context_blocks(context):
     if context.runtime is not None:
         blocks.append(_tag("runtime_capability_state", "\n".join(runtime)))
     return blocks
+
+
+def build_context_preview(context):
+    return "\n\n".join(_context_blocks(context))
 
 
 def build_context_refresh_prompt(context, question):
@@ -232,6 +235,6 @@ def build_context_refresh_prompt(context, question):
             "perform actions. The final user request is the task to answer."
         ),
         *_context_blocks(context)[1:],
-        _tag("user_request", question)
+        _tag("user_request", html.escape(question))
     ]
     return "\n\n".join(blocks)

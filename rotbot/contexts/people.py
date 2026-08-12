@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tomllib
 from typing import NamedTuple
+import shutil
 
 from rotbot.contexts import loader
 from rotbot.contexts.identifiers import (
@@ -138,7 +139,9 @@ class PersonDocument(NamedTuple):
 
 
 def _people_root(people_root=None):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    if people_root is None:
+        raise PersonContextError("A legacy people root must be provided explicitly.")
+    root = Path(people_root)
     if root.is_symlink() or not root.is_dir():
         raise PersonContextError(f"Invalid people context directory: {root}")
     for role in PERSON_ROLES:
@@ -146,6 +149,24 @@ def _people_root(people_root=None):
         if role_root.is_symlink() or not role_root.is_dir():
             raise PersonContextError(f"Invalid {role} person directory: {role_root}")
     return root
+
+
+def _contacts_root():
+    root = loader.CONTEXT_ROOT / "contacts"
+    if root.is_symlink():
+        raise PersonContextError(f"Invalid contact context directory: {root}")
+    return root
+
+
+def _canonical_contact_directory(name):
+    try:
+        loader.validate_context_name(name)
+    except loader.ContextError as error:
+        raise PersonContextError(str(error)) from None
+    directory = _contacts_root() / name
+    if directory.is_symlink() or not directory.is_dir():
+        raise PersonContextError(f"Unknown or invalid person context: {name}")
+    return directory
 
 
 def _find_person_directory(name, root):
@@ -171,6 +192,8 @@ def _find_person_directory(name, root):
 
 
 def person_context_directory(person, *, people_root=None):
+    if people_root is None and person.role == "contact":
+        return _canonical_contact_directory(person.name)
     root = _people_root(people_root)
     role, directory = _find_person_directory(person.name, root)
     if role != person.role:
@@ -220,6 +243,7 @@ def build_person_context(
     if (
         not isinstance(display_name, str)
         or not display_name
+        or len(display_name) > 200
         or any(ord(character) < 32 for character in display_name)
     ):
         raise PersonContextError("Invalid person display name.")
@@ -325,6 +349,23 @@ def populated_markdown_sections(markdown, filename):
 
 
 def load_person_documents(name, *, people_root=None):
+    if people_root is None:
+        person = load_person_context(name)
+        directory = person_context_directory(person)
+        documents = []
+        from rotbot.contexts import documents as context_documents
+        try:
+            paths = context_documents.semantic_files(
+                directory, "full", set(person_document_names(person))
+            )
+        except context_documents.ContextDocumentError as error:
+            raise PersonContextError(str(error)) from None
+        for path in paths:
+            content = path.read_text(encoding="utf-8")
+            documents.append(PersonDocument(
+                path.name, populated_markdown_sections(content, path.name)
+            ))
+        return person, tuple(documents)
     root = _people_root(people_root)
     person = load_person_context(name, people_root=root)
     directory = person_context_directory(person, people_root=root)
@@ -346,6 +387,24 @@ def load_person_documents(name, *, people_root=None):
 
 
 def load_person_context(name, *, people_root=None):
+    if people_root is None:
+        directory = _canonical_contact_directory(name)
+        directory_role = "contact"
+        metadata_path = directory / "metadata.toml"
+        try:
+            metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise PersonContextError(
+                f"Could not load person context '{name}': {error}"
+            ) from None
+        person = build_person_context(
+            metadata.get("name"), metadata.get("role"),
+            metadata.get("display_name"), metadata.get("related_projects", []),
+            metadata.get("id") or legacy_context_id("person", name)
+        )
+        if metadata.get("type") != "person" or person.role != directory_role:
+            raise PersonContextError(f"Invalid person metadata: {name}")
+        return person
     root = _people_root(people_root)
     directory_role, directory = _find_person_directory(name, root)
     metadata_path = directory / "metadata.toml"
@@ -388,6 +447,19 @@ def load_person_context(name, *, people_root=None):
 
 
 def list_person_contexts(*, people_root=None):
+    if people_root is None:
+        root = _contacts_root()
+        if not root.exists():
+            return ()
+        if root.is_symlink() or not root.is_dir():
+            raise PersonContextError(f"Invalid contact context directory: {root}")
+        contexts = []
+        for entry in root.iterdir():
+            try:
+                contexts.append(load_person_context(entry.name))
+            except PersonContextError:
+                continue
+        return tuple(sorted(contexts, key=lambda person: person.name))
     root = _people_root(people_root)
     entries = []
     for role in PERSON_ROLES:
@@ -428,6 +500,8 @@ def _write_document(path, content):
         destination.write(content)
         destination.flush()
         os.fsync(destination.fileno())
+    if os.name != "nt":
+        os.chmod(path, 0o600)
 
 
 def _rollback_person(destination, filenames):
@@ -464,6 +538,28 @@ def create_person_context(
     except ContextIdentifierError as error:
         raise PersonContextError(str(error)) from None
     files = render_person_files(person)
+    if people_root is None and role == "contact":
+        root = _contacts_root()
+        root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        destination = root / person.name
+        if os.path.lexists(destination):
+            raise PersonContextError(f"Person context '{person.name}' already exists.")
+        try:
+            destination.mkdir(mode=0o700)
+            _write_document(destination / "metadata.toml", files.pop("metadata.toml"))
+            local = destination / "local"
+            local.mkdir(mode=0o700)
+            (destination / "shareable").mkdir(mode=0o700)
+            for filename, content in files.items():
+                _write_document(local / filename, content)
+        except BaseException as error:
+            shutil.rmtree(destination, ignore_errors=True)
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise PersonContextError(
+                f"Could not create person context '{person.name}': {error}"
+            ) from None
+        return destination
     root = _people_root(people_root)
 
     destinations = tuple(root / role / person.name for role in PERSON_ROLES)

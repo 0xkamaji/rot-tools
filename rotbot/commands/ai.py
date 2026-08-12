@@ -1,9 +1,56 @@
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
+from rotbot.contexts import entities, loader, machines, people, prompt
+from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
 from rotbot.ui.terminal import rot_continue, rot_say, rot_table
 
 
 def _display_time(value):
     return value.astimezone().strftime("%b %d %I:%M %p").replace(" 0", " ")
+
+
+def ai_context_preview(args):
+    try:
+        inspected = inspect_current_context(bootstrap=False)
+        context = prompt.resolve_egress_context(inspected, "preview")
+        builder = getattr(prompt, "build_context_preview", None)
+        preview = (
+            builder(context)
+            if builder is not None
+            else "\n\n".join(prompt._context_blocks(context))
+        )
+    except (
+        ContextInspectionError,
+        entities.EntityContextError,
+        machines.MachineContextError,
+        loader.ContextError,
+        people.PersonContextError,
+        OSError
+    ) as error:
+        rot_say(f"Could not build AI context preview: {error}")
+        return 2
+
+    blocked = (
+        ("assistants", inspected.assistant),
+        ("users", inspected.user),
+        ("machines", inspected.machine),
+        ("projects", inspected.project)
+    )
+    blocked_paths = tuple(
+        f"{category}/{name}/local/"
+        for category, name in blocked
+        if name is not None
+    )
+    lines = [
+        "ROT AI CONTEXT PREVIEW",
+        "----------------------",
+        preview,
+        "",
+        "BLOCKED LOCAL CONTEXT PATHS (NOT SENT)",
+        "--------------------------------------",
+        *(blocked_paths or ("(none)",))
+    ]
+    rot_say("\n".join(lines))
+    return 0
 
 
 def ai_sessions(args):

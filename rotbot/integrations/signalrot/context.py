@@ -122,7 +122,7 @@ def _section_updates(refresh):
 
 def signalrot_context_block():
     try:
-        return build_context_prompt("signalrot")
+        return build_context_prompt("signalrot", view="egress")
     except ContextError:
         return (
             "SIGNALROT CONTEXT IDENTITY (READ-ONLY)\n"

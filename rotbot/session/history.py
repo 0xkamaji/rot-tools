@@ -3,7 +3,7 @@ from pathlib import Path
 import stat
 import tempfile
 
-from rotbot.contexts.config import config_path
+from rotbot.contexts.paths import config_root
 
 
 DEFAULT_HISTORY_LIMIT = 5000
@@ -15,7 +15,7 @@ class HistoryError(Exception):
 
 
 def history_path():
-    return config_path().parent / "history"
+    return config_root() / "history"
 
 
 class CommandHistory:

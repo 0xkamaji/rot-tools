@@ -121,7 +121,9 @@ def _updated_document(content, category, information, category_description=None)
 
 def _person_document(name, filename, people_root):
     try:
-        person = people.load_person_context(name, people_root=people_root)
+        person = people.load_person_context(
+            name, people_root=people_root if people_root is not None else None
+        )
     except people.PersonContextError as error:
         raise PersonModificationError(str(error)) from None
     if filename not in available_documents(person):
@@ -131,11 +133,13 @@ def _person_document(name, filename, people_root):
     try:
         directory = people.person_context_directory(
             person,
-            people_root=people_root
+            people_root=people_root if people_root is not None else None
         )
     except people.PersonContextError as error:
         raise PersonModificationError(str(error)) from None
-    document = directory / filename
+    document = directory / "local" / filename
+    if not document.exists() and people_root is not None:
+        document = directory / filename
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid person context document: {filename}")
     return person, document
@@ -156,16 +160,27 @@ def _entity_document(name, filename, context_type, root=None):
         )
     directory = entities.entity_directory(entity, root)
     if not directory.exists():
-        base = loader.CONTEXT_ROOT if root is None else Path(root)
-        directory = base / "people" / context_type / entity.name
-    document = directory / filename
+        raise PersonModificationError(
+            f"Built-in {context_type} context must be overridden locally before modification."
+        )
+    document = directory / "local" / filename
+    if not document.exists():
+        document.parent.mkdir(exist_ok=True)
+        template = entities.render_entity_files(entity).get(filename)
+        if template is None:
+            raise PersonModificationError(
+                f"Invalid {context_type} context document: {filename}"
+            )
+        document.write_text(template, encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(document, 0o600)
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid {context_type} context document: {filename}")
     return entity, document
 
 
 def person_document_categories(name, filename, *, people_root=None):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    root = Path(people_root) if people_root is not None else None
     _person, document = _person_document(name, filename, root)
     try:
         content = document.read_text(encoding="utf-8")
@@ -183,7 +198,7 @@ def add_person_information(
     category_description=None,
     people_root=None
 ):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    root = Path(people_root) if people_root is not None else None
     _person, document = _person_document(name, filename, root)
     category = _single_line(category, "person context category", 200)
     information = _single_line(information, "person context information", 10_000)
@@ -258,7 +273,7 @@ def replace_person_metadata(
     expected_person=None,
     people_root=None
 ):
-    root = Path(people_root) if people_root is not None else loader.CONTEXT_ROOT / "people"
+    root = Path(people_root) if people_root is not None else None
     try:
         current = people.load_person_context(name, people_root=root)
         updated_person = people.build_person_context(

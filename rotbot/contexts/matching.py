@@ -188,8 +188,14 @@ def parse_match_document(markdown):
 
 
 def load_match_definition(name):
-    identity_path, _state_path = loader.context_paths(name)
-    match_path = identity_path.parent / "match.md"
+    try:
+        identity_path, _state_path = loader.context_paths(name)
+        directory = identity_path.parent
+        if directory.name in {"local", "shareable"}:
+            directory = directory.parent
+        match_path = loader._existing_project_document(directory, "match.md")
+    except loader.ContextError as error:
+        raise MatchError(str(error)) from None
     if match_path.is_symlink():
         raise MatchError(f"Invalid match document for context: {name}")
     if not match_path.exists():

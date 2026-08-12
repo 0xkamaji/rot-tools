@@ -507,6 +507,19 @@ class RotSessionTests(unittest.TestCase):
         self.assertIs(self.session.ai, chat)
         chat.mark_context_dirty.assert_called_once_with()
 
+    def test_context_change_refreshes_session_before_ai_exists(self):
+        self.assertIsNone(self.session.ai)
+        refreshed = inspected(self.first, user="Updated")
+        with patch.object(interactive, "_run_rot_command", return_value=0), patch.object(
+            self.session, "refresh_context", side_effect=lambda: setattr(
+                self.session, "context", refreshed
+            )
+        ) as refresh:
+            interactive.evaluate_input(self.session, "context inspect")
+
+        refresh.assert_called_once_with()
+        self.assertEqual(self.session.context.user, "Updated")
+
     def test_exit_and_quit_end_session(self):
         self.assertFalse(interactive.evaluate_input(self.session, "exit"))
         self.assertFalse(interactive.evaluate_input(self.session, "quit"))

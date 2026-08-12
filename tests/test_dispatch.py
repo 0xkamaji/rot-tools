@@ -332,7 +332,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 18)
+        self.assertEqual(message.count("=" * 60), 20)
         self.assertLess(
             message.index("COMMAND: rotbot git status"),
             message.index("COMMAND: rotbot wtf")

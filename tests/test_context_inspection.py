@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 from rotbot import __main__ as rotbot
 from rotbot.cli import parser as command_parser
-from rotbot.contexts import inspection, loader, machines, people
+from rotbot.contexts import entities, inspection, loader, machines
 from rotbot.contexts.config import get_local_context_bindings
 from rotbot.commands.machine import MachineInspection
 
@@ -24,15 +25,14 @@ class ContextInspectionTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name)
         self.context_root = self.root / "context"
         self.projects = self.context_root / "projects"
-        self.people = self.context_root / "people"
+        self.users = self.context_root / "users"
+        self.assistants = self.context_root / "assistants"
         self.machines = self.context_root / "machines"
         self.projects.mkdir(parents=True)
         self.machines.mkdir()
-        for role in people.PERSON_ROLES:
-            (self.people / role).mkdir(parents=True)
 
         self.config_home = self.root / "config-home"
-        self.config = self.config_home / "rot" / "config.toml"
+        self.config = self.config_home / "rotbot" / "config.toml"
         self.environment = patch.dict(
             os.environ,
             {"XDG_CONFIG_HOME": str(self.config_home)},
@@ -42,11 +42,17 @@ class ContextInspectionTests(unittest.TestCase):
         self.environment.start()
         self.context_patch.start()
 
-        people.create_person_context(
-            "rot", "assistant", context_id=self.ASSISTANT_ID, people_root=self.people
+        entities.create_entity_context(
+            entities.build_assistant_context(
+                "rot", context_id=self.ASSISTANT_ID
+            ),
+            root=self.context_root
         )
-        people.create_person_context(
-            "kamaji", "user", context_id=self.USER_ID, people_root=self.people
+        entities.create_entity_context(
+            entities.build_user_context(
+                "kamaji", context_id=self.USER_ID
+            ),
+            root=self.context_root
         )
         machines.create_machine(
             "laptop", context_id=self.MACHINE_ID, machines_root=self.machines
@@ -334,9 +340,7 @@ class ContextInspectionTests(unittest.TestCase):
         )
 
     def test_no_existing_user_reuses_context_add_and_persists_created_user(self):
-        for path in (self.people / "user" / "kamaji").iterdir():
-            path.unlink()
-        (self.people / "user" / "kamaji").rmdir()
+        shutil.rmtree(self.users / "kamaji")
         self.write_config()
         content = self.config.read_text(encoding="utf-8")
         start = content.index("[user]")
@@ -345,7 +349,10 @@ class ContextInspectionTests(unittest.TestCase):
 
         def create_user(args):
             self.assertEqual(args.context_type, "user")
-            people.create_person_context("new-user", "user", people_root=self.people)
+            entities.create_entity_context(
+                entities.build_user_context("new-user"),
+                root=self.context_root
+            )
             return 0
 
         with patch("builtins.input", return_value="1"), patch(
@@ -358,10 +365,8 @@ class ContextInspectionTests(unittest.TestCase):
         self.assertEqual(result.user, "new-user")
         self.assertEqual(get_local_context_bindings()["user"], result.user_id)
 
-    def test_no_existing_assistant_reuses_context_add(self):
-        for path in (self.people / "assistant" / "rot").iterdir():
-            path.unlink()
-        (self.people / "assistant" / "rot").rmdir()
+    def test_add_assistant_option_reuses_context_add(self):
+        shutil.rmtree(self.assistants / "rot")
         self.write_config()
         content = self.config.read_text(encoding="utf-8")
         start = content.index("[assistant]")
@@ -370,14 +375,15 @@ class ContextInspectionTests(unittest.TestCase):
 
         def create_assistant(args):
             self.assertEqual(args.context_type, "assistant")
-            people.create_person_context(
-                "new-assistant",
-                "assistant",
-                people_root=self.people
+            entities.create_entity_context(
+                entities.build_assistant_context("new-assistant"),
+                root=self.context_root
             )
             return 0
 
-        with patch("builtins.input", return_value="1"), patch(
+        # The repository built-in Rot remains available when inspection uses
+        # the default root, so adding a new assistant is the second option.
+        with patch("builtins.input", return_value="2"), patch(
             "rotbot.contexts.creation.context_add",
             side_effect=create_assistant
         ) as context_add, patch.object(inspection, "rot_say"):
@@ -643,7 +649,7 @@ class ContextInspectionTests(unittest.TestCase):
 
     def test_malformed_configured_context_is_treated_as_stale(self):
         self.write_config()
-        (self.people / "assistant" / "rot" / "metadata.toml").write_text(
+        (self.assistants / "rot" / "metadata.toml").write_text(
             "not valid toml = [",
             encoding="utf-8"
         )

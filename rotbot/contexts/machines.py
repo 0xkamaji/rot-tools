@@ -1,11 +1,12 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import tomllib
 from typing import NamedTuple
 
-from rotbot.contexts import loader
+from rotbot.contexts import documents, loader
 from rotbot.contexts.config import ConfigError, config_path, legacy_config_path
 from rotbot.contexts.identifiers import (
     ContextIdentifierError,
@@ -55,6 +56,7 @@ def _validate_text(value, label):
     if (
         not isinstance(value, str)
         or not value
+        or len(value) > 1000
         or any(ord(character) < 32 for character in value)
     ):
         raise MachineContextError(f"Invalid machine {label}.")
@@ -210,8 +212,10 @@ def render_machine_files(machine):
     }
 
 
-def _machines_root(machines_root=None):
+def _machines_root(machines_root=None, create=False):
     root = Path(machines_root) if machines_root is not None else loader.CONTEXT_ROOT / "machines"
+    if create and not os.path.lexists(root):
+        root.mkdir(parents=True, mode=0o700)
     if root.is_symlink() or not root.is_dir():
         raise MachineContextError(f"Invalid machine context directory: {root}")
     return root
@@ -227,9 +231,17 @@ def machine_context_directory(name, *, machines_root=None):
 
 
 def _read_portable_files(name, directory):
-    documents = []
-    for filename in PORTABLE_FILENAMES:
-        path = directory / filename
+    loaded = []
+    metadata_path = directory / "metadata.toml"
+    paths = [metadata_path]
+    try:
+        paths.extend(documents.semantic_files(
+            directory, "full", {"identity.md", "software.toml"}
+        ))
+    except documents.ContextDocumentError as error:
+        raise MachineContextError(str(error)) from None
+    for path in paths:
+        filename = path.name
         if path.is_symlink() or not path.is_file():
             raise MachineContextError(f"Invalid machine document: {name}/{filename}")
         try:
@@ -240,14 +252,13 @@ def _read_portable_files(name, directory):
             raise MachineContextError(
                 f"Could not load machine document '{name}/{filename}': {error}"
             ) from None
-        documents.append(MachineDocument(filename, content))
-    return tuple(documents)
+        loaded.append(MachineDocument(filename, content))
+    return tuple(loaded)
 
 
 def load_machine_context(name, *, machines_root=None):
     directory = machine_context_directory(name, machines_root=machines_root)
-    documents = _read_portable_files(name, directory)
-    metadata = tomllib.loads(documents[0].content)
+    metadata = tomllib.loads((directory / "metadata.toml").read_text(encoding="utf-8"))
     if (
         metadata.get("type") != "machine"
         or metadata.get("name") != name
@@ -267,14 +278,26 @@ def load_machine_context(name, *, machines_root=None):
     )
 
 
-def load_machine_files(name, *, machines_root=None):
+def load_machine_files(name, *, machines_root=None, view="full"):
     directory = machine_context_directory(name, machines_root=machines_root)
     machine = load_machine_context(name, machines_root=machines_root)
-    return machine, _read_portable_files(name, directory)
+    loaded = [MachineDocument("metadata.toml", (directory / "metadata.toml").read_text(encoding="utf-8"))]
+    try:
+        paths = documents.semantic_files(
+            directory, view, {"identity.md", "software.toml"},
+            include_legacy_local=view == "full"
+        )
+    except documents.ContextDocumentError as error:
+        raise MachineContextError(str(error)) from None
+    loaded.extend(MachineDocument(path.name, path.read_text(encoding="utf-8")) for path in paths)
+    return machine, tuple(loaded)
 
 
 def list_machine_contexts(*, machines_root=None):
-    root = _machines_root(machines_root)
+    root = Path(machines_root) if machines_root is not None else loader.CONTEXT_ROOT / "machines"
+    if not root.exists():
+        return ()
+    root = _machines_root(root)
     try:
         entries = tuple(root.iterdir())
     except OSError as error:
@@ -310,6 +333,8 @@ def _write_document(path, content, mode=None):
                 destination.write(content)
                 destination.flush()
                 os.fsync(destination.fileno())
+            if os.name != "nt":
+                os.chmod(path, 0o600)
             return
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
         created = True
@@ -350,20 +375,29 @@ def create_machine(
 ):
     machine = build_machine_context(name, display_name, portable_facts, context_id)
     files = render_machine_files(machine)
-    root = _machines_root(machines_root)
+    root = _machines_root(machines_root, create=True)
     destination = root / machine.name
     if os.path.lexists(destination):
         raise MachineContextError(f"Machine context '{machine.name}' already exists.")
     created = False
     created_files = []
     try:
-        destination.mkdir()
+        destination.mkdir(mode=0o700)
         created = True
-        for filename, content in files.items():
-            _write_document(destination / filename, content)
-            created_files.append(filename)
+        _write_document(destination / "metadata.toml", files["metadata.toml"])
+        created_files.append("metadata.toml")
+        local = destination / "local"
+        local.mkdir(mode=0o700)
+        (destination / "shareable").mkdir(mode=0o700)
+        for filename in ("identity.md", "software.toml"):
+            _write_document(local / filename, files[filename])
     except BaseException as error:
-        rollback_errors = _rollback_directory(destination, created_files) if created else ()
+        rollback_errors = ()
+        if created:
+            try:
+                shutil.rmtree(destination)
+            except OSError as rollback_error:
+                rollback_errors = (str(rollback_error),)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
         message = f"Could not create machine context '{machine.name}': {error}"

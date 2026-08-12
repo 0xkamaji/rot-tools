@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import deletion, loader, machines, people
+from rotbot.contexts import deletion, entities, loader, machines, people
 from rotbot.contexts.config import ConfigError, get_context_binding, set_context_binding
 
 
@@ -14,14 +14,11 @@ class ContextDeletionTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name)
         self.context_root = self.root / "context"
         self.context_root.mkdir()
+        for category in ("projects", "users", "assistants", "contacts", "machines"):
+            (self.context_root / category).mkdir()
         self.projects = self.context_root / "projects"
-        self.projects.mkdir()
-        self.people = self.context_root / "people"
-        self.people.mkdir()
-        for role in people.PERSON_ROLES:
-            (self.people / role).mkdir()
+        self.contacts = self.context_root / "contacts"
         self.machines = self.context_root / "machines"
-        self.machines.mkdir()
         self.config = self.root / "config" / "rotbot" / "config.toml"
         self.root_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
         self.root_patch.start()
@@ -33,10 +30,27 @@ class ContextDeletionTests(unittest.TestCase):
     def create_project(self, name="example", marker="original"):
         destination = self.projects / name
         destination.mkdir()
-        (destination / "identity.md").write_text("identity", encoding="utf-8")
-        (destination / "state.md").write_text("state", encoding="utf-8")
+        (destination / "metadata.toml").write_text(
+            loader.render_project_metadata(name), encoding="utf-8"
+        )
+        local = destination / "local"
+        local.mkdir()
+        (destination / "shareable").mkdir()
+        (local / "identity.md").write_text("identity", encoding="utf-8")
+        (local / "state.md").write_text("state", encoding="utf-8")
         (destination / "marker.txt").write_text(marker, encoding="utf-8")
         return destination
+
+    def create_contact(self, name="alex"):
+        return people.create_person_context(name, "contact")
+
+    def create_entity(self, name, context_type):
+        builder = (
+            entities.build_user_context
+            if context_type == "user"
+            else entities.build_assistant_context
+        )
+        return entities.create_entity_context(builder(name), root=self.context_root)
 
     def test_project_is_archived_outside_discovery_and_bindings_are_removed(self):
         source = self.create_project()
@@ -65,10 +79,8 @@ class ContextDeletionTests(unittest.TestCase):
         with self.assertRaises(loader.ContextError):
             loader.load_context("example")
 
-    def test_person_is_archived_without_changing_same_named_project_bindings(self):
-        source = people.create_person_context(
-            "alex", "contact", "Alex", people_root=self.people
-        )
+    def test_contact_is_archived_without_changing_same_named_project_bindings(self):
+        source = self.create_contact()
         set_context_binding("alex", "source_path", "/keep/project", self.config)
 
         context_type, destination = deletion.archive_context(
@@ -88,7 +100,7 @@ class ContextDeletionTests(unittest.TestCase):
             "/keep/project"
         )
 
-    def test_each_person_role_uses_its_own_archive_bucket(self):
+    def test_each_entity_type_uses_its_own_archive_bucket(self):
         expected = {
             "contact": "contacts",
             "user": "users",
@@ -97,7 +109,10 @@ class ContextDeletionTests(unittest.TestCase):
         for role, bucket in expected.items():
             with self.subTest(role=role):
                 name = f"example-{role}"
-                people.create_person_context(name, role, people_root=self.people)
+                if role == "contact":
+                    self.create_contact(name)
+                else:
+                    self.create_entity(name, role)
                 _context_type, destination = deletion.archive_context(
                     name,
                     context_root=self.context_root,
@@ -177,13 +192,13 @@ class ContextDeletionTests(unittest.TestCase):
             )
 
         self.create_project("shared")
-        people.create_person_context("shared", "contact", people_root=self.people)
+        self.create_contact("shared")
         with self.assertRaisesRegex(deletion.ContextDeletionError, "ambiguous"):
             deletion.archive_context(
                 "shared", context_root=self.context_root, target_config=self.config
             )
         self.assertTrue((self.projects / "shared").exists())
-        self.assertTrue((self.people / "contact" / "shared").exists())
+        self.assertTrue((self.contacts / "shared").exists())
 
         outside = self.root / "outside"
         outside.mkdir()
@@ -206,20 +221,20 @@ class ContextDeletionTests(unittest.TestCase):
             )
         self.assertTrue((self.projects / "safe").exists())
 
-    def test_explicit_type_resolves_same_name_project_and_person(self):
+    def test_explicit_type_resolves_same_name_project_and_contact(self):
         self.create_project("shared")
-        people.create_person_context("shared", "contact", people_root=self.people)
+        self.create_contact("shared")
 
         context_type, _destination = deletion.archive_context(
             "shared",
-            context_type="person",
+            context_type="contact",
             context_root=self.context_root,
             target_config=self.config
         )
 
         self.assertEqual(context_type, "contact")
         self.assertTrue((self.projects / "shared").exists())
-        self.assertFalse((self.people / "contact" / "shared").exists())
+        self.assertFalse((self.contacts / "shared").exists())
 
     def test_binding_failure_rolls_archived_project_back(self):
         source = self.create_project()
@@ -258,7 +273,7 @@ class ContextDeletionTests(unittest.TestCase):
 
     def test_no_name_lists_all_contexts_and_archives_numbered_selection(self):
         self.create_project("zeta")
-        people.create_person_context("alex", "contact", people_root=self.people)
+        self.create_contact("alex")
 
         with patch("builtins.input", side_effect=("2", "yes")), patch.object(
             deletion,
@@ -295,7 +310,7 @@ class ContextDeletionTests(unittest.TestCase):
 
     def test_deletable_listing_includes_safe_directories_even_if_incomplete(self):
         self.create_project("valid")
-        incomplete = self.people / "contact" / "incomplete"
+        incomplete = self.contacts / "incomplete"
         incomplete.mkdir()
         (self.machines / "unconfigured").mkdir()
         ordinary = self.projects / "ordinary.txt"
@@ -310,16 +325,18 @@ class ContextDeletionTests(unittest.TestCase):
             )
         )
 
-    def test_duplicate_person_name_across_roles_is_rejected(self):
-        people.create_person_context("alex", "contact", people_root=self.people)
-        (self.people / "assistant" / "alex").mkdir()
+    def test_duplicate_name_across_entity_categories_is_ambiguous(self):
+        self.create_entity("alex", "user")
+        self.create_entity("alex", "assistant")
 
-        with self.assertRaisesRegex(deletion.ContextDeletionError, "multiple role"):
+        with self.assertRaisesRegex(deletion.ContextDeletionError, "multiple context types"):
             deletion.archive_context(
                 "alex", context_root=self.context_root, target_config=self.config
             )
-        with self.assertRaisesRegex(deletion.ContextDeletionError, "multiple role"):
-            deletion.list_deletable_contexts(context_root=self.context_root)
+        self.assertEqual(
+            deletion.list_deletable_contexts(context_root=self.context_root),
+            (("user", "alex"), ("assistant", "alex"))
+        )
 
 
 if __name__ == "__main__":

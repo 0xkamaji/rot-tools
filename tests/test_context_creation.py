@@ -262,17 +262,17 @@ class ContextCreationTests(unittest.TestCase):
         destination = self.project_context_root / "example"
         self.assertEqual(
             {path.name for path in destination.iterdir()},
-            {"metadata.toml", "identity.md", "state.md", "match.md"}
+            {"metadata.toml", "local", "shareable"}
         )
         self.assertFalse((destination / "vision.md").exists())
         self.assertTrue(any(
-            "context/projects/example/identity.md" in item.args[0]
+            "projects/example/local/identity.md" in item.args[0]
             for item in rot_continue.call_args_list
         ))
         loaded = contexts.load_context("example")
         self.assertIn("Example is a small test project", loaded.identity)
         self.assertIn("Python entry point", loaded.state)
-        match_text = (destination / "match.md").read_text(encoding="utf-8")
+        match_text = (destination / "local" / "match.md").read_text(encoding="utf-8")
         self.assertIn("- github.com/example/project", match_text)
         self.assertIn("- main.py", match_text)
         self.assertIn("- src/", match_text)
