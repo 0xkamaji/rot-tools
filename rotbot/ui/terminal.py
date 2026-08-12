@@ -3,13 +3,14 @@ from shutil import get_terminal_size
 from textwrap import wrap
 
 
-ROTBOT = r"""
+ROTBOT_BODY = r"""
    .-.
   [x_o]
   /|%|\
    / \
-  ROTBOT
 """.strip("\n")
+ROTBOT_NAME = "ROTBOT"
+ROTBOT = f"{ROTBOT_BODY}\n  {ROTBOT_NAME}"
 ROTBOT_ARTIFACT = "[x_o]"
 ROTBOT_DIVIDER = "----------[ rot ]----------"
 ROTBOT_OUTPUT_MARGIN = 4

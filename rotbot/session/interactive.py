@@ -12,9 +12,9 @@ from rotbot.contexts.inspection import (
     inspect_current_context
 )
 from rotbot.ui.interactive import (
+    SessionHeader,
     clear_terminal,
-    render_session_status,
-    show_session_header
+    render_session_status
 )
 from rotbot.ui.terminal import rot_say
 
@@ -89,7 +89,7 @@ def _run_rot_command(arguments):
         return
 
 
-def evaluate_input(session, line):
+def evaluate_input(session, line, header=None):
     try:
         arguments = shlex.split(line)
     except ValueError as error:
@@ -111,8 +111,10 @@ def evaluate_input(session, line):
         rot_say(str(session.cwd))
         return True
     if command == "clear" and len(arguments) == 1:
-        clear_terminal()
-        show_session_header(session)
+        if header is None:
+            clear_terminal()
+        else:
+            header.clear(session)
         return True
     if command == "cd":
         if len(arguments) != 2:
@@ -143,14 +145,19 @@ def run_interactive():
         rot_say(str(error))
         return 2
 
-    show_session_header(session)
-    while True:
-        try:
-            line = input("rot> ")
-        except EOFError:
-            return 0
-        except KeyboardInterrupt:
-            print()
-            continue
-        if not evaluate_input(session, line):
-            return 0
+    header = SessionHeader()
+    header.start(session)
+    try:
+        while True:
+            header.refresh(session)
+            try:
+                line = input("rot> ")
+            except EOFError:
+                return 0
+            except KeyboardInterrupt:
+                print()
+                continue
+            if not evaluate_input(session, line, header=header):
+                return 0
+    finally:
+        header.stop()

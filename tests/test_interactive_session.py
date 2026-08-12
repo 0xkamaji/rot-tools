@@ -1,5 +1,6 @@
 import argparse
 from datetime import datetime
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -203,14 +204,20 @@ class RotSessionTests(unittest.TestCase):
         self.assertFalse(interactive.evaluate_input(self.session, "exit"))
         self.assertFalse(interactive.evaluate_input(self.session, "quit"))
 
-    def test_clear_redraws_header(self):
-        with patch.object(interactive, "clear_terminal") as clear, patch.object(
-            interactive, "show_session_header"
-        ) as header:
+    def test_clear_defers_header_redraw_to_prompt_loop(self):
+        with patch.object(interactive, "clear_terminal") as clear:
             self.assertTrue(interactive.evaluate_input(self.session, "clear"))
 
         clear.assert_called_once_with()
-        header.assert_called_once_with(self.session)
+
+    def test_clear_uses_active_header_controller(self):
+        header = Mock()
+
+        self.assertTrue(
+            interactive.evaluate_input(self.session, "clear", header=header)
+        )
+
+        header.clear.assert_called_once_with(self.session)
 
 
 class InteractiveLoopTests(unittest.TestCase):
@@ -240,16 +247,18 @@ class InteractiveLoopTests(unittest.TestCase):
         for side_effect in (("exit",), ("quit",), (EOFError(),)):
             with self.subTest(side_effect=side_effect), patch.object(
                 interactive.RotSession, "start", return_value=session
-            ), patch.object(interactive, "show_session_header"), patch(
+            ), patch.object(interactive, "SessionHeader") as header_type, patch(
                 "builtins.input", side_effect=side_effect
             ):
                 self.assertEqual(interactive.run_interactive(), 0)
+            header_type.return_value.start.assert_called_once_with(session)
+            header_type.return_value.stop.assert_called_once_with()
 
     def test_ctrl_c_at_prompt_returns_to_prompt(self):
         session = Mock()
         with patch.object(
             interactive.RotSession, "start", return_value=session
-        ), patch.object(interactive, "show_session_header"), patch(
+        ), patch.object(interactive, "SessionHeader"), patch(
             "builtins.input", side_effect=(KeyboardInterrupt(), "exit")
         ) as prompt, patch("builtins.print"):
             result = interactive.run_interactive()
@@ -261,15 +270,32 @@ class InteractiveLoopTests(unittest.TestCase):
         session = Mock()
         with patch.object(
             interactive.RotSession, "start", return_value=session
-        ), patch.object(interactive, "show_session_header"), patch(
+        ), patch.object(interactive, "SessionHeader") as header_type, patch(
             "builtins.input", side_effect=("git status", "exit")
         ), patch.object(interactive, "evaluate_input", side_effect=(True, False)) as evaluate:
             result = interactive.run_interactive()
 
         self.assertEqual(result, 0)
+        header = header_type.return_value
         self.assertEqual(evaluate.call_args_list, [
-            call(session, "git status"), call(session, "exit")
+            call(session, "git status", header=header),
+            call(session, "exit", header=header)
         ])
+
+    def test_header_is_refreshed_before_every_prompt(self):
+        session = Mock()
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader") as header_type, patch(
+            "builtins.input", side_effect=("pwd", "exit")
+        ), patch.object(interactive, "evaluate_input", side_effect=(True, False)):
+            result = interactive.run_interactive()
+
+        self.assertEqual(result, 0)
+        header = header_type.return_value
+        header.start.assert_called_once_with(session)
+        self.assertEqual(header.refresh.call_args_list, [call(session), call(session)])
+        header.stop.assert_called_once_with()
 
 
 class InteractiveUiTests(unittest.TestCase):
@@ -289,7 +315,10 @@ class InteractiveUiTests(unittest.TestCase):
         self.assertIn("Rot", rendered)
         self.assertIn("laptop", rendered)
         self.assertIn("project: rotbot", rendered)
+        self.assertIn("cwd: /work/rotbot", rendered)
         self.assertIn("12:20 PM", rendered)
+        self.assertIn("[x_o]", rendered)
+        self.assertNotIn("ROTBOT", rendered)
 
     def test_header_and_status_support_missing_optional_context(self):
         session = interactive.RotSession(
@@ -305,6 +334,52 @@ class InteractiveUiTests(unittest.TestCase):
         self.assertIn("project: none", header)
         self.assertIn("User:       unidentified", status)
         self.assertIn("Project:    none", status)
+
+    def test_fixed_header_reserves_rows_and_restores_terminal(self):
+        class TtyStream(io.StringIO):
+            def isatty(self):
+                return True
+
+        stream = TtyStream()
+        session = interactive.RotSession(
+            datetime(2026, 8, 12, 12, 20),
+            Path("/work/rotbot"),
+            inspected("/work/rotbot")
+        )
+        header = interactive_ui.SessionHeader(stream)
+
+        with patch.dict(os.environ, {"TERM": "xterm-256color"}), patch.object(
+            header, "_terminal_size", return_value=(80, 24)
+        ):
+            header.start(session)
+            header.refresh(session)
+            header.stop()
+
+        output = stream.getvalue()
+        self.assertTrue(header.height > 0)
+        self.assertIn(f"\033[{header.height + 1};24r", output)
+        self.assertIn("\0337", output)
+        self.assertIn("\0338", output)
+        self.assertTrue(output.endswith("\033[r\033[999;1H"))
+
+    def test_non_tty_header_prints_once_without_ansi(self):
+        stream = io.StringIO()
+        session = interactive.RotSession(
+            datetime(2026, 8, 12, 12, 20),
+            Path("/work/rotbot"),
+            inspected("/work/rotbot")
+        )
+        header = interactive_ui.SessionHeader(stream)
+
+        with patch.object(header, "_terminal_size", return_value=(80, 24)):
+            header.start(session)
+            initial = stream.getvalue()
+            header.refresh(session)
+            header.stop()
+
+        self.assertFalse(header.fixed)
+        self.assertNotIn("\033[", stream.getvalue())
+        self.assertEqual(stream.getvalue(), initial)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 from datetime import datetime
+import os
+from shutil import get_terminal_size
+import sys
 
-from rotbot.ui.terminal import _terminal_width
+from rotbot.ui.terminal import ROTBOT_BODY, _terminal_width
 
 
 def _context_fields(session):
@@ -30,22 +33,38 @@ def render_session_header(session, now=None, width=None):
     now = datetime.now().astimezone() if now is None else now
     width = min(_terminal_width() if width is None else width, 72)
     user, assistant, machine, project = _context_fields(session)
-    summary_lines = (f"{user} · {assistant}", f"{machine} · {project}")
-    time_text = now.strftime("%I:%M %p").lstrip("0")
+    details = (
+        f"{user} · {assistant}",
+        f"{machine} · {project}",
+        f"cwd: {session.cwd}",
+        now.strftime("%I:%M %p").lstrip("0")
+    )
     if width < 28:
-        return "\n".join(("ROT", *(_fit(line, width) for line in summary_lines), time_text))
+        return "\n".join((
+            ROTBOT_BODY,
+            *(_fit(line, width) for line in details)
+        ))
 
     content_width = width - 4
     title = "─ ROT "
     top = "┌" + title + "─" * (width - len(title) - 2) + "┐"
+    art = ROTBOT_BODY.splitlines()
+    art_width = max(len(line) for line in art)
+    detail_width = max(content_width - art_width - 2, 1)
 
-    def row(text):
-        return f"│ {_fit(text, content_width):<{content_width}} │"
+    def row(art_line, detail):
+        body = f"{art_line:<{art_width}}  {_fit(detail, detail_width):<{detail_width}}"
+        return f"│ {body:<{content_width}} │"
 
     return "\n".join((
         top,
-        *(row(line) for line in summary_lines),
-        row(time_text),
+        *(
+            row(
+                art[index] if index < len(art) else "",
+                details[index] if index < len(details) else ""
+            )
+            for index in range(max(len(art), len(details)))
+        ),
         "└" + "─" * (width - 2) + "┘"
     ))
 
@@ -70,3 +89,90 @@ def show_session_header(session):
 
 def clear_terminal():
     print("\033[2J\033[H", end="")
+
+
+class SessionHeader:
+    def __init__(self, stream=None):
+        self.stream = sys.stdout if stream is None else stream
+        self.fixed = False
+        self.size = None
+        self.height = 0
+
+    def _terminal_size(self):
+        size = get_terminal_size(fallback=(80, 24))
+        return size.columns, size.lines
+
+    def _supports_fixed_header(self, height, rows):
+        return (
+            getattr(self.stream, "isatty", lambda: False)()
+            and os.environ.get("TERM", "").lower() not in {"", "dumb"}
+            and rows >= height + 3
+        )
+
+    def _write(self, content):
+        self.stream.write(content)
+        self.stream.flush()
+
+    def _establish(self, session, columns, rows):
+        rendered = render_session_header(session, width=columns)
+        lines = rendered.splitlines()
+        height = len(lines)
+        if not self._supports_fixed_header(height, rows):
+            if self.fixed:
+                self._write("\033[r\033[2J\033[H")
+            self.fixed = False
+            self.size = (columns, rows)
+            self.height = height
+            self._write(rendered + "\n")
+            return
+
+        header = "".join(
+            f"\033[{row};1H\033[2K{line}"
+            for row, line in enumerate(lines, 1)
+        )
+        self.fixed = True
+        self.size = (columns, rows)
+        self.height = height
+        self._write(
+            "\033[r\033[2J\033[H"
+            + header
+            + f"\033[{height + 1};{rows}r"
+            + f"\033[{height + 1};1H"
+        )
+
+    def start(self, session):
+        self._establish(session, *self._terminal_size())
+
+    def refresh(self, session):
+        columns, rows = self._terminal_size()
+        if not self.fixed:
+            return
+        if self.size != (columns, rows):
+            self._establish(session, columns, rows)
+            return
+
+        lines = render_session_header(session, width=columns).splitlines()
+        if len(lines) != self.height:
+            self._establish(session, columns, rows)
+            return
+        header = "".join(
+            f"\033[{row};1H\033[2K{line}"
+            for row, line in enumerate(lines, 1)
+        )
+        self._write(
+            "\0337"
+            + f"\033[{self.height + 1};{rows}r"
+            + header
+            + "\0338"
+        )
+
+    def clear(self, session):
+        if not self.fixed:
+            clear_terminal()
+            return
+        self._establish(session, *self._terminal_size())
+
+    def stop(self):
+        if self.fixed:
+            self._write("\033[r\033[999;1H")
+        self.fixed = False

@@ -69,6 +69,11 @@ The session keeps its working directory between commands and refreshes the
 resolved project after `cd`. Enter `help` for the concise interactive command
 list, `clear` to redraw the header, or `exit`/`quit` to leave.
 
+On supported interactive terminals, Rot reserves the top rows for a fixed
+session header while command output scrolls beneath it. Redirected output and
+terminals without ANSI support use a plain one-time header instead. Rot restores
+the terminal's normal scroll region when the session exits.
+
 Every normal Rot command can be entered without the leading `rot` while inside
 the session. The REPL uses the same parser and command handlers as the one-shot
 CLI, including aliases, options, help, and explicit AI commands:
