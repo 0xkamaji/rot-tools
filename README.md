@@ -125,6 +125,14 @@ uses OpenCode's official CLI session support and reuses the returned session ID
 for later conversational turns. After `cd` or a successful context-changing Rot
 command, the next AI turn refreshes shareable Rot context in that same session.
 
+While a conversational request is waiting for visible output, interactive Rot
+shows an animated `rot · thinking` status. User-visible OpenCode text events are
+rendered as soon as the backend emits them; reasoning, tool, protocol, and debug
+events remain hidden. OpenCode's CLI currently emits completed text parts rather
+than token deltas, so streaming occurs at those genuine backend event
+boundaries. Rot never simulates streaming by slowly replaying a completed
+answer. Backends without native streaming fall back to one completed response.
+
 Rot commands, shell commands, their output, and terminal command history are
 not automatically sent to AI. Natural-language fallback is configured without
 shell or edit permission; it is conversation, not authorization to execute.

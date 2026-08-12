@@ -4,9 +4,6 @@ from dataclasses import dataclass
 from shutil import which
 import subprocess
 
-from rotbot.ui.terminal import rot_say
-
-
 TALK_AGENT = "rotbot-talk"
 
 
@@ -28,6 +25,11 @@ class BackendResult:
     response: str
     remote_state: tuple[BackendStateReference, ...]
     model: str | None = None
+
+
+@dataclass(frozen=True)
+class TextDelta:
+    text: str
 
 
 class OpenCodeBackend:
@@ -99,7 +101,7 @@ class OpenCodeBackend:
         self.authority = authority
         return True
 
-    def generate(self, message, cwd, authority="TALK"):
+    def stream_generate(self, message, cwd, authority="TALK"):
         if which("opencode") is None:
             raise ConversationError("OpenCode is not installed or available in PATH.")
         environment = self._environment(authority)
@@ -123,6 +125,7 @@ class OpenCodeBackend:
         response_parts = []
         errors = []
         model = None
+        completed = False
         try:
             for raw_line in process.stdout:
                 try:
@@ -141,10 +144,15 @@ class OpenCodeBackend:
                 if event.get("type") != "text":
                     continue
                 part = event.get("part", {})
-                text = part.get("text") if isinstance(part, dict) else None
-                if not isinstance(text, str) or not text.strip():
+                text = (
+                    part.get("text")
+                    if isinstance(part, dict) and part.get("type", "text") == "text"
+                    else None
+                )
+                if not isinstance(text, str) or text == "":
                     continue
-                response_parts.append(text.strip())
+                response_parts.append(text)
+                yield TextDelta(text)
                 event_model = event.get("modelID")
                 event_provider = event.get("providerID")
                 if isinstance(event_model, str):
@@ -154,6 +162,7 @@ class OpenCodeBackend:
                         else event_model
                     )
             returncode = process.wait()
+            completed = True
         except ConversationError:
             process.terminate()
             process.wait()
@@ -163,6 +172,9 @@ class OpenCodeBackend:
             process.wait()
             raise
         finally:
+            if not completed and process.poll() is None:
+                process.terminate()
+                process.wait()
             self.current_process = None
 
         if returncode != 0:
@@ -173,10 +185,8 @@ class OpenCodeBackend:
             )
         if self.session_id is None:
             raise ConversationError("OpenCode did not return a session ID.")
-        if not response_parts:
-            rot_say("OpenCode returned no conversational response.")
         return BackendResult(
-            response="\n\n".join(response_parts),
+            response="".join(response_parts),
             remote_state=(BackendStateReference(
                 layer="backend",
                 provider="opencode",
@@ -186,6 +196,14 @@ class OpenCodeBackend:
             ),),
             model=model
         )
+
+    def generate(self, message, cwd, authority="TALK"):
+        stream = self.stream_generate(message, cwd, authority=authority)
+        while True:
+            try:
+                next(stream)
+            except StopIteration as completed:
+                return completed.value
 
     def abort_current(self):
         if self.current_process is not None:

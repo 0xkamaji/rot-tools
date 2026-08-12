@@ -2,8 +2,13 @@ from datetime import datetime
 import os
 from shutil import get_terminal_size
 import sys
+import threading
 
 from rotbot.ui.terminal import ROTBOT_ARTIFACT, ROTBOT_BODY, _terminal_width
+
+
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_output_lock = threading.RLock()
 
 
 def _context_fields(session):
@@ -100,6 +105,93 @@ def interactive_prompt(session, stream=None):
 def render_rot_response(session, message):
     assistant = (session.context.assistant or "rot").strip().lower()
     print(f"\n{assistant} {ROTBOT_ARTIFACT}\n{message.rstrip()}\n")
+
+
+class ThinkingSpinner:
+    def __init__(self, assistant="rot", stream=None, interval=0.09):
+        self.assistant = assistant
+        self.stream = sys.stdout if stream is None else stream
+        self.interval = interval
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.animated = False
+
+    def _write(self, text):
+        with _output_lock:
+            self.stream.write(text)
+            self.stream.flush()
+
+    def start(self):
+        if self.thread is not None:
+            return
+        self.stop_event.clear()
+        self.animated = (
+            getattr(self.stream, "isatty", lambda: False)()
+            and os.environ.get("TERM", "").lower() not in {"", "dumb"}
+        )
+        if not self.animated:
+            self._write(f"\n{self.assistant} · thinking\n")
+            return
+        self.thread = threading.Thread(target=self._run, name="rot-thinking-spinner")
+        self.thread.start()
+
+    def _run(self):
+        index = 0
+        while not self.stop_event.is_set():
+            self._write(
+                f"\r\033[2K{self.assistant} · thinking  "
+                f"{SPINNER_FRAMES[index % len(SPINNER_FRAMES)]}"
+            )
+            index += 1
+            self.stop_event.wait(self.interval)
+
+    def stop(self, clear=True):
+        self.stop_event.set()
+        thread = self.thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+        self.thread = None
+        was_animated = self.animated
+        self.animated = False
+        if was_animated and clear:
+            self._write("\r\033[2K")
+
+
+class StreamingRotResponse:
+    def __init__(self, session, stream=None, spinner=None):
+        self.session = session
+        self.stream = sys.stdout if stream is None else stream
+        assistant = (session.context.assistant or "rot").strip().lower()
+        self.spinner = spinner or ThinkingSpinner(assistant, self.stream)
+        self.started = False
+        self.finished = False
+
+    def start(self):
+        self.spinner.start()
+
+    def write(self, text):
+        if not text:
+            return
+        first = not self.started
+        if first:
+            self.spinner.stop()
+        with _output_lock:
+            if first:
+                assistant = (self.session.context.assistant or "rot").strip().lower()
+                self.stream.write(f"\n{assistant} {ROTBOT_ARTIFACT}\n")
+                self.started = True
+            self.stream.write(text)
+            self.stream.flush()
+
+    def finish(self, interrupted=False):
+        if self.finished:
+            return
+        self.finished = True
+        self.spinner.stop(clear=True)
+        with _output_lock:
+            if self.started:
+                self.stream.write("\n\n" if not interrupted else "\n\n^C\n\n")
+                self.stream.flush()
 
 
 def show_session_header(session):

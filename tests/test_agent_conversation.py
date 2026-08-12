@@ -16,7 +16,8 @@ class OpenCodeBackendTests(unittest.TestCase):
         return SimpleNamespace(
             stdout=iter((*lines, *errors)),
             wait=Mock(return_value=returncode),
-            terminate=Mock()
+            terminate=Mock(),
+            poll=Mock(return_value=returncode)
         )
 
     def test_first_turn_extracts_session_and_second_turn_reuses_it(self):
@@ -71,6 +72,70 @@ class OpenCodeBackendTests(unittest.TestCase):
             first_command[first_command.index("--agent") + 1],
             conversation.TALK_AGENT
         )
+
+    def test_stream_generate_yields_visible_text_before_process_completion(self):
+        process = self.process([
+            event("reasoning", part={"type": "reasoning", "text": "hidden"}),
+            event("tool_use", part={"type": "tool", "text": "internal"}),
+            event("text", part={
+                "type": "text", "text": "first ", "time": {"end": 1}
+            }),
+            event("text", part={
+                "type": "text", "text": "世界", "time": {"end": 2}
+            })
+        ])
+        backend = conversation.OpenCodeBackend()
+        with patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ):
+            stream = backend.stream_generate("question", Path("/scope"), "TALK")
+            first = next(stream)
+
+            self.assertEqual(first, conversation.TextDelta("first "))
+            process.wait.assert_not_called()
+            second = next(stream)
+            with self.assertRaises(StopIteration) as completed:
+                next(stream)
+
+        self.assertEqual(second, conversation.TextDelta("世界"))
+        self.assertEqual(completed.exception.value.response, "first 世界")
+
+    def test_closing_stream_after_text_terminates_running_process(self):
+        process = self.process([
+            event("text", part={"type": "text", "text": "partial"})
+        ])
+        process.poll.return_value = None
+        backend = conversation.OpenCodeBackend()
+        with patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ):
+            stream = backend.stream_generate("question", Path("/scope"), "TALK")
+            self.assertEqual(next(stream), conversation.TextDelta("partial"))
+            stream.close()
+
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with()
+        self.assertIsNone(backend.current_process)
+
+    def test_stream_preserves_whitespace_only_text_events(self):
+        process = self.process([
+            event("text", part={"type": "text", "text": "first"}),
+            event("text", part={"type": "text", "text": "\n\n"}),
+            event("text", part={"type": "text", "text": "second"})
+        ])
+        backend = conversation.OpenCodeBackend()
+        with patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ):
+            result = backend.generate("question", Path("/scope"), "TALK")
+
+        self.assertEqual(result.response, "first\n\nsecond")
 
     def test_work_allows_workspace_tools_but_denies_external_directory(self):
         process = self.process([

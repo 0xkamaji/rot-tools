@@ -86,7 +86,7 @@ class AIConversationTests(unittest.TestCase):
                 ("user", "Retry this")
             ]
         )
-        self.assertEqual(conversation.status, "idle")
+        self.assertEqual(conversation.status, "active")
         self.assertEqual(conversation.remote_state[0].state_id, "ses_abc")
 
     def test_initial_context_once_and_rot_owned_dirty_refresh(self):

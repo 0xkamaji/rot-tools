@@ -84,6 +84,16 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(self.session.authority_mode, "TALK")
         self.assertEqual(self.session.ai_status, "idle")
 
+    def test_ai_status_uses_conversation_generation_state(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        self.session.ai = chat
+        chat.status = "idle"
+        self.assertEqual(self.session.ai_status, "idle")
+        chat.status = "thinking"
+        self.assertEqual(self.session.ai_status, "thinking")
+        chat.status = "active"
+        self.assertEqual(self.session.ai_status, "active")
+
     def test_work_and_talk_switch_authority_without_starting_ai(self):
         with patch.object(interactive, "render_rot_response") as response:
             interactive.evaluate_input(self.session, "work")
@@ -340,7 +350,8 @@ class RotSessionTests(unittest.TestCase):
             self.session.context,
             self.session.cwd,
             authority="TALK",
-            capability_state=self.session.capability_state
+            capability_state=self.session.capability_state,
+            on_text=unittest.mock.ANY
         )
         self.assertEqual(self.session.authority_mode, "TALK")
 
@@ -401,11 +412,13 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(chat.send.call_args_list, [
             call(
                 "first question", self.session.context, self.session.cwd,
-                authority="TALK", capability_state=self.session.capability_state
+                authority="TALK", capability_state=self.session.capability_state,
+                on_text=unittest.mock.ANY
             ),
             call(
                 "follow up", self.session.context, self.session.cwd,
-                authority="TALK", capability_state=self.session.capability_state
+                authority="TALK", capability_state=self.session.capability_state,
+                on_text=unittest.mock.ANY
             )
         ])
 
@@ -425,6 +438,31 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertEqual(self.session.ai_status, "active")
         response.assert_called_once_with(self.session, "A conversational answer")
+
+    def test_streamed_ai_text_does_not_refresh_fixed_header_mid_response(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.remote_state = []
+
+        def send(*args, **kwargs):
+            chat.status = "active"
+            kwargs["on_text"]("visible response")
+            return Mock(response="visible response")
+
+        chat.send.side_effect = send
+        header = Mock()
+        renderer = Mock()
+        renderer.started = True
+        with patch.object(
+            session_ai.AIConversation, "create", return_value=chat
+        ), patch.object(
+            interactive, "StreamingRotResponse", return_value=renderer
+        ):
+            self.session.send_ai("Why?", header=header)
+
+        renderer.write.assert_called_once_with("visible response")
+        self.assertEqual(header.refresh.call_args_list, [
+            call(self.session), call(self.session)
+        ])
 
     def test_shell_and_rot_commands_do_not_create_ai_conversation_storage(self):
         with patch.object(

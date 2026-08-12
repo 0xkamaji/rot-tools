@@ -29,6 +29,7 @@ from rotbot.ui.interactive import (
     clear_terminal,
     interactive_prompt,
     render_rot_response,
+    StreamingRotResponse,
     render_session_status
 )
 from rotbot.ui.terminal import rot_say
@@ -159,7 +160,9 @@ class RotSession:
 
     @property
     def ai_status(self):
-        return "active" if self.ai is not None and self.ai.remote_state else "idle"
+        if self.ai is None:
+            return "idle"
+        return self.ai.status if self.ai.status in {"idle", "thinking", "active"} else "active"
 
     def enable_work(self):
         if self.context.project_id is None:
@@ -184,7 +187,7 @@ class RotSession:
         self.authority_mode = "TALK"
         self.work_project_id = None
 
-    def send_ai(self, message):
+    def send_ai(self, message, header=None):
         if not message:
             rot_say("Usage: ? MESSAGE")
             return
@@ -196,23 +199,40 @@ class RotSession:
             return
         self.authority_mode = state.mode
         self.work_project_id = state.work_project_id
+        self.ai.status = "thinking"
+        if header is not None:
+            header.refresh(self)
+        renderer = StreamingRotResponse(self)
+        renderer.start()
         try:
             result = self.ai.send(
                 message,
                 self.context,
                 self.cwd,
                 authority=state.mode,
-                capability_state=state
+                capability_state=state,
+                on_text=renderer.write
             )
         except (ConversationError, ConversationStoreError) as error:
+            renderer.finish()
             rot_say(str(error))
             return
         except KeyboardInterrupt:
             self.ai.abort_current()
-            rot_say("AI response interrupted.")
+            renderer.finish(interrupted=True)
+            if not renderer.started:
+                rot_say("AI response interrupted.")
             return
-        if isinstance(result.response, str) and result.response:
+        finally:
+            renderer.finish()
+            if self.ai.status == "thinking":
+                self.ai.status = "active"
+            if header is not None:
+                header.refresh(self)
+        if isinstance(result.response, str) and result.response and not renderer.started:
             render_rot_response(self, result.response)
+        elif not result.response:
+            rot_say("The AI backend returned no conversational response.")
 
 
 def _run_rot_command(arguments, session=None):
@@ -248,7 +268,10 @@ def evaluate_input(session, line, header=None):
         return True
     if route.kind == "ai":
         try:
-            session.send_ai(route.value)
+            if header is None:
+                session.send_ai(route.value)
+            else:
+                session.send_ai(route.value, header=header)
         except (
             ContextInspectionError,
             loader.ContextError,

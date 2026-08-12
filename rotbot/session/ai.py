@@ -3,7 +3,7 @@ from datetime import datetime
 import hashlib
 import uuid
 
-from rotbot.agents.conversation import OpenCodeBackend
+from rotbot.agents.conversation import OpenCodeBackend, TextDelta
 from rotbot.contexts.prompt import (
     build_ask_prompt,
     build_context_refresh_prompt,
@@ -13,6 +13,7 @@ from rotbot.session.conversations import ConversationStore
 
 
 def _transcript_block(messages):
+    messages = tuple(message for message in messages if message.status == "complete")
     if not messages:
         return ""
     lines = [
@@ -144,7 +145,7 @@ class AIConversation:
 
     def send(
         self, user_message, inspected, cwd, authority="TALK",
-        capability_state=None
+        capability_state=None, on_text=None
     ):
         if capability_state is not None:
             authority = capability_state.mode
@@ -166,19 +167,47 @@ class AIConversation:
         else:
             transcript = ""
         self.status = "thinking"
+        assistant_parts = []
         try:
             prompt, fingerprint, context_updated = self._compiled_input(
                 inspected, user_message, capability_state
             )
             if transcript:
                 prompt = transcript + "\n\n" + prompt
-            result = self.backend.generate(
-                prompt,
-                cwd,
-                authority=authority
+            stream_generate = getattr(self.backend, "stream_generate", None)
+            native_stream = callable(
+                getattr(type(self.backend), "stream_generate", None)
             )
+            if native_stream:
+                stream = stream_generate(prompt, cwd, authority=authority)
+                try:
+                    while True:
+                        try:
+                            event = next(stream)
+                        except StopIteration as completed:
+                            result = completed.value
+                            break
+                        if isinstance(event, TextDelta) and event.text:
+                            assistant_parts.append(event.text)
+                            self.status = "active"
+                            if on_text is not None:
+                                on_text(event.text)
+                finally:
+                    stream.close()
+            else:
+                result = self.backend.generate(prompt, cwd, authority=authority)
+                if result.response:
+                    assistant_parts.append(result.response)
+                    self.status = "active"
+                    if on_text is not None:
+                        on_text(result.response)
+            if not assistant_parts and result.response:
+                assistant_parts.append(result.response)
+                self.status = "active"
+                if on_text is not None:
+                    on_text(result.response)
         except BaseException as error:
-            self.status = "idle"
+            self.status = "active"
             self._record_known_backend_state()
             turn_status = "aborted" if isinstance(error, KeyboardInterrupt) else "failed"
             self.messages[-1] = AIMessage(
@@ -193,8 +222,17 @@ class AIConversation:
                     )
                 except BaseException:
                     raise error
+            partial = "".join(assistant_parts)
+            if partial:
+                assistant_turn = AIMessage(
+                    f"msg_{uuid.uuid4().hex}", "assistant", partial,
+                    datetime.now().astimezone(), authority, turn_status
+                )
+                self.messages.append(assistant_turn)
+                if self.store is not None:
+                    self.store.append_message(self.id, assistant_turn)
             raise
-        self.status = "idle"
+        self.status = "active"
         self._record_backend_state(result)
         self.messages[-1] = AIMessage(
             user_turn.id, user_turn.role, user_turn.content,
@@ -202,9 +240,10 @@ class AIConversation:
         )
         if self.store is not None:
             self.store.update_message_status(self.id, user_turn.id, "complete")
-        if result.response:
+        response = "".join(assistant_parts)
+        if response:
             assistant_turn = AIMessage(
-                f"msg_{uuid.uuid4().hex}", "assistant", result.response,
+                f"msg_{uuid.uuid4().hex}", "assistant", response,
                 datetime.now().astimezone(), authority
             )
             self.messages.append(assistant_turn)
@@ -216,6 +255,8 @@ class AIConversation:
         self.context_dirty = False
         if self.store is not None:
             self.store.update_metadata(self.id, **self._metadata(inspected, cwd))
+        if response != result.response:
+            result = type(result)(response, result.remote_state, result.model)
         return result
 
     def abort_current(self):
