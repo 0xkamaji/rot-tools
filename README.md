@@ -56,13 +56,13 @@ rot
 ```
 
 ```text
-rot> git status
-rot> context inspect
-rot> cd ~/dev/signalrot
-rot> status
-rot> ask "What should I work on next?"
-rot> pwd
-rot> exit
+kamaji ❯ git status
+kamaji ❯ context inspect
+kamaji ❯ cd ~/dev/signalrot
+kamaji ❯ status
+kamaji ❯ ask "What should I work on next?"
+kamaji ❯ pwd
+kamaji ❯ exit
 ```
 
 The session keeps its working directory between commands and refreshes the
@@ -79,9 +79,9 @@ the session. The REPL uses the same parser and command handlers as the one-shot
 CLI, including aliases, options, help, and explicit AI commands:
 
 ```text
-rot> ask "What should I work on next?"
-rot> wtf --deep rotbot/contexts
-rot> git status --fetch
+kamaji ❯ ask "What should I work on next?"
+kamaji ❯ wtf --deep rotbot/contexts
+kamaji ❯ git status --fetch
 ```
 
 Interactive Rot also recognizes installed shell commands and runs them locally
@@ -89,9 +89,9 @@ in the session's current directory, with normal pipes, redirects, environment,
 stdin, stdout, and stderr:
 
 ```text
-rot> ls -lah
-rot> rg "CommandHistory" rotbot/ | head -20
-rot> python --version
+kamaji ❯ ls -lah
+kamaji ❯ rg "CommandHistory" rotbot/ | head -20
+kamaji ❯ python --version
 ```
 
 Input is routed deterministically. Session built-ins run first, exact Rot
@@ -103,16 +103,16 @@ shape from prose. Remaining natural language continues one OpenCode conversation
 for the lifetime of the current Rot session:
 
 ```text
-rot> why is the project resolver designed this way?
-rot> yeah, but what happens after cd?
+kamaji ❯ why is the project resolver designed this way?
+kamaji ❯ yeah, but what happens after cd?
 ```
 
 Use `? MESSAGE` to force conversation when a word is also an executable, and
 `! COMMAND` to force shell execution when a command overlaps Rot syntax:
 
 ```text
-rot> ? find a clearer way to explain project matching
-rot> !git status --short
+kamaji ❯ ? find a clearer way to explain project matching
+kamaji ❯ !git status --short
 ```
 
 Strong first-token typos are compared against Rot commands and executable names
@@ -128,6 +128,64 @@ command, the next AI turn refreshes shareable Rot context in that same session.
 Rot commands, shell commands, their output, and terminal command history are
 not automatically sent to AI. Natural-language fallback is configured without
 shell or edit permission; it is conversation, not authorization to execute.
+
+Interactive prompts use the resolved user identity, such as `kamaji ❯`. AI
+answers use the resolved assistant identity as a quiet speaker heading:
+
+```text
+kamaji ❯ why is the resolver structured this way?
+
+rot [x_o]
+The resolver separates portable context from local resolution data because...
+```
+
+Shell and deterministic Rot output remain raw and unlabeled. The larger
+Question/Response framing remains limited to one-shot `rot ask` output.
+
+### Talk and work authority
+
+Every new interactive Rot session starts in `TALK`, and WORK authority is never
+restored across process restarts.
+
+```text
+kamaji ❯ work
+
+rot [x_o]
+Work mode enabled for rotbot.
+
+kamaji ❯ talk
+
+rot [x_o]
+Talk mode enabled.
+```
+
+`TALK` is technically enforced with a Rot-owned OpenCode primary agent whose
+tool permissions deny everything. Rot selects that agent explicitly, runs
+OpenCode without external plugins, and also supplies a deny-all runtime
+permission map as defense in depth.
+Conversational AI can reason and respond, but cannot use shell, filesystem,
+subagent, web, or mutation tools. Explicit commands typed by the user still run
+normally.
+
+`WORK` is an explicit temporary elevation. It requires a resolved active
+project, permits the configured agentic backend inside that workspace, and
+denies external-directory access. Changing to a different resolved project
+automatically returns Rot to TALK. Changing directories within the same project
+does not revoke WORK. Natural language and `? MESSAGE` never elevate authority.
+
+The banner displays authority and conversation state independently:
+
+```text
+TALK · AI: idle
+WORK · AI: idle
+TALK · AI: active
+WORK · AI: active
+```
+
+`AI: idle` means no successful Rot AI conversation/backend session exists yet.
+`AI: active` means Rot owns an active AI conversation with recorded backend
+state. Switching TALK/WORK does not itself start AI or erase conversation
+history.
 
 ### Conversation ownership
 
@@ -162,10 +220,10 @@ Up/Down to recall commands, Left/Right to edit, Ctrl+A/Ctrl+E to move across the
 line, and Ctrl+R to search previous commands.
 
 ```text
-rot> git status
-rot> context inspect
-rot> history
-rot> history 10
+kamaji ❯ git status
+kamaji ❯ context inspect
+kamaji ❯ history
+kamaji ❯ history 10
 ```
 
 Submitted `history` and exit commands are retained like other completed input.

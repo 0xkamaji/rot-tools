@@ -31,14 +31,12 @@ class OpenCodeBackendTests(unittest.TestCase):
 
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
             conversation.subprocess, "Popen", side_effect=(first, second)
-        ) as popen, patch.object(conversation, "rot_output_start"), patch.object(
-            conversation, "rot_output_line"
-        ) as output_line, patch.object(conversation, "rot_output_end"):
+        ) as popen:
             first_result = backend.generate(
-                "initial context", Path("/one"), display_question="first"
+                "initial context", Path("/one"), authority="TALK"
             )
             second_result = backend.generate(
-                "follow-up", Path("/two"), display_question="second"
+                "follow-up", Path("/two"), authority="TALK"
             )
 
         self.assertEqual(backend.session_id, "ses_rot")
@@ -53,7 +51,6 @@ class OpenCodeBackendTests(unittest.TestCase):
         )
         self.assertEqual(popen.call_args_list[1].kwargs["cwd"], Path("/one"))
         self.assertEqual(backend.directory, Path("/one"))
-        self.assertEqual(output_line.call_args_list, [call("First answer"), call("Second answer")])
         permissions = json.loads(
             popen.call_args_list[0].kwargs["env"]["OPENCODE_PERMISSION"]
         )
@@ -61,8 +58,99 @@ class OpenCodeBackendTests(unittest.TestCase):
             popen.call_args_list[0].kwargs["stderr"],
             conversation.subprocess.STDOUT
         )
-        self.assertEqual(permissions["bash"], "deny")
-        self.assertEqual(permissions["edit"], "deny")
+        self.assertEqual(permissions, {"*": "deny"})
+        inline_config = json.loads(
+            popen.call_args_list[0].kwargs["env"]["OPENCODE_CONFIG_CONTENT"]
+        )
+        self.assertEqual(
+            inline_config["agent"][conversation.TALK_AGENT]["permission"],
+            {"*": "deny"}
+        )
+        self.assertIn("--pure", first_command)
+        self.assertEqual(
+            first_command[first_command.index("--agent") + 1],
+            conversation.TALK_AGENT
+        )
+
+    def test_work_allows_workspace_tools_but_denies_external_directory(self):
+        process = self.process([
+            event("text", part={"type": "text", "text": "Worked"})
+        ])
+        backend = conversation.OpenCodeBackend()
+        with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ) as popen:
+            backend.generate("work", Path("/scope"), authority="WORK")
+
+        permissions = json.loads(popen.call_args.kwargs["env"]["OPENCODE_PERMISSION"])
+        self.assertEqual(permissions["*"], "allow")
+        self.assertEqual(permissions["external_directory"], "deny")
+        self.assertEqual(permissions["question"], "deny")
+
+    def test_talk_deny_all_cannot_be_overridden_by_auto_defaults(self):
+        process = self.process([
+            event("text", part={"type": "text", "text": "Talked"})
+        ])
+        backend = conversation.OpenCodeBackend()
+        with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ) as popen:
+            backend.generate("talk", Path("/scope"), authority="TALK")
+
+        permissions = json.loads(popen.call_args.kwargs["env"]["OPENCODE_PERMISSION"])
+        self.assertEqual(permissions, {"*": "deny"})
+        self.assertNotIn("--auto", popen.call_args.args[0])
+
+    def test_talk_preserves_inline_config_and_overrides_its_owned_agent(self):
+        process = self.process([
+            event("text", part={"type": "text", "text": "Talked"})
+        ])
+        existing = {
+            "model": "provider/model",
+            "agent": {conversation.TALK_AGENT: {"permission": {"*": "allow"}}}
+        }
+        backend = conversation.OpenCodeBackend()
+        with patch.dict(
+            conversation.os.environ,
+            {"OPENCODE_CONFIG_CONTENT": json.dumps(existing)}
+        ), patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), patch.object(
+            conversation.subprocess, "Popen", return_value=process
+        ) as popen:
+            backend.generate("talk", Path("/scope"), authority="TALK")
+
+        inline_config = json.loads(
+            popen.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"]
+        )
+        self.assertEqual(inline_config["model"], "provider/model")
+        self.assertEqual(
+            inline_config["agent"][conversation.TALK_AGENT]["permission"],
+            {"*": "deny"}
+        )
+
+    def test_invalid_inline_config_is_a_conversation_error(self):
+        backend = conversation.OpenCodeBackend()
+        with patch.dict(
+            conversation.os.environ,
+            {"OPENCODE_CONFIG_CONTENT": "not-json"}
+        ), patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), self.assertRaisesRegex(
+            conversation.ConversationError, "Invalid OPENCODE_CONFIG_CONTENT"
+        ):
+            backend.generate("talk", Path("/scope"), authority="TALK")
+
+    def test_work_in_new_directory_replaces_backend_session_scope(self):
+        backend = conversation.OpenCodeBackend()
+        backend.directory = Path("/old")
+        backend.session_id = "ses_old"
+
+        replaced = backend.prepare("WORK", Path("/new"))
+
+        self.assertTrue(replaced)
+        self.assertEqual(backend.directory, Path("/new"))
+        self.assertIsNone(backend.session_id)
 
     def test_failure_and_missing_backend_are_conversation_errors(self):
         backend = conversation.OpenCodeBackend()

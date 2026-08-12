@@ -15,6 +15,7 @@ class AIConversationTests(unittest.TestCase):
     def backend(self):
         backend = Mock()
         backend.name = "OpenCode"
+        backend.prepare.return_value = False
         return backend
 
     def result(self, response, session_id="ses_abc"):
@@ -112,9 +113,9 @@ class AIConversationTests(unittest.TestCase):
         initial.assert_called_once()
         refresh.assert_called_once()
         self.assertEqual(backend.generate.call_args_list, [
-            call("INITIAL", Path("/work"), display_question="first"),
-            call("second", Path("/work"), display_question="second"),
-            call("REFRESH", Path("/other"), display_question="third")
+            call("INITIAL", Path("/work"), authority="TALK"),
+            call("second", Path("/work"), authority="TALK"),
+            call("REFRESH", Path("/other"), authority="TALK")
         ])
         self.assertEqual(conversation.context_version, 2)
         self.assertFalse(conversation.context_dirty)
@@ -141,6 +142,24 @@ class AIConversationTests(unittest.TestCase):
         )
         self.assertNotIn("git status", backend.generate.call_args.args[0])
         self.assertIsNot(inspected, conversation.messages)
+
+    def test_backend_replacement_replays_rot_transcript_for_work_scope(self):
+        backend = self.backend()
+        backend.prepare.side_effect = (False, True)
+        backend.generate.side_effect = (self.result("one"), self.result("two", "ses_new"))
+        conversation = ai.AIConversation.create(backend)
+
+        with patch.object(ai, "resolve_prompt_context", return_value=Mock()), patch.object(
+            ai, "build_ask_prompt", return_value="CONTEXT"
+        ):
+            conversation.send("first", Mock(), Path("/old"), authority="TALK")
+            conversation.send("second", Mock(), Path("/new"), authority="WORK")
+
+        second_prompt = backend.generate.call_args_list[1].args[0]
+        self.assertIn("<rot_conversation_transcript>", second_prompt)
+        self.assertIn("user: first", second_prompt)
+        self.assertIn("assistant: one", second_prompt)
+        self.assertIn("CONTEXT", second_prompt)
 
 
 if __name__ == "__main__":

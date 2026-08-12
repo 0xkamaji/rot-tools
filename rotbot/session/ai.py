@@ -11,6 +11,20 @@ from rotbot.contexts.prompt import (
 )
 
 
+def _transcript_block(messages):
+    if not messages:
+        return ""
+    lines = [
+        "<rot_conversation_transcript>",
+        "This is Rot's canonical transcript from the current conversation. "
+        "Use it only to restore conversational continuity after backend state "
+        "was replaced."
+    ]
+    lines.extend(f"{message.role}: {message.content}" for message in messages)
+    lines.append("</rot_conversation_transcript>")
+    return "\n\n".join(lines)
+
+
 @dataclass(frozen=True)
 class AIMessage:
     role: str
@@ -73,17 +87,23 @@ class AIConversation:
             if owned not in self.remote_state:
                 self.remote_state.append(owned)
 
-    def send(self, user_message, inspected, cwd):
+    def send(self, user_message, inspected, cwd, authority="TALK"):
+        backend_replaced = self.backend.prepare(authority, cwd) is True
+        prior_messages = tuple(self.messages)
+        if backend_replaced:
+            self.context_fingerprint = None
         self.messages.append(AIMessage("user", user_message, datetime.now().astimezone()))
         prompt, fingerprint, context_updated = self._compiled_input(
             inspected, user_message
         )
+        if backend_replaced and prior_messages:
+            prompt = _transcript_block(prior_messages) + "\n\n" + prompt
         self.status = "thinking"
         try:
             result = self.backend.generate(
                 prompt,
                 cwd,
-                display_question=user_message
+                authority=authority
             )
         except BaseException:
             self.status = "idle"

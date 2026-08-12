@@ -1,4 +1,5 @@
 import argparse
+from contextlib import redirect_stdout
 from datetime import datetime
 import io
 import os
@@ -21,7 +22,7 @@ def inspected(cwd, project="rotbot", user="Kamaji", assistant="Rot", machine="la
         assistant, "assistant-id" if assistant else None,
         user, "user-id" if user else None,
         machine, "machine-id" if machine else None,
-        project, "project-id" if project else None,
+        project, f"{project}-id" if project else None,
         Path(cwd),
         inspection.IdentificationSources(
             "local config" if assistant else "not configured",
@@ -74,6 +75,83 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(self.session.context.project, "signalrot")
         inspect_context.assert_called_once_with(cwd=self.second, bootstrap=False)
         self.assertIn("Project: signalrot", rot_say.call_args.args[0])
+
+    def test_new_session_defaults_to_talk_and_ai_idle(self):
+        self.assertEqual(self.session.authority_mode, "TALK")
+        self.assertEqual(self.session.ai_status, "idle")
+
+    def test_work_and_talk_switch_authority_without_starting_ai(self):
+        with patch.object(interactive, "render_rot_response") as response:
+            interactive.evaluate_input(self.session, "work")
+            self.assertEqual(self.session.authority_mode, "WORK")
+            self.assertEqual(self.session.ai_status, "idle")
+            interactive.evaluate_input(self.session, "talk")
+
+        self.assertEqual(self.session.authority_mode, "TALK")
+        self.assertEqual(self.session.ai_status, "idle")
+        self.assertEqual(response.call_args_list, [
+            call(self.session, "Work mode enabled for rotbot."),
+            call(self.session, "Talk mode enabled.")
+        ])
+
+    def test_talk_reduction_preserves_existing_conversation(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.remote_state = [Mock()]
+        self.session.ai = chat
+        self.session.enable_work()
+
+        with patch.object(interactive, "render_rot_response"):
+            interactive.evaluate_input(self.session, "talk")
+
+        self.assertIs(self.session.ai, chat)
+        self.assertEqual(self.session.ai_status, "active")
+        self.assertEqual(self.session.authority_mode, "TALK")
+
+    def test_natural_language_cannot_enable_work(self):
+        with patch.object(self.session, "send_ai") as send_ai:
+            interactive.evaluate_input(self.session, "let's work on this")
+
+        self.assertEqual(self.session.authority_mode, "TALK")
+        send_ai.assert_called_once_with("let's work on this")
+
+    def test_work_requires_resolved_project_scope(self):
+        self.session.context = inspected(self.first, project=None)
+        with patch.object(interactive, "render_rot_response") as response:
+            interactive.evaluate_input(self.session, "work")
+
+        self.assertEqual(self.session.authority_mode, "TALK")
+        response.assert_called_once_with(
+            self.session,
+            "Work mode requires an active project. Talk mode remains enabled."
+        )
+
+    def test_project_change_revokes_work_but_same_project_keeps_it(self):
+        self.session.enable_work()
+        same_project = inspected(self.second, project="rotbot")
+        with patch.object(
+            interactive, "inspect_current_context", return_value=same_project
+        ), patch.object(interactive, "rot_say"), patch.object(
+            interactive, "render_rot_response"
+        ) as response:
+            interactive.evaluate_input(self.session, f'cd "{self.second}"')
+        self.assertEqual(self.session.authority_mode, "WORK")
+        response.assert_not_called()
+
+        os.chdir(self.first)
+        self.session.cwd = self.first
+        self.session.context = inspected(self.first, project="rotbot")
+        changed = inspected(self.second, project="signalrot")
+        with patch.object(
+            interactive, "inspect_current_context", return_value=changed
+        ), patch.object(interactive, "rot_say"), patch.object(
+            interactive, "render_rot_response"
+        ) as response:
+            interactive.evaluate_input(self.session, f'cd "{self.second}"')
+
+        self.assertEqual(self.session.authority_mode, "TALK")
+        response.assert_called_once_with(
+            self.session, "Work mode ended because the active project changed."
+        )
 
     def test_invalid_cd_does_not_change_directory_or_end_session(self):
         missing = self.root / "missing"
@@ -226,6 +304,22 @@ class RotSessionTests(unittest.TestCase):
         run_shell.assert_called_once_with("git push", self.session.cwd)
         git_push.assert_not_called()
 
+    def test_question_override_uses_current_authority_without_elevation(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.remote_state = []
+        chat.send.return_value = Mock(response="answer")
+        self.session.ai = chat
+        with patch.object(interactive, "render_rot_response"):
+            interactive.evaluate_input(self.session, "? modify the resolver")
+
+        chat.send.assert_called_once_with(
+            "modify the resolver",
+            self.session.context,
+            self.session.cwd,
+            authority="TALK"
+        )
+        self.assertEqual(self.session.authority_mode, "TALK")
+
     def test_export_and_unset_change_subsequent_shell_environment(self):
         original = os.environ.get("ROT_INTERACTIVE_TEST")
         try:
@@ -277,9 +371,26 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertIs(self.session.ai, chat)
         self.assertEqual(chat.send.call_args_list, [
-            call("first question", self.session.context, self.session.cwd),
-            call("follow up", self.session.context, self.session.cwd)
+            call("first question", self.session.context, self.session.cwd, authority="TALK"),
+            call("follow up", self.session.context, self.session.cwd, authority="TALK")
         ])
+
+    def test_ai_success_becomes_active_and_uses_rot_speaker_renderer(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.remote_state = []
+
+        def send(*args, **kwargs):
+            chat.remote_state = [Mock()]
+            return Mock(response="A conversational answer")
+
+        chat.send.side_effect = send
+        with patch.object(
+            session_ai.AIConversation, "create", return_value=chat
+        ), patch.object(interactive, "render_rot_response") as response:
+            self.session.send_ai("Why?")
+
+        self.assertEqual(self.session.ai_status, "active")
+        response.assert_called_once_with(self.session, "A conversational answer")
 
     def test_cd_marks_rot_owned_ai_context_dirty(self):
         chat = Mock(spec=session_ai.AIConversation)
@@ -527,6 +638,7 @@ class InteractiveUiTests(unittest.TestCase):
         self.assertIn("laptop", rendered)
         self.assertIn("project: rotbot", rendered)
         self.assertIn("cwd: /work/rotbot", rendered)
+        self.assertIn("TALK · AI: idle", rendered)
         self.assertIn("12:20 PM", rendered)
         self.assertIn("[x_o]", rendered)
         self.assertNotIn("ROTBOT", rendered)
@@ -545,6 +657,63 @@ class InteractiveUiTests(unittest.TestCase):
         self.assertIn("project: none", header)
         self.assertIn("User:       unidentified", status)
         self.assertIn("Project:    none", status)
+        self.assertIn("Mode:       TALK", status)
+        self.assertIn("AI:         idle", status)
+
+    def test_prompt_uses_resolved_user_and_plain_fallback(self):
+        class Tty:
+            def isatty(self):
+                return True
+
+        session = interactive.RotSession(
+            datetime(2026, 8, 12, 9, 5),
+            Path("/tmp"),
+            inspected("/tmp", user="Kamaji")
+        )
+        unresolved = interactive.RotSession(
+            datetime(2026, 8, 12, 9, 5),
+            Path("/tmp"),
+            inspected("/tmp", user=None)
+        )
+
+        self.assertEqual(interactive_ui.interactive_prompt(session, Tty()), "kamaji ❯ ")
+        self.assertEqual(interactive_ui.interactive_prompt(unresolved, io.StringIO()), "user > ")
+
+    def test_rot_response_is_quiet_and_has_no_one_shot_framing(self):
+        session = interactive.RotSession(
+            datetime(2026, 8, 12, 9, 5),
+            Path("/tmp"),
+            inspected("/tmp", assistant="Rot")
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            interactive_ui.render_rot_response(session, "The answer.\n\nCode stays copyable.")
+
+        rendered = output.getvalue()
+        self.assertIn("\nrot [x_o]\nThe answer.", rendered)
+        self.assertIn("Code stays copyable.", rendered)
+        self.assertNotIn("ROT OUTPUT", rendered)
+        self.assertNotIn("Question:", rendered)
+        self.assertNotIn("Response:", rendered)
+
+    def test_active_work_banner_and_status_use_authoritative_session_state(self):
+        session = interactive.RotSession(
+            datetime(2026, 8, 12, 9, 5),
+            Path("/tmp"),
+            inspected("/tmp")
+        )
+        session.enable_work()
+        session.ai = Mock()
+        session.ai.remote_state = [Mock()]
+        session.ai.backend.name = "OpenCode"
+
+        header = interactive_ui.render_session_header(session, width=72)
+        status = interactive_ui.render_session_status(session)
+
+        self.assertIn("WORK · AI: active", header)
+        self.assertIn("Mode:       WORK", status)
+        self.assertIn("AI:         active", status)
+        self.assertIn("Backend:    OpenCode", status)
 
     def test_fixed_header_reserves_rows_and_restores_terminal(self):
         class TtyStream(io.StringIO):

@@ -3,7 +3,7 @@ import os
 from shutil import get_terminal_size
 import sys
 
-from rotbot.ui.terminal import ROTBOT_BODY, _terminal_width
+from rotbot.ui.terminal import ROTBOT_ARTIFACT, ROTBOT_BODY, _terminal_width
 
 
 def _context_fields(session):
@@ -37,7 +37,8 @@ def render_session_header(session, now=None, width=None):
         f"{user} · {assistant}",
         f"{machine} · {project}",
         f"cwd: {session.cwd}",
-        now.strftime("%I:%M %p").lstrip("0")
+        f"{session.authority_mode} · AI: {session.ai_status} · "
+        f"{now.strftime('%I:%M %p').lstrip('0')}"
     )
     if width < 28:
         return "\n".join((
@@ -71,7 +72,7 @@ def render_session_header(session, now=None, width=None):
 
 def render_session_status(session):
     context = session.context
-    return "\n".join((
+    lines = [
         "ROT SESSION",
         "-----------",
         f"User:       {context.user or 'unidentified'}",
@@ -79,8 +80,26 @@ def render_session_status(session):
         f"Machine:    {context.machine or 'unidentified'}",
         f"Project:    {context.project or 'none'}",
         f"Directory:  {session.cwd}",
-        f"Started:    {session.started_at.strftime('%I:%M %p').lstrip('0')}"
-    ))
+        f"Started:    {session.started_at.strftime('%I:%M %p').lstrip('0')}",
+        "",
+        f"Mode:       {session.authority_mode}",
+        f"AI:         {session.ai_status}"
+    ]
+    if session.ai_status == "active":
+        lines.append(f"Backend:    {session.ai.backend.name}")
+    return "\n".join(lines)
+
+
+def interactive_prompt(session, stream=None):
+    stream = sys.stdout if stream is None else stream
+    user = (session.context.user or "user").strip().lower()
+    marker = "❯" if getattr(stream, "isatty", lambda: False)() else ">"
+    return f"{user} {marker} "
+
+
+def render_rot_response(session, message):
+    assistant = (session.context.assistant or "rot").strip().lower()
+    print(f"\n{assistant} {ROTBOT_ARTIFACT}\n{message.rstrip()}\n")
 
 
 def show_session_header(session):

@@ -4,12 +4,10 @@ from dataclasses import dataclass
 from shutil import which
 import subprocess
 
-from rotbot.ui.terminal import (
-    rot_output_end,
-    rot_output_line,
-    rot_output_start,
-    rot_say
-)
+from rotbot.ui.terminal import rot_say
+
+
+TALK_AGENT = "rotbot-talk"
 
 
 class ConversationError(Exception):
@@ -40,28 +38,64 @@ class OpenCodeBackend:
         self.directory = None
         self.current_process = None
 
-    def _command(self, message):
+    def _command(self, message, authority):
         command = [
             "opencode", "run", "--format", "json", "--dir", str(self.directory)
         ]
+        if authority == "TALK":
+            command.extend(("--pure", "--agent", TALK_AGENT))
         if self.session_id is not None:
             command.extend(("--session", self.session_id))
         command.append(message)
         return command
 
-    def generate(self, message, cwd, display_question=None):
+    def _environment(self, authority):
+        environment = os.environ.copy()
+        permissions = (
+            {"*": "deny"}
+            if authority == "TALK"
+            else {
+                "*": "allow",
+                "external_directory": "deny",
+                "question": "deny"
+            }
+        )
+        environment["OPENCODE_PERMISSION"] = json.dumps(permissions)
+        if authority == "TALK":
+            try:
+                inline_config = json.loads(
+                    environment.get("OPENCODE_CONFIG_CONTENT", "{}")
+                )
+            except json.JSONDecodeError as error:
+                raise ConversationError(
+                    f"Invalid OPENCODE_CONFIG_CONTENT: {error}"
+                ) from None
+            agents = dict(inline_config.get("agent", {}))
+            agents[TALK_AGENT] = {
+                "description": "Rot TALK inference-only agent",
+                "mode": "primary",
+                "permission": {"*": "deny"}
+            }
+            inline_config["agent"] = agents
+            environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(inline_config)
+        return environment
+
+    def prepare(self, authority, cwd):
+        if authority != "WORK" or self.directory in {None, cwd}:
+            return False
+        self.session_id = None
+        self.directory = cwd
+        return True
+
+    def generate(self, message, cwd, authority="TALK"):
         if which("opencode") is None:
             raise ConversationError("OpenCode is not installed or available in PATH.")
-        environment = os.environ.copy()
-        environment["OPENCODE_PERMISSION"] = json.dumps({
-            "bash": "deny",
-            "edit": "deny"
-        })
+        environment = self._environment(authority)
         if self.directory is None:
             self.directory = cwd
         try:
             process = subprocess.Popen(
-                self._command(message),
+                self._command(message, authority),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -73,7 +107,6 @@ class OpenCodeBackend:
             raise ConversationError(f"Could not start OpenCode: {error}") from None
 
         self.current_process = process
-        output_started = False
         response_parts = []
         errors = []
         model = None
@@ -107,11 +140,6 @@ class OpenCodeBackend:
                         if isinstance(event_provider, str)
                         else event_model
                     )
-                if not output_started:
-                    rot_output_start(display_question)
-                    output_started = True
-                for line in text.rstrip().splitlines():
-                    rot_output_line(line)
             returncode = process.wait()
         except ConversationError:
             process.terminate()
@@ -123,8 +151,6 @@ class OpenCodeBackend:
             raise
         finally:
             self.current_process = None
-            if output_started:
-                rot_output_end()
 
         if returncode != 0:
             detail = "\n".join(errors[-8:])
@@ -134,7 +160,7 @@ class OpenCodeBackend:
             )
         if self.session_id is None:
             raise ConversationError("OpenCode did not return a session ID.")
-        if not output_started:
+        if not response_parts:
             rot_say("OpenCode returned no conversational response.")
         return BackendResult(
             response="\n\n".join(response_parts),

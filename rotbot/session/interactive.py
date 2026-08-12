@@ -19,6 +19,8 @@ from rotbot.session.shell import run_shell
 from rotbot.ui.interactive import (
     SessionHeader,
     clear_terminal,
+    interactive_prompt,
+    render_rot_response,
     render_session_status
 )
 from rotbot.ui.terminal import rot_say
@@ -35,6 +37,8 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   clear               Clear and redraw the terminal
   export NAME=VALUE   Set a session environment variable
   unset NAME          Remove a session environment variable
+  talk                Use reasoning-only AI with no tool authority
+  work                Grant scoped agentic authority for this project
   exit / quit         End the Rot session
 
 Rot commands can also be entered directly, including:
@@ -73,6 +77,8 @@ class RotSession:
     context: InspectedContext
     command_history: CommandHistory = field(default_factory=CommandHistory)
     ai: AIConversation | None = None
+    authority_mode: str = "TALK"
+    work_project_id: str | None = None
 
     @classmethod
     def start(cls):
@@ -101,6 +107,7 @@ class RotSession:
         if not resolved.is_dir():
             raise ValueError(f"Not a directory: {resolved}")
         previous = self.cwd
+        previous_project_id = self.context.project_id
         os.chdir(resolved)
         try:
             self.refresh_context()
@@ -109,6 +116,25 @@ class RotSession:
             raise
         if self.ai is not None:
             self.ai.mark_context_dirty()
+        return (
+            self.authority_mode == "WORK"
+            and previous_project_id != self.context.project_id
+        )
+
+    @property
+    def ai_status(self):
+        return "active" if self.ai is not None and self.ai.remote_state else "idle"
+
+    def enable_work(self):
+        if self.context.project_id is None:
+            return False
+        self.authority_mode = "WORK"
+        self.work_project_id = self.context.project_id
+        return True
+
+    def enable_talk(self):
+        self.authority_mode = "TALK"
+        self.work_project_id = None
 
     def send_ai(self, message):
         if not message:
@@ -117,7 +143,12 @@ class RotSession:
         if self.ai is None:
             self.ai = AIConversation.create()
         try:
-            self.ai.send(message, self.context, self.cwd)
+            result = self.ai.send(
+                message,
+                self.context,
+                self.cwd,
+                authority=self.authority_mode
+            )
         except ConversationError as error:
             rot_say(str(error))
             return
@@ -125,6 +156,8 @@ class RotSession:
             self.ai.abort_current()
             rot_say("AI response interrupted.")
             return
+        if isinstance(result.response, str) and result.response:
+            render_rot_response(self, result.response)
 
 
 def _run_rot_command(arguments):
@@ -177,6 +210,22 @@ def evaluate_input(session, line, header=None):
     if command == "status" and len(arguments) == 1:
         rot_say(render_session_status(session))
         return True
+    if command == "work" and len(arguments) == 1:
+        if session.enable_work():
+            render_rot_response(
+                session,
+                f"Work mode enabled for {session.context.project}."
+            )
+        else:
+            render_rot_response(
+                session,
+                "Work mode requires an active project. Talk mode remains enabled."
+            )
+        return True
+    if command == "talk" and len(arguments) == 1:
+        session.enable_talk()
+        render_rot_response(session, "Talk mode enabled.")
+        return True
     if command == "history":
         if len(arguments) > 2 or (
             len(arguments) == 2
@@ -228,7 +277,7 @@ def evaluate_input(session, line, header=None):
             rot_say("Usage: cd PATH")
             return True
         try:
-            session.change_directory(arguments[1])
+            project_changed = session.change_directory(arguments[1])
         except (ValueError, ContextInspectionError) as error:
             rot_say(str(error))
             return True
@@ -236,9 +285,16 @@ def evaluate_input(session, line, header=None):
             f"Directory: {session.cwd}\n"
             f"Project: {session.context.project or 'none'}"
         )
+        if project_changed:
+            session.enable_talk()
+            render_rot_response(
+                session,
+                "Work mode ended because the active project changed."
+            )
         return True
 
     try:
+        previous_project_id = session.context.project_id
         result = _run_rot_command(arguments)
     except KeyboardInterrupt:
         rot_say("Command interrupted.")
@@ -260,6 +316,15 @@ def evaluate_input(session, line, header=None):
             rot_say(f"Could not refresh session context.\n{error}")
         else:
             session.ai.mark_context_dirty()
+            if (
+                session.authority_mode == "WORK"
+                and previous_project_id != session.context.project_id
+            ):
+                session.enable_talk()
+                render_rot_response(
+                    session,
+                    "Work mode ended because the active project changed."
+                )
     return True
 
 
@@ -282,7 +347,7 @@ def run_interactive():
         while True:
             header.refresh(session)
             try:
-                line = input_backend.read("rot> ")
+                line = input_backend.read(interactive_prompt(session))
             except EOFError:
                 return 0
             except KeyboardInterrupt:

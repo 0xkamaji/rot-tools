@@ -11,12 +11,13 @@ from rotbot.session.shell import available_executables, is_shell_executable
 
 BUILTINS = {
     "help", "status", "history", "pwd", "cd", "clear", "exit", "quit",
-    "export", "unset"
+    "export", "unset", "talk", "work"
 }
 CONVERSATIONAL_STARTERS = {
     "why", "what", "how", "who", "where", "when", "can", "could",
     "would", "should", "do", "does", "is", "are", "explain", "tell",
-    "this", "that", "these", "those", "maybe", "yeah", "please"
+    "this", "that", "these", "those", "maybe", "yeah", "please", "let's",
+    "lets"
 }
 AMBIGUOUS_EXECUTABLES = {
     "find", "time", "sort", "head", "test", "read", "kill"
@@ -130,6 +131,10 @@ def route_input(line):
     if stripped.startswith("!"):
         command = stripped[1:].lstrip()
         return Route("shell", command) if command else Route("error", "Usage: ! COMMAND")
+
+    raw_first = stripped.split(None, 1)[0].lower()
+    if raw_first in CONVERSATIONAL_STARTERS or stripped.endswith("?"):
+        return Route("ai", stripped)
 
     try:
         arguments = shlex.split(line)
