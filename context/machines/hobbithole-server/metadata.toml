@@ -1,0 +1,19 @@
+type = "machine"
+id = "b1bd5db2-47d6-4ff5-922d-72610067a0ea"
+name = "hobbithole-server"
+display_name = "Hobbithole Server"
+device_type = "laptop"
+operating_system = "Ubuntu"
+operating_system_version = "26.04"
+architecture = "x86_64"
+
+[cpu]
+model = "Intel(R) Core(TM)2 Duo CPU     P8700  @ 2.53GHz"
+physical_cores = 2
+logical_cores = 2
+
+[memory]
+total_gb = 7
+
+[[gpus]]
+model = "Lenovo ThinkPad T400"
