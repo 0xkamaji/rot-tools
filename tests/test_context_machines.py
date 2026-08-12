@@ -200,7 +200,7 @@ class MachineContextTests(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg_home)}, clear=True):
             self.assertEqual(
                 machines.local_machine_record_path("desktop"),
-                xdg_home / "rotbot" / "machines" / "desktop.toml"
+                xdg_home / "rot" / "machines" / "desktop.toml"
             )
         with self.assertRaises(machines.MachineContextError):
             machines.local_machines_directory(target_config=Path("config.toml"))
@@ -257,6 +257,23 @@ class MachineContextTests(unittest.TestCase):
                 "desktop", target_config=self.config
             )
         )
+
+    def test_local_loader_reads_legacy_record_when_canonical_is_missing(self):
+        xdg_home = self.root / "xdg"
+        legacy = xdg_home / "rotbot" / "machines" / "desktop.toml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(
+            'machine_ref = "desktop"\n'
+            "[connection]\n"
+            'hostname = "legacy-host"\n',
+            encoding="utf-8"
+        )
+        legacy.chmod(0o600)
+
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg_home)}, clear=True):
+            loaded = machines.load_local_machine_record("desktop")
+
+        self.assertEqual(loaded["connection"]["hostname"], "legacy-host")
 
     def test_local_loader_rejects_secret_fields(self):
         destination = machines.local_machine_record_path(

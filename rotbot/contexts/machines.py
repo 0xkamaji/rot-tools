@@ -6,7 +6,7 @@ import tomllib
 from typing import NamedTuple
 
 from rotbot.contexts import loader
-from rotbot.contexts.config import ConfigError, config_path
+from rotbot.contexts.config import ConfigError, config_path, legacy_config_path
 
 
 PORTABLE_FILENAMES = ("metadata.toml", "identity.md", "software.toml")
@@ -481,6 +481,10 @@ def create_local_machine_record(name, local_facts, *, target_config=None):
 
 def load_local_machine_record(name, *, target_config=None):
     path = local_machine_record_path(name, target_config=target_config)
+    if target_config is None and not os.path.lexists(path):
+        legacy = legacy_config_path().parent / "machines" / f"{name}.toml"
+        if os.path.lexists(legacy):
+            path = legacy
     if not os.path.lexists(path):
         return None
     if path.is_symlink() or not path.is_file():

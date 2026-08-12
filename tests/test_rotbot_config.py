@@ -19,10 +19,81 @@ class RotbotConfigTests(unittest.TestCase):
     def test_config_path_respects_xdg_config_home(self):
         self.assertEqual(
             rotbot_config.config_path({"XDG_CONFIG_HOME": str(self.root)}),
-            self.root / "rotbot" / "config.toml"
+            self.root / "rot" / "config.toml"
         )
         with self.assertRaises(rotbot_config.ConfigError):
             rotbot_config.config_path({"XDG_CONFIG_HOME": "relative"})
+
+    def test_local_context_bindings_use_id_tables(self):
+        self.config = self.root / "rot" / "config.toml"
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text(
+            "[contexts.rotbot]\n"
+            'source_path = "/srv/rotbot"\n',
+            encoding="utf-8"
+        )
+
+        rotbot_config.set_local_context_binding("user", "kamaji", self.config)
+        rotbot_config.set_local_context_binding("assistant", "rot", self.config)
+        rotbot_config.set_local_context_binding("machine", "desktop", self.config)
+
+        content = self.config.read_text(encoding="utf-8")
+        self.assertIn('[user]\nid = "kamaji"', content)
+        self.assertIn('[assistant]\nid = "rot"', content)
+        self.assertIn('[machine]\nid = "desktop"', content)
+        self.assertIn('source_path = "/srv/rotbot"', content)
+        self.assertEqual(
+            rotbot_config.get_local_context_bindings(self.config),
+            {"user": "kamaji", "assistant": "rot", "machine": "desktop"}
+        )
+
+    def test_first_canonical_write_migrates_legacy_configuration(self):
+        environment = {"XDG_CONFIG_HOME": str(self.root)}
+        canonical = rotbot_config.config_path(environment)
+        legacy = rotbot_config.legacy_config_path(environment)
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(
+            "[contexts.rotbot]\n"
+            'source_path = "/srv/rotbot"\n',
+            encoding="utf-8"
+        )
+
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(
+                rotbot_config.get_context_binding("rotbot")["source_path"],
+                "/srv/rotbot"
+            )
+            rotbot_config.set_local_context_binding("user", "kamaji")
+
+        self.assertTrue(canonical.is_file())
+        self.assertIn(
+            'source_path = "/srv/rotbot"',
+            canonical.read_text(encoding="utf-8")
+        )
+        self.assertEqual(legacy.read_text(encoding="utf-8"), (
+            "[contexts.rotbot]\n"
+            'source_path = "/srv/rotbot"\n'
+        ))
+
+    def test_failed_local_binding_write_preserves_configuration(self):
+        self.config = self.root / "rot" / "config.toml"
+        self.config.parent.mkdir(parents=True)
+        original = '[user]\nid = "kamaji"\n'
+        self.config.write_text(original, encoding="utf-8")
+
+        with patch.object(
+            rotbot_config.os,
+            "replace",
+            side_effect=OSError("replace failed")
+        ), self.assertRaises(rotbot_config.ConfigError):
+            rotbot_config.set_local_context_binding(
+                "assistant",
+                "rot",
+                self.config
+            )
+
+        self.assertEqual(self.config.read_text(encoding="utf-8"), original)
+        self.assertEqual(tuple(self.config.parent.glob("config.*.tmp")), ())
 
     def test_write_preserves_unrelated_toml_and_other_bindings(self):
         self.config.parent.mkdir(parents=True)

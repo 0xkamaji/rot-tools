@@ -230,12 +230,19 @@ class MachineInspectionTests(unittest.TestCase):
             [{"interface": "tailscale", "address": "100.64.0.1"}]
         )
 
-    def test_standalone_command_prints_without_writing_or_using_ai(self):
+    def test_configured_machine_inspect_prints_without_overwriting_context(self):
         facts = inspection.MachineInspection(
             {"operating_system": "CachyOS", "architecture": "x86_64"},
             {"connection": {"hostname": "desktop-host"}}
         )
         with patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={"machine": "desktop"}
+        ), patch.object(
+            machines,
+            "load_machine_context"
+        ), patch.object(
             inspection,
             "inspect_local_machine",
             return_value=facts
@@ -261,6 +268,35 @@ class MachineInspectionTests(unittest.TestCase):
         self.assertIn("Hostname: desktop-host", output)
         create_machine.assert_not_called()
         create_local.assert_not_called()
+
+    def test_unconfigured_machine_inspect_uses_shared_registration(self):
+        with patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={}
+        ), patch.object(
+            inspection,
+            "register_local_machine"
+        ) as register, patch.object(inspection, "rot_say"):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        register.assert_called_once_with()
+
+    def test_registration_failure_is_reported(self):
+        with patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={}
+        ), patch.object(
+            inspection,
+            "register_local_machine",
+            side_effect=inspection.MachineRegistrationError("inspection failed")
+        ), patch.object(inspection, "rot_say") as rot_say:
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 1)
+        self.assertIn("inspection failed", rot_say.call_args.args[0])
 
     def test_empty_sections_are_reported_cleanly(self):
         with patch.object(inspection, "rot_say"), patch.object(

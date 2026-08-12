@@ -3,12 +3,15 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
 from rotbot import __main__ as rotbot
 from rotbot.cli import parser as command_parser
 from rotbot.contexts import inspection, loader, machines, people
+from rotbot.contexts.config import get_local_context_bindings
+from rotbot.commands.machine import MachineInspection
 
 
 class ContextInspectionTests(unittest.TestCase):
@@ -25,7 +28,7 @@ class ContextInspectionTests(unittest.TestCase):
             (self.people / role).mkdir(parents=True)
 
         self.config_home = self.root / "config-home"
-        self.config = self.config_home / "rotbot" / "config.toml"
+        self.config = self.config_home / "rot" / "config.toml"
         self.environment = patch.dict(
             os.environ,
             {"XDG_CONFIG_HOME": str(self.config_home)},
@@ -57,10 +60,12 @@ class ContextInspectionTests(unittest.TestCase):
     def write_config(self, bindings="", defaults=True):
         self.config.parent.mkdir(parents=True, exist_ok=True)
         default_text = (
-            "[defaults]\n"
-            'assistant = "rot"\n'
-            'user = "kamaji"\n'
-            'machine = "laptop"\n'
+            "[user]\n"
+            'id = "kamaji"\n\n'
+            "[assistant]\n"
+            'id = "rot"\n\n'
+            "[machine]\n"
+            'id = "laptop"\n'
         ) if defaults else ""
         separator = "\n" if default_text and bindings else ""
         self.config.write_text(default_text + separator + bindings, encoding="utf-8")
@@ -81,7 +86,7 @@ class ContextInspectionTests(unittest.TestCase):
         self.assertEqual(result.machine, "laptop")
         self.assertEqual(
             result.identification_sources[:3],
-            ("configured default", "configured default", "configured default")
+            ("local config", "local config", "local config")
         )
         self.assertEqual(result.warnings, ())
 
@@ -89,8 +94,9 @@ class ContextInspectionTests(unittest.TestCase):
         self.write_config()
         self.config.write_text(
             self.config.read_text(encoding="utf-8").replace(
-                'assistant = "rot"',
-                'assistant = "missing"'
+                'id = "rot"',
+                'id = "missing"',
+                1
             ),
             encoding="utf-8"
         )
@@ -278,26 +284,291 @@ class ContextInspectionTests(unittest.TestCase):
         stream_agent.assert_not_called()
         ask_agent.assert_not_called()
 
+    def test_missing_user_prompts_and_persists_selection(self):
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        start = content.index("[user]")
+        end = content.index("[assistant]")
+        self.config.write_text(content[:start] + content[end:], encoding="utf-8")
+
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        self.assertEqual(result.user, "kamaji")
+        self.assertEqual(get_local_context_bindings()["user"], "kamaji")
+
+    def test_missing_assistant_prompts_and_persists_selection(self):
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        start = content.index("[assistant]")
+        end = content.index("[machine]")
+        self.config.write_text(content[:start] + content[end:], encoding="utf-8")
+
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        self.assertEqual(result.assistant, "rot")
+        self.assertEqual(get_local_context_bindings()["assistant"], "rot")
+
+    def test_no_existing_user_reuses_context_add_and_persists_created_user(self):
+        for path in (self.people / "user" / "kamaji").iterdir():
+            path.unlink()
+        (self.people / "user" / "kamaji").rmdir()
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        start = content.index("[user]")
+        end = content.index("[assistant]")
+        self.config.write_text(content[:start] + content[end:], encoding="utf-8")
+
+        def create_user(args):
+            self.assertEqual(args.context_type, "user")
+            people.create_person_context("new-user", "user", people_root=self.people)
+            return 0
+
+        with patch("builtins.input", return_value="1"), patch(
+            "rotbot.contexts.creation.context_add",
+            side_effect=create_user
+        ) as context_add, patch.object(inspection, "rot_say"):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        context_add.assert_called_once()
+        self.assertEqual(result.user, "new-user")
+        self.assertEqual(get_local_context_bindings()["user"], "new-user")
+
+    def test_no_existing_assistant_reuses_context_add(self):
+        for path in (self.people / "assistant" / "rot").iterdir():
+            path.unlink()
+        (self.people / "assistant" / "rot").rmdir()
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        start = content.index("[assistant]")
+        end = content.index("[machine]")
+        self.config.write_text(content[:start] + content[end:], encoding="utf-8")
+
+        def create_assistant(args):
+            self.assertEqual(args.context_type, "assistant")
+            people.create_person_context(
+                "new-assistant",
+                "assistant",
+                people_root=self.people
+            )
+            return 0
+
+        with patch("builtins.input", return_value="1"), patch(
+            "rotbot.contexts.creation.context_add",
+            side_effect=create_assistant
+        ) as context_add, patch.object(inspection, "rot_say"):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        context_add.assert_called_once()
+        self.assertEqual(result.assistant, "new-assistant")
+        self.assertEqual(
+            get_local_context_bindings()["assistant"],
+            "new-assistant"
+        )
+
+    def test_missing_machine_inspects_registers_and_persists(self):
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        self.config.write_text(content[:content.index("[machine]")], encoding="utf-8")
+        detected = MachineInspection(
+            {"operating_system": "TestOS", "architecture": "x86_64"},
+            {"connection": {"hostname": "desktop-host"}}
+        )
+
+        with patch(
+            "rotbot.commands.machine.inspect_local_machine",
+            return_value=detected
+        ) as inspect_machine, patch(
+            "rotbot.commands.machine.show_inspection"
+        ), patch("rotbot.commands.machine.rot_say"), patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        inspect_machine.assert_called_once_with()
+        self.assertEqual(result.machine, "desktop-host")
+        self.assertEqual(get_local_context_bindings()["machine"], "desktop-host")
+        self.assertEqual(machines.load_machine_context("desktop-host").name, "desktop-host")
+
+    def test_machine_bootstrap_does_not_reuse_hostname_collision(self):
+        machines.create_machine("desktop-host", machines_root=self.machines)
+        marker = self.machines / "desktop-host" / "identity.md"
+        marker.write_text("unrelated machine\n", encoding="utf-8")
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        self.config.write_text(content[:content.index("[machine]")], encoding="utf-8")
+        detected = MachineInspection(
+            {"operating_system": "TestOS"},
+            {"connection": {"hostname": "desktop-host"}}
+        )
+
+        with patch(
+            "rotbot.commands.machine.inspect_local_machine",
+            return_value=detected
+        ), patch("rotbot.commands.machine.show_inspection"), patch(
+            "rotbot.commands.machine.rot_say"
+        ), patch.object(inspection, "rot_say"):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        self.assertEqual(result.machine, "desktop-host-2")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "unrelated machine\n")
+
+    def test_configured_machine_does_not_trigger_hardware_inspection(self):
+        self.write_config()
+
+        with patch("rotbot.commands.machine.inspect_local_machine") as inspect_machine:
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        inspect_machine.assert_not_called()
+        self.assertEqual(result.machine, "laptop")
+
+    def test_stale_machine_binding_runs_machine_bootstrap(self):
+        self.write_config()
+        self.config.write_text(
+            self.config.read_text(encoding="utf-8").replace(
+                'id = "laptop"',
+                'id = "missing-machine"'
+            ),
+            encoding="utf-8"
+        )
+        detected = MachineInspection(
+            {"operating_system": "TestOS"},
+            {"connection": {"hostname": "replacement-host"}}
+        )
+
+        with patch(
+            "rotbot.commands.machine.inspect_local_machine",
+            return_value=detected
+        ) as inspect_machine, patch(
+            "rotbot.commands.machine.show_inspection"
+        ), patch("rotbot.commands.machine.rot_say"), patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        inspect_machine.assert_called_once_with()
+        self.assertEqual(result.machine, "replacement-host")
+        self.assertEqual(
+            get_local_context_bindings()["machine"],
+            "replacement-host"
+        )
+
+    def test_machine_inspection_failure_is_a_setup_error(self):
+        self.write_config()
+        content = self.config.read_text(encoding="utf-8")
+        self.config.write_text(content[:content.index("[machine]")], encoding="utf-8")
+
+        with patch(
+            "rotbot.commands.machine.inspect_local_machine",
+            side_effect=RuntimeError("inspection failed")
+        ), patch.object(
+            inspection,
+            "rot_say"
+        ), self.assertRaisesRegex(
+            inspection.ContextInspectionError,
+            "inspection failed"
+        ):
+            inspection.inspect_current_context(self.outside, bootstrap=True)
+
+    def test_stale_user_binding_is_replaced(self):
+        self.write_config()
+        self.config.write_text(
+            self.config.read_text(encoding="utf-8").replace(
+                'id = "kamaji"',
+                'id = "missing"',
+                1
+            ),
+            encoding="utf-8"
+        )
+
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.inspect_current_context(self.outside, bootstrap=True)
+
+        self.assertEqual(result.user, "kamaji")
+        self.assertEqual(get_local_context_bindings()["user"], "kamaji")
+
+    def test_project_changes_with_directory_without_changing_local_bindings(self):
+        self.create_project("other")
+        first = self.root / "first"
+        second = self.root / "second"
+        first.mkdir()
+        second.mkdir()
+        self.write_config(
+            self.source_binding("project", first)
+            + "\n"
+            + self.source_binding("other", second)
+        )
+        before = get_local_context_bindings()
+
+        first_result = inspection.inspect_current_context(first)
+        second_result = inspection.inspect_current_context(second)
+
+        self.assertEqual(first_result.project, "project")
+        self.assertEqual(second_result.project, "other")
+        self.assertEqual(get_local_context_bindings(), before)
+        self.assertNotIn("[project]", self.config.read_text(encoding="utf-8"))
+
+    def test_first_run_in_project_never_persists_project_as_default(self):
+        source = self.root / "source"
+        source.mkdir()
+        self.write_config(self.source_binding("project", source), defaults=False)
+        detected = MachineInspection(
+            {"operating_system": "TestOS"},
+            {"connection": {"hostname": "first-run-host"}}
+        )
+
+        with patch("builtins.input", side_effect=("1", "1")), patch(
+            "rotbot.commands.machine.inspect_local_machine",
+            return_value=detected
+        ), patch("rotbot.commands.machine.show_inspection"), patch(
+            "rotbot.commands.machine.rot_say"
+        ), patch.object(inspection, "rot_say"):
+            result = inspection.inspect_current_context(source, bootstrap=True)
+
+        document = tomllib.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(result.project, "project")
+        self.assertEqual(set(document) & {"user", "assistant", "machine"}, {
+            "user", "assistant", "machine"
+        })
+        self.assertNotIn("project", document)
+        self.assertNotIn("defaults", document)
+
     def test_handler_exit_codes_follow_contract(self):
         self.write_config()
         with patch.object(inspection, "rot_say") as rot_say:
             self.assertEqual(inspection.context_inspect(argparse.Namespace()), 0)
         self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
 
-        self.config.write_text("[defaults]\nassistant = 7\n", encoding="utf-8")
+        self.config.write_text("[assistant]\nid = 7\n", encoding="utf-8")
         with patch.object(inspection, "rot_say") as rot_say:
             self.assertEqual(inspection.context_inspect(argparse.Namespace()), 2)
-        self.assertIn("Invalid RotBot default assistant", rot_say.call_args.args[0])
+        self.assertIn("Invalid local assistant context ID", rot_say.call_args.args[0])
 
         self.write_config()
         self.config.write_text(
             self.config.read_text(encoding="utf-8").replace(
-                'user = "kamaji"',
-                'user = "missing"'
+                'id = "kamaji"',
+                'id = "missing"',
+                1
             ),
             encoding="utf-8"
         )
-        with patch.object(inspection, "rot_say"):
+        with patch("builtins.input", return_value=""), patch.object(
+            inspection,
+            "rot_say"
+        ):
             self.assertEqual(inspection.context_inspect(argparse.Namespace()), 1)
 
     def test_malformed_configured_context_returns_setup_error(self):
@@ -342,6 +613,15 @@ class ContextInspectParserTests(unittest.TestCase):
 
     def test_context_resolve_command_does_not_exist(self):
         self.assert_rejected(["context", "resolve"])
+
+    def test_context_add_accepts_user_and_assistant_roles(self):
+        for context_type in ("user", "assistant"):
+            with self.subTest(context_type=context_type):
+                args = command_parser.parse_args(
+                    ["context", "add", context_type, "example"]
+                )
+                self.assertEqual(args.context_type, context_type)
+                self.assertEqual(args.name, "example")
 
 
 if __name__ == "__main__":

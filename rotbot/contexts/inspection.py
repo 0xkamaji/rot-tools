@@ -1,10 +1,16 @@
 from pathlib import Path
 import os
 import subprocess
+from types import SimpleNamespace
 from typing import NamedTuple
 
 from rotbot.contexts import loader, machines, matching, people
-from rotbot.contexts.config import ConfigError, get_context_bindings, get_defaults
+from rotbot.contexts.config import (
+    ConfigError,
+    get_context_bindings,
+    get_local_context_bindings,
+    set_local_context_binding
+)
 from rotbot.ui.terminal import rot_say
 
 
@@ -29,51 +35,133 @@ class InspectedContext(NamedTuple):
     warnings: tuple[str, ...]
 
 
-def _person_identity(defaults, key, role, warnings):
-    name = defaults.get(key)
-    if name is None:
-        warnings.append(f"No default {key} is configured.")
-        return None, "not configured"
+def _available_people(role):
     try:
-        person = people.load_person_context(name)
+        return tuple(
+            person.name
+            for person in people.list_person_contexts()
+            if person.role == role
+        )
     except people.PersonContextError as error:
-        people_root = loader.CONTEXT_ROOT / "people"
-        if people_root.is_symlink() or not people_root.is_dir():
-            raise ContextInspectionError(str(error)) from None
-        person_exists = any(
-            os.path.lexists(people_root / candidate_role / name)
-            for candidate_role in people.PERSON_ROLES
-        )
-        if person_exists:
-            raise ContextInspectionError(str(error)) from None
-        warnings.append(f"Configured default {key} '{name}' is unavailable: {error}")
-        return None, "invalid configured default"
-    if person.role != role:
-        warnings.append(
-            f"Configured default {key} '{name}' is a {person.role} context, not {role}."
-        )
-        return None, "invalid configured default"
-    return person.name, "configured default"
+        raise ContextInspectionError(str(error)) from None
 
 
-def _machine_identity(defaults, warnings):
-    name = defaults.get("machine")
-    if name is None:
-        warnings.append("No default machine is configured.")
+def _choose_person(role):
+    names = _available_people(role)
+    label = "users" if role == "user" else "assistants"
+    add_number = len(names) + 1
+    rot_say(
+        (f"Available {label}:\n" if names else f"No existing {label}.\n")
+        + "\n".join(
+            f"  {index}. {name}" for index, name in enumerate(names, 1)
+        )
+        + ("\n" if names else "")
+        + f"  {add_number}. Add new {role}"
+    )
+    while True:
+        try:
+            answer = input("> ").strip()
+        except EOFError:
+            return None
+        if answer.lower() in {"", "exit", "quit", "q"}:
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(names):
+            return names[int(answer) - 1]
+        if answer.lower() in {"add", "new", f"add {role}"} or answer == str(add_number):
+            before = set(names)
+            from rotbot.contexts.creation import context_add
+
+            result = context_add(
+                SimpleNamespace(context_type=role, name=None, agent=None)
+            )
+            if result != 0:
+                raise ContextInspectionError(
+                    f"Could not add a new {role} context (exit code {result})."
+                )
+            created = tuple(name for name in _available_people(role) if name not in before)
+            if len(created) == 1:
+                return created[0]
+            return None
+        rot_say(f"Choose a number from 1 to {add_number}, or exit.")
+
+
+def _person_identity(bindings, context_type, role, bootstrap, warnings):
+    name = bindings.get(context_type)
+    stale = False
+    if name is not None:
+        try:
+            person = people.load_person_context(name)
+        except people.PersonContextError as error:
+            people_root = loader.CONTEXT_ROOT / "people"
+            if people_root.is_symlink() or not people_root.is_dir():
+                raise ContextInspectionError(str(error)) from None
+            if any(
+                os.path.lexists(people_root / candidate_role / name)
+                for candidate_role in people.PERSON_ROLES
+            ):
+                raise ContextInspectionError(str(error)) from None
+            stale = True
+        else:
+            if person.role == role:
+                return person.name, "local config"
+            stale = True
+
+    if not bootstrap:
+        warning = (
+            f"Configured local {context_type} '{name}' is unavailable."
+            if stale
+            else f"No local {context_type} is configured."
+        )
+        warnings.append(warning)
+        return None, "stale local config" if stale else "not configured"
+
+    if stale:
+        rot_say(f"Configured local {context_type} '{name}' is unavailable.")
+    else:
+        rot_say(f"No default {context_type} configured.")
+    selected = _choose_person(role)
+    if selected is None:
+        warnings.append(f"No local {context_type} was selected.")
         return None, "not configured"
     try:
-        machine = machines.load_machine_context(name)
-    except machines.MachineContextError as error:
-        machines_root = loader.CONTEXT_ROOT / "machines"
-        if (
-            machines_root.is_symlink()
-            or not machines_root.is_dir()
-            or os.path.lexists(machines_root / name)
-        ):
-            raise ContextInspectionError(str(error)) from None
-        warnings.append(f"Configured default machine '{name}' is unavailable: {error}")
-        return None, "invalid configured default"
-    return machine.name, "configured default"
+        set_local_context_binding(context_type, selected)
+    except ConfigError as error:
+        raise ContextInspectionError(str(error)) from None
+    rot_say(f"Default {context_type} set: {selected}")
+    return selected, "local config"
+
+
+def _machine_identity(bindings, bootstrap, warnings):
+    name = bindings.get("machine")
+    if name is not None:
+        try:
+            machine = machines.load_machine_context(name)
+        except machines.MachineContextError:
+            pass
+        else:
+            return machine.name, "local config"
+
+    if not bootstrap:
+        warning = (
+            f"Configured local machine '{name}' is unavailable."
+            if name is not None
+            else "No local machine is configured."
+        )
+        warnings.append(warning)
+        return None, "stale local config" if name is not None else "not configured"
+
+    if name is not None:
+        rot_say(f"Configured local machine '{name}' is unavailable.")
+    else:
+        rot_say("No local machine configured.")
+    rot_say("Inspecting this machine...")
+    from rotbot.commands.machine import MachineRegistrationError, register_local_machine
+
+    try:
+        machine = register_local_machine()
+    except MachineRegistrationError as error:
+        raise ContextInspectionError(str(error)) from None
+    return machine.name, "local config"
 
 
 def _contains(binding, cwd):
@@ -162,7 +250,7 @@ def _safe_project_match(cwd):
     return names[0], "project match", ()
 
 
-def inspect_current_context(cwd=None):
+def inspect_current_context(cwd=None, bootstrap=False):
     try:
         current_directory = (Path.cwd() if cwd is None else Path(cwd)).resolve(strict=True)
     except OSError as error:
@@ -171,18 +259,20 @@ def inspect_current_context(cwd=None):
         raise ContextInspectionError(f"Current path is not a directory: {current_directory}")
 
     try:
-        defaults = get_defaults()
+        local_bindings = get_local_context_bindings()
         bindings = get_context_bindings()
         project_names = set(loader.list_contexts())
     except (ConfigError, loader.ContextError) as error:
         raise ContextInspectionError(str(error)) from None
 
     warnings = []
-    assistant, assistant_source = _person_identity(
-        defaults, "assistant", "assistant", warnings
+    user, user_source = _person_identity(
+        local_bindings, "user", "user", bootstrap, warnings
     )
-    user, user_source = _person_identity(defaults, "user", "user", warnings)
-    machine, machine_source = _machine_identity(defaults, warnings)
+    assistant, assistant_source = _person_identity(
+        local_bindings, "assistant", "assistant", bootstrap, warnings
+    )
+    machine, machine_source = _machine_identity(local_bindings, bootstrap, warnings)
 
     project, project_source, project_warnings = _binding_match(
         current_directory, bindings, "source", project_names
@@ -238,7 +328,7 @@ def render_inspected_context(inspected):
 
 def context_inspect(args):
     try:
-        inspected = inspect_current_context()
+        inspected = inspect_current_context(bootstrap=True)
     except ContextInspectionError as error:
         rot_say(str(error))
         return 2

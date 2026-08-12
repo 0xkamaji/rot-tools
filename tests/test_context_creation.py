@@ -156,7 +156,7 @@ class ContextCreationTests(unittest.TestCase):
         self.assertNotIn("super-sensitive-value", synopsis)
 
     def test_prompt_contains_only_approved_relative_evidence(self):
-        secret_config = self.root / "config-home" / "rotbot" / "config.toml"
+        secret_config = self.root / "config-home" / "rot" / "config.toml"
         secret_config.parent.mkdir(parents=True)
         secret_config.write_text('private = "do-not-send"\n', encoding="utf-8")
 
@@ -509,6 +509,33 @@ class ContextQuestionnaireTests(unittest.TestCase):
             related_projects=()
         )
 
+    def test_preselected_user_reuses_person_creation_workflow(self):
+        answers = ("", "yes")
+        args = argparse.Namespace(
+            agent=None,
+            context_type="user",
+            name="kamaji"
+        )
+
+        with patch("builtins.input", side_effect=answers), patch.object(
+            context_creation.loader,
+            "list_contexts",
+            return_value=()
+        ), patch.object(
+            context_creation.people,
+            "create_person_context",
+            return_value=Path("context/people/user/kamaji")
+        ) as create_person, patch.object(
+            context_creation,
+            "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation.context_add(args)
+
+        self.assertEqual(result, 0)
+        create_person.assert_called_once_with(
+            "kamaji", "user", "kamaji", related_projects=()
+        )
+
     def test_person_questions_apply_contact_and_display_defaults(self):
         answers = ("2", "sam", "", "", "", "yes")
 
@@ -617,7 +644,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
         ) as create_machine, patch.object(
             context_creation.machines,
             "create_local_machine_record",
-            return_value=Path("config/rotbot/machines/desktop.toml")
+            return_value=Path("config/rot/machines/desktop.toml")
         ) as create_local, patch.object(
             context_creation,
             "rot_say"

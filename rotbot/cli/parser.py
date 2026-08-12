@@ -234,7 +234,7 @@ def create_parser():
     )
     machine_inspect_parser = machine_commands.add_parser(
         "inspect",
-        help="Inspect this machine without writing files"
+        help="Inspect this machine and register it on first use"
     )
     machine_inspect_parser.set_defaults(func=machine_inspect)
 
@@ -255,7 +255,7 @@ def create_parser():
 
     context_inspect_parser = context_commands.add_parser(
         "inspect",
-        help="Inspect the current RotBot context without writing files"
+        help="Resolve the current RotBot context and bootstrap missing local bindings"
     )
     context_inspect_parser.set_defaults(func=context_inspect)
 
@@ -307,13 +307,13 @@ def create_parser():
     context_add_parser.add_argument(
         "context_type",
         nargs="?",
-        choices=("machine",),
-        help="Optionally create a machine context directly"
+        choices=("machine", "user", "assistant"),
+        help="Optionally create a machine, user, or assistant context directly"
     )
     context_add_parser.add_argument(
         "name",
         nargs="?",
-        help="Optional machine context name"
+        help="Optional machine, user, or assistant context name"
     )
     context_add_parser.add_argument(
         "-a",

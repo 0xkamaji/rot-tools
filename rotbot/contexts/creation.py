@@ -469,6 +469,7 @@ def _add_machine_context(
 
 def context_add(args):
     context_type = getattr(args, "context_type", None)
+    person_role = context_type if context_type in {"user", "assistant"} else None
     if context_type is None:
         context_type = _ask_choice(
             "Context type:\n\n  1. Project\n  2. Person\n  3. Machine\n"
@@ -558,11 +559,13 @@ def context_add(args):
             create_local
         )
 
-    name = _ask_value("Person context name")
+    name = getattr(args, "name", None)
+    if name is None:
+        name = _ask_value("Person context name")
     if name is None:
         rot_say("Context creation cancelled. No files were changed.")
         return 0
-    role = _ask_choice(
+    role = person_role or _ask_choice(
         "Person role:\n\n"
         "  1. Contact - someone known to a RotBot user\n"
         "  2. User - someone who operates RotBot\n"

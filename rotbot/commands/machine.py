@@ -4,11 +4,18 @@ import json
 import os
 from pathlib import Path, PureWindowsPath
 import platform
+import re
 import shutil
 import socket
 import subprocess
 from typing import NamedTuple
 
+from rotbot.contexts import loader, machines
+from rotbot.contexts.config import (
+    ConfigError,
+    get_local_context_bindings,
+    set_local_context_binding
+)
 from rotbot.contexts.machines import validate_local_facts, validate_portable_facts
 from rotbot.ui.terminal import rot_continue, rot_say
 
@@ -20,6 +27,10 @@ MAX_COMMAND_OUTPUT = 1_000_000
 class MachineInspection(NamedTuple):
     portable: dict
     local: dict
+
+
+class MachineRegistrationError(Exception):
+    pass
 
 
 def _detected_text(value, limit=1000):
@@ -578,7 +589,93 @@ def show_inspection(inspection):
     rot_continue("\n".join(local) if local else "No local facts detected.")
 
 
+def _machine_name(inspection):
+    hostname = inspection.local.get("connection", {}).get("hostname")
+    if not hostname:
+        raise MachineRegistrationError(
+            "Could not register this machine because no hostname was detected."
+        )
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", hostname).strip("._-")
+    if not name:
+        raise MachineRegistrationError(
+            "Could not derive a valid machine context ID from the hostname."
+        )
+    try:
+        loader.validate_context_name(name)
+    except loader.ContextError as error:
+        raise MachineRegistrationError(str(error)) from None
+    return name
+
+
+def _available_machine_name(name):
+    root = loader.CONTEXT_ROOT / "machines"
+    if not os.path.lexists(root / name):
+        return name
+    index = 2
+    while os.path.lexists(root / f"{name}-{index}"):
+        index += 1
+    return f"{name}-{index}"
+
+
+def register_local_machine(inspection=None):
+    try:
+        inspection = inspect_local_machine() if inspection is None else inspection
+        show_inspection(inspection)
+        name = _available_machine_name(_machine_name(inspection))
+        display_name = name.replace("-", " ").replace("_", " ").title()
+        destination = machines.create_machine(
+            name,
+            display_name,
+            inspection.portable
+        )
+        machine = machines.load_machine_context(name)
+
+        try:
+            set_local_context_binding("machine", machine.name)
+        except ConfigError:
+            for filename in machines.PORTABLE_FILENAMES:
+                (destination / filename).unlink(missing_ok=True)
+            destination.rmdir()
+            raise
+    except MachineRegistrationError:
+        raise
+    except Exception as error:
+        raise MachineRegistrationError(str(error)) from None
+
+    rot_say(f"Registered machine: {machine.name}")
+    rot_say(f"Set as local machine: {machine.name}")
+    return machine
+
+
 def machine_inspect(args):
-    inspection = inspect_local_machine()
-    show_inspection(inspection)
+    try:
+        configured = get_local_context_bindings().get("machine")
+    except ConfigError as error:
+        rot_say(str(error))
+        return 2
+
+    if configured is not None:
+        try:
+            machines.load_machine_context(configured)
+        except machines.MachineContextError:
+            rot_say(
+                f"Configured local machine '{configured}' is unavailable.\n"
+                "Inspecting and registering this machine again."
+            )
+        else:
+            try:
+                inspection = inspect_local_machine()
+                show_inspection(inspection)
+            except Exception as error:
+                rot_say(f"Could not inspect this machine:\n{error}")
+                return 1
+            return 0
+    else:
+        rot_say("No local machine configured.\nInspecting this machine...")
+
+    try:
+        register_local_machine()
+    except MachineRegistrationError as error:
+        rot_say(f"Could not register this machine:\n{error}")
+        return 1
     return 0

@@ -197,7 +197,7 @@ are created through the same interactive add command as project contexts.
 Machine contexts keep safe identity and normalized hardware facts under
 `machines/NAME/`. Private host-specific facts use the same machine name in one
 TOML file under RotBot's platform-aware local configuration directory, such as
-`~/.config/rotbot/machines/NAME.toml`.
+`~/.config/rot/machines/NAME.toml`.
 
 During machine creation, choose whether to inspect the current system or leave
 the context empty for manual editing. Inspection is deterministic and local;
@@ -239,6 +239,8 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context bind NAME PATH` | Bind a specific context            |
 | `rot context add`            | Interactively create a project, person, or machine context |
 | `rot context add machine [NAME]` | Create a machine directly, then inspect or leave empty |
+| `rot context add user [NAME]` | Create a user with the person workflow |
+| `rot context add assistant [NAME]` | Create an assistant with the person workflow |
 | `rot context mod [NAME]`     | Add categorized information to a person context |
 | `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
@@ -249,13 +251,18 @@ project also removes its local source and production bindings so the name can
 be recreated cleanly. Archiving a portable machine context does not modify its
 installation-specific local metadata file.
 
-Configure the active portable identities in RotBot's machine-local configuration:
+Rot stores this installation's active portable context IDs in
+`~/.config/rot/config.toml`:
 
 ```toml
-[defaults]
-assistant = "rot"
-user = "Kamaji"
-machine = "Fresh_Thinkpad_Cachy"
+[user]
+id = "Kamaji"
+
+[assistant]
+id = "rot"
+
+[machine]
+id = "Fresh_Thinkpad_Cachy"
 ```
 
 Inspect the context associated with the current working directory:
@@ -264,18 +271,23 @@ Inspect the context associated with the current working directory:
 rot context inspect
 ```
 
-This inspection is read-only. It reports identity names and project matching
-sources, excludes local/private machine metadata, and does not supply the
-inspected context to AI commands.
+On first use, inspection prompts for an existing or new user and assistant, then
+inspects and registers the local machine if needed. These three selections are
+persisted locally. Projects remain directory-specific and are never saved as a
+global default. The final summary excludes local/private machine metadata and
+does not supply the inspected context to AI commands.
 
-Inspect the current host without creating or modifying files:
+Inspect the current host:
 
 ```bash
 rot machine inspect
 ```
 
-Inspection never asks for a machine name, invokes AI, scans installed packages,
-or inspects a remote machine.
+On an unconfigured installation, machine inspection derives a stable context ID
+from the detected hostname, creates a non-colliding portable machine context, and
+stores its local binding. Once configured, `rot machine inspect` displays current
+state without overwriting the stored portable context. Inspection never invokes
+AI, scans installed packages, or inspects a remote machine.
 
 `rot context mod` currently supports people. It reads the selected Markdown
 file's existing `##` headings, adds information beneath one of them, or creates
