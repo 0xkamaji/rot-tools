@@ -27,9 +27,13 @@ class IdentificationSources(NamedTuple):
 
 class InspectedContext(NamedTuple):
     assistant: str | None
+    assistant_id: str | None
     user: str | None
+    user_id: str | None
     machine: str | None
+    machine_id: str | None
     project: str | None
+    project_id: str | None
     cwd: Path
     identification_sources: IdentificationSources
     warnings: tuple[str, ...]
@@ -90,7 +94,7 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
     stale = False
     if name is not None:
         try:
-            person = people.load_person_context(name)
+            person = people.load_person_context_reference(name, role)
         except people.PersonContextError as error:
             people_root = loader.CONTEXT_ROOT / "people"
             if people_root.is_symlink() or not people_root.is_dir():
@@ -102,9 +106,12 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
                 raise ContextInspectionError(str(error)) from None
             stale = True
         else:
-            if person.role == role:
-                return person.name, "local config"
-            stale = True
+            if bootstrap and name != person.id:
+                try:
+                    set_local_context_binding(context_type, person.id)
+                except ConfigError as error:
+                    raise ContextInspectionError(str(error)) from None
+            return person.name, person.id, "local config"
 
     if not bootstrap:
         warning = (
@@ -113,7 +120,7 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
             else f"No local {context_type} is configured."
         )
         warnings.append(warning)
-        return None, "stale local config" if stale else "not configured"
+        return None, None, "stale local config" if stale else "not configured"
 
     if stale:
         rot_say(f"Configured local {context_type} '{name}' is unavailable.")
@@ -122,24 +129,30 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
     selected = _choose_person(role)
     if selected is None:
         warnings.append(f"No local {context_type} was selected.")
-        return None, "not configured"
+        return None, None, "not configured"
     try:
-        set_local_context_binding(context_type, selected)
-    except ConfigError as error:
+        person = people.load_person_context(selected)
+        set_local_context_binding(context_type, person.id)
+    except (ConfigError, people.PersonContextError) as error:
         raise ContextInspectionError(str(error)) from None
     rot_say(f"Default {context_type} set: {selected}")
-    return selected, "local config"
+    return selected, person.id, "local config"
 
 
 def _machine_identity(bindings, bootstrap, warnings):
     name = bindings.get("machine")
     if name is not None:
         try:
-            machine = machines.load_machine_context(name)
+            machine = machines.load_machine_context_reference(name)
         except machines.MachineContextError:
             pass
         else:
-            return machine.name, "local config"
+            if bootstrap and name != machine.id:
+                try:
+                    set_local_context_binding("machine", machine.id)
+                except ConfigError as error:
+                    raise ContextInspectionError(str(error)) from None
+            return machine.name, machine.id, "local config"
 
     if not bootstrap:
         warning = (
@@ -148,20 +161,32 @@ def _machine_identity(bindings, bootstrap, warnings):
             else "No local machine is configured."
         )
         warnings.append(warning)
-        return None, "stale local config" if name is not None else "not configured"
+        return None, None, "stale local config" if name is not None else "not configured"
 
     if name is not None:
         rot_say(f"Configured local machine '{name}' is unavailable.")
     else:
         rot_say("No local machine configured.")
-    rot_say("Inspecting this machine...")
-    from rotbot.commands.machine import MachineRegistrationError, register_local_machine
+    rot_say(
+        "Machine setup will inspect this host, check for an existing profile, "
+        "and ask before registering or rebinding anything."
+    )
+    from rotbot.commands.machine import machine_inspect
 
+    result = machine_inspect(SimpleNamespace())
+    if result != 0:
+        raise ContextInspectionError(
+            f"Machine inspection failed with exit code {result}."
+        )
     try:
-        machine = register_local_machine()
-    except MachineRegistrationError as error:
+        updated = get_local_context_bindings().get("machine")
+        if updated is None:
+            warnings.append("No local machine was selected or registered.")
+            return None, None, "not configured"
+        machine = machines.load_machine_context_reference(updated)
+    except (ConfigError, machines.MachineContextError) as error:
         raise ContextInspectionError(str(error)) from None
-    return machine.name, "local config"
+    return machine.name, machine.id, "local config"
 
 
 def _contains(binding, cwd):
@@ -266,13 +291,15 @@ def inspect_current_context(cwd=None, bootstrap=False):
         raise ContextInspectionError(str(error)) from None
 
     warnings = []
-    user, user_source = _person_identity(
+    user, user_id, user_source = _person_identity(
         local_bindings, "user", "user", bootstrap, warnings
     )
-    assistant, assistant_source = _person_identity(
+    assistant, assistant_id, assistant_source = _person_identity(
         local_bindings, "assistant", "assistant", bootstrap, warnings
     )
-    machine, machine_source = _machine_identity(local_bindings, bootstrap, warnings)
+    machine, machine_id, machine_source = _machine_identity(
+        local_bindings, bootstrap, warnings
+    )
 
     project, project_source, project_warnings = _binding_match(
         current_directory, bindings, "source", project_names
@@ -284,12 +311,20 @@ def inspect_current_context(cwd=None, bootstrap=False):
     if project_source is None:
         project, project_source, project_warnings = _safe_project_match(current_directory)
     warnings.extend(project_warnings)
+    try:
+        project_id = loader.load_context(project).id if project is not None else None
+    except loader.ContextError as error:
+        raise ContextInspectionError(str(error)) from None
 
     return InspectedContext(
         assistant,
+        assistant_id,
         user,
+        user_id,
         machine,
+        machine_id,
         project,
+        project_id,
         current_directory,
         IdentificationSources(
             assistant_source,

@@ -6,6 +6,8 @@ import stat
 import tempfile
 import tomllib
 
+from rotbot.contexts.identifiers import ContextIdentifierError, validate_context_id
+
 
 CONFIG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONFIG_KEYS = ("source_path", "production_path")
@@ -321,8 +323,10 @@ def _updated_local_context_text(original, context_type, context_id):
 def set_local_context_binding(context_type, context_id, path=None):
     if context_type not in LOCAL_CONTEXT_TYPES:
         raise ConfigError(f"Unsupported local context type: {context_type}")
-    if not isinstance(context_id, str) or not CONFIG_NAME_PATTERN.fullmatch(context_id):
-        raise ConfigError(f"Invalid local {context_type} context ID: {context_id}")
+    try:
+        context_id = validate_context_id(context_id)
+    except ContextIdentifierError as error:
+        raise ConfigError(str(error)) from None
     path = config_path() if path is None else Path(path)
     if path.is_symlink():
         raise ConfigError(f"RotBot configuration must not be a symlink:\n{path}")

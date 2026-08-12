@@ -13,6 +13,7 @@ from typing import NamedTuple
 from rotbot.contexts import loader, machines
 from rotbot.contexts.config import (
     ConfigError,
+    config_path,
     get_local_context_bindings,
     set_local_context_binding
 )
@@ -617,64 +618,211 @@ def _available_machine_name(name):
     return f"{name}-{index}"
 
 
-def register_local_machine(inspection=None):
+def register_local_machine(
+    inspection=None,
+    *,
+    display=True,
+    existing_machine=None,
+    display_name=None
+):
     try:
         inspection = inspect_local_machine() if inspection is None else inspection
-        show_inspection(inspection)
-        name = _available_machine_name(_machine_name(inspection))
-        display_name = name.replace("-", " ").replace("_", " ").title()
-        destination = machines.create_machine(
-            name,
-            display_name,
-            inspection.portable
+        if display:
+            show_inspection(inspection)
+        machine = (
+            machines.associated_machine_context(inspection.local)
+            if existing_machine is None
+            else existing_machine
         )
-        machine = machines.load_machine_context(name)
+        created = machine is None
+        if created:
+            name = _available_machine_name(_machine_name(inspection))
+            if display_name is None:
+                display_name = name.replace("-", " ").replace("_", " ").title()
+            destination = machines.create_machine(
+                name,
+                display_name,
+                inspection.portable
+            )
+            machine = machines.load_machine_context(name)
 
+        local_record = None
         try:
-            set_local_context_binding("machine", machine.name)
-        except ConfigError:
-            for filename in machines.PORTABLE_FILENAMES:
-                (destination / filename).unlink(missing_ok=True)
-            destination.rmdir()
+            if created and machines.has_local_facts(inspection.local):
+                local_record = machines.create_local_machine_record(
+                    machine.name,
+                    inspection.local,
+                    machine.id
+                )
+            set_local_context_binding("machine", machine.id)
+        except (ConfigError, machines.MachineContextError):
+            if local_record is not None:
+                local_record.unlink(missing_ok=True)
+            if created:
+                for filename in machines.PORTABLE_FILENAMES:
+                    (destination / filename).unlink(missing_ok=True)
+                destination.rmdir()
             raise
     except MachineRegistrationError:
         raise
     except Exception as error:
         raise MachineRegistrationError(str(error)) from None
 
-    rot_say(f"Registered machine: {machine.name}")
+    if created:
+        rot_say(f"Registered machine: {machine.name} ({machine.id})")
+        if local_record is not None:
+            rot_say(f"Stored private local machine association: {local_record}")
+    else:
+        rot_say(f"Found existing machine context: {machine.name} ({machine.id})")
     rot_say(f"Set as local machine: {machine.name}")
     return machine
 
 
+def _confirm_registration(message):
+    rot_say(f"{message}\n\nProceed with machine registration? [y/N]")
+    try:
+        answer = input("> ").strip().lower()
+    except EOFError:
+        answer = ""
+    return answer in {"y", "yes"}
+
+
+def _ask_machine_display_name(default):
+    rot_say(
+        "What display name should this machine use?\n"
+        f"Leave blank to use: {default}"
+    )
+    try:
+        answer = input("> ").strip()
+    except EOFError:
+        return None
+    return answer or default
+
+
 def machine_inspect(args):
+    try:
+        inspection = inspect_local_machine()
+        show_inspection(inspection)
+    except Exception as error:
+        rot_say(f"Could not inspect this machine:\n{error}")
+        return 1
+
     try:
         configured = get_local_context_bindings().get("machine")
     except ConfigError as error:
         rot_say(str(error))
         return 2
 
+    configured_machine = None
     if configured is not None:
         try:
-            machines.load_machine_context(configured)
+            configured_machine = machines.load_machine_context_reference(configured)
         except machines.MachineContextError:
             rot_say(
                 f"Configured local machine '{configured}' is unavailable.\n"
-                "Inspecting and registering this machine again."
+                "The inspection above was not written anywhere."
             )
-        else:
-            try:
-                inspection = inspect_local_machine()
-                show_inspection(inspection)
-            except Exception as error:
-                rot_say(f"Could not inspect this machine:\n{error}")
-                return 1
-            return 0
-    else:
-        rot_say("No local machine configured.\nInspecting this machine...")
 
     try:
-        register_local_machine()
+        existing = machines.associated_machine_context(inspection.local)
+    except machines.MachineContextError as error:
+        rot_say(f"Could not verify existing machine associations:\n{error}")
+        return 1
+
+    if configured_machine is not None:
+        if existing is None or existing.id == configured_machine.id:
+            rot_say(
+                "Machine context already exists:\n"
+                f"  Name: {configured_machine.name}\n"
+                f"  ID:   {configured_machine.id}\n"
+                "This installation is already bound to it.\n"
+                + (
+                    "The local binding still uses its legacy name. Run "
+                    "'rot context inspect' to migrate that binding to the UUID.\n"
+                    if configured != configured_machine.id
+                    else ""
+                )
+                + "No stored machine context or configuration was changed."
+            )
+            return 0
+
+        detail = (
+            "The configured machine differs from an existing local association.\n\n"
+            "Currently configured:\n"
+            f"  Name: {configured_machine.name}\n"
+            f"  ID:   {configured_machine.id}\n\n"
+            "Matched by local machine metadata:\n"
+            f"  Name: {existing.name}\n"
+            f"  ID:   {existing.id}\n\n"
+            f"Only {config_path()} will be updated to use the matched ID.\n"
+            "Neither portable machine context will be overwritten or deleted."
+        )
+        if not _confirm_registration(detail):
+            rot_say("Machine rebind declined. No files or configuration were changed.")
+            return 0
+        try:
+            set_local_context_binding("machine", existing.id)
+        except ConfigError as error:
+            rot_say(str(error))
+            return 2
+        rot_say(f"Set as local machine: {existing.name} ({existing.id})")
+        return 0
+
+    try:
+        display_name = None
+        if existing is not None:
+            detail = (
+                f"An existing local machine record matches this host:\n"
+                f"  Name: {existing.name}\n"
+                f"  ID:   {existing.id}\n\n"
+                f"Only {config_path()} will be updated to bind this installation.\n"
+                "The portable machine context will not be overwritten."
+            )
+        else:
+            name = _available_machine_name(_machine_name(inspection))
+            display_default = name.replace("-", " ").replace("_", " ").title()
+            display_name = _ask_machine_display_name(display_default)
+            if display_name is None:
+                rot_say(
+                    "Machine registration cancelled before confirmation. "
+                    "No files or configuration were changed."
+                )
+                return 0
+            try:
+                machines.build_machine_context(
+                    name,
+                    display_name,
+                    inspection.portable
+                )
+            except machines.MachineContextError as error:
+                rot_say(f"Invalid machine display name:\n{error}")
+                return 1
+            detail = (
+                "No existing local machine association matches this host.\n\n"
+                "Registration will create a portable machine context with a new UUID:\n"
+                f"  {loader.CONTEXT_ROOT / 'machines' / name}\n\n"
+                f"Display name:\n  {display_name}\n\n"
+                "It will also write this installation's machine ID to:\n"
+                f"  {config_path()}\n\n"
+                "Detected private local facts will be stored in the local Rot config "
+                "directory so this host can be recognized later.\n\n"
+                "Existing machine contexts will not be overwritten."
+            )
+    except (MachineRegistrationError, machines.MachineContextError) as error:
+        rot_say(f"Could not evaluate machine registration:\n{error}")
+        return 1
+
+    if not _confirm_registration(detail):
+        rot_say("Machine registration declined. No files or configuration were changed.")
+        return 0
+
+    try:
+        register_local_machine(
+            inspection,
+            display=False,
+            existing_machine=existing,
+            display_name=display_name
+        )
     except MachineRegistrationError as error:
         rot_say(f"Could not register this machine:\n{error}")
         return 1

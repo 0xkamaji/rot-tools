@@ -164,6 +164,7 @@ A context generally contains:
 context/
 ├── projects/
 │   └── NAME/
+│       ├── metadata.toml
 │       ├── identity.md
 │       ├── state.md
 │       ├── vision.md
@@ -208,10 +209,15 @@ never contain passwords, private keys, tokens, cookies, recovery codes, or
 other authentication secrets. RotBot never automatically loads local records
 when listing, showing, matching, or building AI prompts.
 
+Every active project, person, and machine context has a portable UUID in its
+`metadata.toml`. Names remain the human-facing CLI identifiers; local bindings
+store UUIDs so renaming a context does not change its backend identity.
+
 Project files:
 
 | File          | Purpose                                       |
 | ------------- | --------------------------------------------- |
+| `metadata.toml` | Stable UUID and display/lookup name         |
 | `identity.md` | What the project is and its stable principles |
 | `state.md`    | What currently exists                         |
 | `vision.md`   | Where the project is going                    |
@@ -234,7 +240,7 @@ menu. Direct subcommands remain available for faster scripted use.
 | ---------------------------- | ---------------------------------- |
 | `rot context list`           | List available contexts            |
 | `rot context inspect`        | Inspect the active identities, machine, directory, and project |
-| `rot context show [NAME]`    | Display a context, or choose one from a list |
+| `rot context show [NAME]`    | Display the current session or a saved context |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
 | `rot context add`            | Interactively create a project, person, or machine context |
@@ -256,13 +262,13 @@ Rot stores this installation's active portable context IDs in
 
 ```toml
 [user]
-id = "Kamaji"
+id = "497e5a65-9bcf-4ddb-90bc-d1d5535a8c63"
 
 [assistant]
-id = "rot"
+id = "37afbc72-8f56-4fed-90a3-eaead836e13e"
 
 [machine]
-id = "Fresh_Thinkpad_Cachy"
+id = "57eab66e-7041-440a-83d8-7ff3ab39ed11"
 ```
 
 Inspect the context associated with the current working directory:
@@ -283,11 +289,14 @@ Inspect the current host:
 rot machine inspect
 ```
 
-On an unconfigured installation, machine inspection derives a stable context ID
-from the detected hostname, creates a non-colliding portable machine context, and
-stores its local binding. Once configured, `rot machine inspect` displays current
-state without overwriting the stored portable context. Inspection never invokes
-AI, scans installed packages, or inspects a remote machine.
+Machine inspection always displays current detected state first. It then reports
+whether a configured or locally associated machine context already exists. Any
+new registration or rebind requires explicit confirmation and stores the portable
+context's UUID. New registration also stores detected private local facts in
+`~/.config/rot/machines/` so later inspections can recognize the host. Declining
+leaves files and configuration unchanged. Existing portable machine contexts are
+never overwritten. Inspection never invokes AI, scans installed packages, or
+inspects a remote machine.
 
 `rot context mod` currently supports people. It reads the selected Markdown
 file's existing `##` headings, adds information beneath one of them, or creates
@@ -298,6 +307,17 @@ template headings, guidance comments, metadata, and role-inapplicable files are
 omitted.
 
 ### Show a context
+
+Run without a name to choose between the current invocation context and a saved
+project, person, or machine context:
+
+```bash
+rot context show
+```
+
+The current-session option is read-only and does not bootstrap missing local
+bindings. It shows the same resolved identities, machine, directory, project,
+identification sources, and warnings used by context inspection.
 
 ```bash
 rot context show rotbot

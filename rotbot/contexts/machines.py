@@ -7,6 +7,12 @@ from typing import NamedTuple
 
 from rotbot.contexts import loader
 from rotbot.contexts.config import ConfigError, config_path, legacy_config_path
+from rotbot.contexts.identifiers import (
+    ContextIdentifierError,
+    legacy_context_id,
+    new_context_id,
+    validate_context_id
+)
 
 
 PORTABLE_FILENAMES = ("metadata.toml", "identity.md", "software.toml")
@@ -37,6 +43,7 @@ class MachineContext(NamedTuple):
     name: str
     display_name: str
     portable_facts: dict
+    id: str | None = None
 
 
 class MachineDocument(NamedTuple):
@@ -143,13 +150,18 @@ def validate_portable_facts(portable_facts=None):
     return facts
 
 
-def build_machine_context(name, display_name=None, portable_facts=None):
+def build_machine_context(name, display_name=None, portable_facts=None, context_id=None):
     name = _validate_identifier(name, "name")
     display_name = name if display_name is None else display_name
+    try:
+        normalized_id = validate_context_id(context_id or new_context_id())
+    except ContextIdentifierError as error:
+        raise MachineContextError(str(error)) from None
     return MachineContext(
         name,
         _validate_text(display_name, "display name"),
-        validate_portable_facts(portable_facts)
+        validate_portable_facts(portable_facts),
+        normalized_id
     )
 
 
@@ -164,6 +176,7 @@ def _toml_value(value):
 def render_machine_metadata(machine):
     lines = [
         'type = "machine"',
+        f"id = {_toml_value(machine.id)}",
         f"name = {_toml_value(machine.name)}",
         f"display_name = {_toml_value(machine.display_name)}"
     ]
@@ -246,7 +259,12 @@ def load_machine_context(name, *, machines_root=None):
         for key in (*PORTABLE_SCALAR_FIELDS, "cpu", "memory", "gpus")
         if key in metadata
     }
-    return build_machine_context(name, metadata.get("display_name"), facts)
+    return build_machine_context(
+        name,
+        metadata.get("display_name"),
+        facts,
+        metadata.get("id") or legacy_context_id("machine", name)
+    )
 
 
 def load_machine_files(name, *, machines_root=None):
@@ -268,6 +286,19 @@ def list_machine_contexts(*, machines_root=None):
         except MachineContextError:
             continue
     return tuple(sorted(contexts, key=lambda machine: machine.name))
+
+
+def load_machine_context_reference(reference, *, machines_root=None):
+    matches = tuple(
+        machine
+        for machine in list_machine_contexts(machines_root=machines_root)
+        if reference in {machine.id, machine.name}
+    )
+    if not matches:
+        raise MachineContextError(f"Unknown machine context reference: {reference}")
+    if len(matches) > 1:
+        raise MachineContextError(f"Ambiguous machine context reference: {reference}")
+    return matches[0]
 
 
 def _write_document(path, content, mode=None):
@@ -309,8 +340,15 @@ def _rollback_directory(destination, filenames):
     return tuple(errors)
 
 
-def create_machine(name, display_name=None, portable_facts=None, *, machines_root=None):
-    machine = build_machine_context(name, display_name, portable_facts)
+def create_machine(
+    name,
+    display_name=None,
+    portable_facts=None,
+    context_id=None,
+    *,
+    machines_root=None
+):
+    machine = build_machine_context(name, display_name, portable_facts, context_id)
     files = render_machine_files(machine)
     root = _machines_root(machines_root)
     destination = root / machine.name
@@ -432,12 +470,17 @@ def has_local_facts(local_facts):
     return bool(validate_local_facts(local_facts))
 
 
-def render_local_machine_record(name, local_facts):
+def render_local_machine_record(name, local_facts, context_id=None):
     name = _validate_identifier(name, "name")
+    if context_id is not None:
+        try:
+            context_id = validate_context_id(context_id)
+        except ContextIdentifierError as error:
+            raise MachineContextError(str(error)) from None
     facts = validate_local_facts(local_facts)
     if not facts:
         raise MachineContextError("No local machine facts are available to store.")
-    lines = [f"machine_ref = {_toml_value(name)}"]
+    lines = [f"machine_ref = {_toml_value(context_id or name)}"]
     connection = facts.get("connection")
     if connection:
         lines.extend(("", "[connection]"))
@@ -456,8 +499,8 @@ def render_local_machine_record(name, local_facts):
     return content
 
 
-def create_local_machine_record(name, local_facts, *, target_config=None):
-    content = render_local_machine_record(name, local_facts)
+def create_local_machine_record(name, local_facts, context_id=None, *, target_config=None):
+    content = render_local_machine_record(name, local_facts, context_id)
     root = local_machines_directory(target_config=target_config)
     if root.is_symlink():
         raise MachineContextError(f"Invalid local machine directory: {root}")
@@ -479,7 +522,7 @@ def create_local_machine_record(name, local_facts, *, target_config=None):
     return destination
 
 
-def load_local_machine_record(name, *, target_config=None):
+def _load_local_machine_record_entry(name, *, target_config=None):
     path = local_machine_record_path(name, target_config=target_config)
     if target_config is None and not os.path.lexists(path):
         legacy = legacy_config_path().parent / "machines" / f"{name}.toml"
@@ -495,7 +538,54 @@ def load_local_machine_record(name, *, target_config=None):
         document = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         raise MachineContextError(f"Could not load local machine record '{name}': {error}") from None
-    if document.get("machine_ref") != name:
+    reference = document.get("machine_ref")
+    if not isinstance(reference, str):
         raise MachineContextError(f"Invalid local machine reference: {name}")
     facts = {section: document[section] for section in LOCAL_SECTIONS if section in document}
-    return validate_local_facts(facts)
+    return reference, validate_local_facts(facts)
+
+
+def load_local_machine_record(name, *, target_config=None):
+    entry = _load_local_machine_record_entry(name, target_config=target_config)
+    return entry[1] if entry is not None else None
+
+
+def associated_machine_context(local_facts):
+    hostname = local_facts.get("connection", {}).get("hostname")
+    if not hostname:
+        return None
+    matches = []
+    matched_ids = set()
+    for target in (config_path(), legacy_config_path()):
+        root = target.parent / "machines"
+        if root.is_symlink() or not root.is_dir():
+            continue
+        try:
+            entries = tuple(root.glob("*.toml"))
+        except OSError as error:
+            raise MachineContextError(
+                f"Could not list local machine records: {error}"
+            ) from None
+        for entry in entries:
+            name = entry.stem
+            try:
+                entry = _load_local_machine_record_entry(name, target_config=target)
+                if entry is None:
+                    continue
+                reference, facts = entry
+                machine = load_machine_context_reference(reference)
+            except MachineContextError:
+                continue
+            if (
+                facts
+                and facts.get("connection", {}).get("hostname") == hostname
+                and machine.id not in matched_ids
+            ):
+                matches.append(machine)
+                matched_ids.add(machine.id)
+    if len(matches) > 1:
+        names = ", ".join(sorted(machine.name for machine in matches))
+        raise MachineContextError(
+            f"Multiple local machine records match hostname '{hostname}': {names}"
+        )
+    return matches[0] if matches else None

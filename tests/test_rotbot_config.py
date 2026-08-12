@@ -8,6 +8,10 @@ from rotbot.contexts import config as rotbot_config
 
 
 class RotbotConfigTests(unittest.TestCase):
+    USER_ID = "00000000-0000-4000-8000-000000000001"
+    ASSISTANT_ID = "00000000-0000-4000-8000-000000000002"
+    MACHINE_ID = "00000000-0000-4000-8000-000000000003"
+
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
@@ -33,18 +37,24 @@ class RotbotConfigTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        rotbot_config.set_local_context_binding("user", "kamaji", self.config)
-        rotbot_config.set_local_context_binding("assistant", "rot", self.config)
-        rotbot_config.set_local_context_binding("machine", "desktop", self.config)
+        rotbot_config.set_local_context_binding("user", self.USER_ID, self.config)
+        rotbot_config.set_local_context_binding(
+            "assistant", self.ASSISTANT_ID, self.config
+        )
+        rotbot_config.set_local_context_binding("machine", self.MACHINE_ID, self.config)
 
         content = self.config.read_text(encoding="utf-8")
-        self.assertIn('[user]\nid = "kamaji"', content)
-        self.assertIn('[assistant]\nid = "rot"', content)
-        self.assertIn('[machine]\nid = "desktop"', content)
+        self.assertIn(f'[user]\nid = "{self.USER_ID}"', content)
+        self.assertIn(f'[assistant]\nid = "{self.ASSISTANT_ID}"', content)
+        self.assertIn(f'[machine]\nid = "{self.MACHINE_ID}"', content)
         self.assertIn('source_path = "/srv/rotbot"', content)
         self.assertEqual(
             rotbot_config.get_local_context_bindings(self.config),
-            {"user": "kamaji", "assistant": "rot", "machine": "desktop"}
+            {
+                "user": self.USER_ID,
+                "assistant": self.ASSISTANT_ID,
+                "machine": self.MACHINE_ID
+            }
         )
 
     def test_first_canonical_write_migrates_legacy_configuration(self):
@@ -63,7 +73,7 @@ class RotbotConfigTests(unittest.TestCase):
                 rotbot_config.get_context_binding("rotbot")["source_path"],
                 "/srv/rotbot"
             )
-            rotbot_config.set_local_context_binding("user", "kamaji")
+            rotbot_config.set_local_context_binding("user", self.USER_ID)
 
         self.assertTrue(canonical.is_file())
         self.assertIn(
@@ -88,7 +98,7 @@ class RotbotConfigTests(unittest.TestCase):
         ), self.assertRaises(rotbot_config.ConfigError):
             rotbot_config.set_local_context_binding(
                 "assistant",
-                "rot",
+                self.ASSISTANT_ID,
                 self.config
             )
 

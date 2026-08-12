@@ -104,10 +104,26 @@ class ContextLoaderTests(unittest.TestCase):
         loaded = contexts.load_context("example")
 
         self.assertEqual(loaded.name, "example")
-        self.assertEqual(
-            loaded,
-            contexts.Context("example", "identity\n", "state\n")
+        self.assertEqual(loaded.name, "example")
+        self.assertEqual(loaded.identity, "identity\n")
+        self.assertEqual(loaded.state, "state\n")
+        self.assertIsNotNone(loaded.id)
+
+    def test_project_context_can_be_loaded_by_stable_id(self):
+        directory = self.create_context("example")
+        (directory / "metadata.toml").write_text(
+            contexts.render_project_metadata(
+                "example",
+                "00000000-0000-4000-8000-000000000001"
+            ),
+            encoding="utf-8"
         )
+
+        loaded = contexts.load_context_reference(
+            "00000000-0000-4000-8000-000000000001"
+        )
+
+        self.assertEqual(loaded.name, "example")
 
     def test_build_context_prompt_includes_both_files_as_read_only(self):
         self.create_context(
@@ -131,7 +147,10 @@ class ContextLoaderTests(unittest.TestCase):
 
         loaded = contexts.load_context("example")
 
-        self.assertEqual(loaded, contexts.Context("example", "identity", "state"))
+        self.assertEqual((loaded.name, loaded.identity, loaded.state), (
+            "example", "identity", "state"
+        ))
+        self.assertIsNotNone(loaded.id)
         self.assertFalse(hasattr(loaded, "vision"))
 
     def test_load_vision_distinguishes_present_missing_and_empty(self):
@@ -329,7 +348,7 @@ class ContextLoaderTests(unittest.TestCase):
         people.create_person_context(
             "alex", "contact", "Alex", people_root=self.people
         )
-        with patch("builtins.input", return_value="2"), patch.object(
+        with patch("builtins.input", side_effect=("2", "2")), patch.object(
             contexts,
             "rot_say"
         ) as rot_say, patch.object(contexts, "rot_continue") as rot_continue:
@@ -347,9 +366,59 @@ class ContextLoaderTests(unittest.TestCase):
             rot_continue.call_args.args[0].endswith("(no recorded information)")
         )
 
+    def test_show_without_name_can_display_current_session_read_only(self):
+        from rotbot.contexts import inspection
+
+        inspected = inspection.InspectedContext(
+            "rot",
+            "00000000-0000-4000-8000-000000000001",
+            "kamaji",
+            "00000000-0000-4000-8000-000000000002",
+            "laptop",
+            "00000000-0000-4000-8000-000000000003",
+            "rotbot",
+            "00000000-0000-4000-8000-000000000004",
+            Path("/srv/rotbot"),
+            inspection.IdentificationSources(
+                "local config",
+                "local config",
+                "local config",
+                "source binding"
+            ),
+            ()
+        )
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection,
+            "inspect_current_context",
+            return_value=inspected
+        ) as inspect, patch.object(contexts, "rot_say") as rot_say:
+            result = contexts.context_show(
+                argparse.Namespace(name=None, vision=False)
+            )
+
+        self.assertEqual(result, 0)
+        inspect.assert_called_once_with(bootstrap=False)
+        self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
+        self.assertIn("Project:    rotbot", rot_say.call_args.args[0])
+
+    def test_current_session_show_rejects_vision_without_inspection(self):
+        from rotbot.contexts import inspection
+
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection,
+            "inspect_current_context"
+        ) as inspect, patch.object(contexts, "rot_say") as rot_say:
+            result = contexts.context_show(
+                argparse.Namespace(name=None, vision=True)
+            )
+
+        self.assertEqual(result, 1)
+        inspect.assert_not_called()
+        self.assertIn("saved project context", rot_say.call_args.args[0])
+
     def test_show_selection_menu_can_exit_without_displaying(self):
         self.create_context("alpha")
-        for answer in ("exit", "2", ""):
+        for answer in ("exit", "3", ""):
             with self.subTest(answer=answer), patch(
                 "builtins.input",
                 return_value=answer
@@ -363,6 +432,18 @@ class ContextLoaderTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             rot_continue.assert_not_called()
+
+    def test_existing_scope_reports_when_no_saved_contexts_exist(self):
+        with patch("builtins.input", return_value="2"), patch.object(
+            contexts,
+            "rot_say"
+        ) as rot_say:
+            result = contexts.context_show(
+                argparse.Namespace(name=None, vision=False)
+            )
+
+        self.assertEqual(result, 1)
+        self.assertIn("No saved contexts", rot_say.call_args.args[0])
 
     def test_show_rejects_ambiguous_name_and_person_vision(self):
         from rotbot.contexts import people

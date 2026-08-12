@@ -1,7 +1,15 @@
+import json
 from pathlib import Path
 import re
+import tomllib
 from typing import NamedTuple
 
+from rotbot.contexts.identifiers import (
+    ContextIdentifierError,
+    legacy_context_id,
+    new_context_id,
+    validate_context_id
+)
 from rotbot.ui.terminal import rot_continue, rot_say, rot_table
 
 
@@ -18,12 +26,26 @@ class Context(NamedTuple):
     name: str
     identity: str
     state: str
+    id: str | None = None
 
 
 def validate_context_name(name):
     if not isinstance(name, str) or not CONTEXT_NAME_PATTERN.fullmatch(name):
         raise ContextError(f"Invalid context name: {name}")
     return name
+
+
+def render_project_metadata(name, context_id=None):
+    validate_context_name(name)
+    try:
+        context_id = validate_context_id(context_id or new_context_id())
+    except ContextIdentifierError as error:
+        raise ContextError(str(error)) from None
+    return (
+        'type = "project"\n'
+        f"id = {json.dumps(context_id)}\n"
+        f"name = {json.dumps(name)}\n"
+    )
 
 
 def project_context_directory(name):
@@ -86,14 +108,38 @@ def list_contexts():
 
 def load_context(name):
     identity_path, state_path = context_paths(name)
+    metadata_path = identity_path.parent / "metadata.toml"
     try:
+        if metadata_path.exists():
+            if metadata_path.is_symlink() or not metadata_path.is_file():
+                raise ContextError(f"Invalid project metadata: {name}")
+            metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("type") != "project" or metadata.get("name") != name:
+                raise ContextError(f"Invalid project metadata: {name}")
+            context_id = validate_context_id(metadata.get("id"))
+        else:
+            context_id = legacy_context_id("project", name)
         return Context(
             name=name,
             identity=identity_path.read_text(encoding="utf-8"),
-            state=state_path.read_text(encoding="utf-8")
+            state=state_path.read_text(encoding="utf-8"),
+            id=context_id
         )
-    except (OSError, UnicodeError) as error:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, ContextIdentifierError) as error:
         raise ContextError(f"Could not load context '{name}': {error}") from None
+
+
+def load_context_reference(reference):
+    matches = []
+    for name in list_contexts():
+        context = load_context(name)
+        if reference in {context.id, context.name}:
+            matches.append(context)
+    if not matches:
+        raise ContextError(f"Unknown project context reference: {reference}")
+    if len(matches) > 1:
+        raise ContextError(f"Ambiguous project context reference: {reference}")
+    return matches[0]
 
 
 def load_vision(name):
@@ -190,6 +236,46 @@ def _choose_context_to_show(entries):
         if answer.isdigit() and 1 <= int(answer) <= len(entries):
             return entries[int(answer) - 1]
         rot_say(f"Please choose a number from 1 to {exit_number}.")
+
+
+def _choose_context_scope():
+    rot_say(
+        "Which context would you like to show?\n\n"
+        "  1. Current session - identities, machine, directory, and project\n"
+        "  2. Existing contexts - choose a saved project, person, or machine\n"
+        "  3. Exit"
+    )
+    while True:
+        try:
+            answer = input("> ").strip().lower()
+        except EOFError:
+            return None
+        if answer in {"", "exit", "e", "quit", "q", "3"}:
+            return None
+        if answer in {"1", "current", "session", "current session"}:
+            return "current"
+        if answer in {"2", "existing", "saved", "other"}:
+            return "existing"
+        rot_say("Please choose 1, 2, or 3.")
+
+
+def _show_current_context(vision_only):
+    if vision_only:
+        rot_say("--vision is only supported when showing a saved project context.")
+        return 1
+    from rotbot.contexts.inspection import (
+        ContextInspectionError,
+        inspect_current_context,
+        render_inspected_context
+    )
+
+    try:
+        inspected = inspect_current_context(bootstrap=False)
+    except ContextInspectionError as error:
+        rot_say(str(error))
+        return 2
+    rot_say(render_inspected_context(inspected))
+    return 1 if inspected.warnings else 0
 
 
 def _show_project_context(name, vision_only):
@@ -314,8 +400,14 @@ def context_show(args):
             return 1
         context_type, name = matches[0]
     else:
+        scope = _choose_context_scope()
+        if scope is None:
+            rot_say("Context display cancelled.")
+            return 0
+        if scope == "current":
+            return _show_current_context(getattr(args, "vision", False))
         if not entries:
-            rot_say("No contexts are available to show.")
+            rot_say("No saved contexts are available to show.")
             return 1
         selected = _choose_context_to_show(entries)
         if selected is None:

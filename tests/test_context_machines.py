@@ -58,6 +58,7 @@ class MachineContextTests(unittest.TestCase):
         )
         self.assertEqual(metadata, {
             "type": "machine",
+            "id": metadata["id"],
             "name": "desktop",
             "display_name": "Main Desktop",
             **facts
@@ -73,6 +74,7 @@ class MachineContextTests(unittest.TestCase):
         )
         self.assertEqual(metadata, {
             "type": "machine",
+            "id": metadata["id"],
             "name": "desktop",
             "display_name": "Desktop"
         })
@@ -136,6 +138,20 @@ class MachineContextTests(unittest.TestCase):
                 )
             ),
             ("alpha", "zeta")
+        )
+
+    def test_machine_context_can_be_loaded_by_stable_id(self):
+        machines.create_machine("desktop", machines_root=self.machines_root)
+        machine = machines.load_machine_context(
+            "desktop", machines_root=self.machines_root
+        )
+
+        self.assertEqual(
+            machines.load_machine_context_reference(
+                machine.id,
+                machines_root=self.machines_root
+            ),
+            machine
         )
 
     def test_invalid_names_and_facts_write_nothing(self):

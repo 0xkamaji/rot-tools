@@ -238,10 +238,20 @@ class MachineInspectionTests(unittest.TestCase):
         with patch.object(
             inspection,
             "get_local_context_bindings",
-            return_value={"machine": "desktop"}
+            return_value={"machine": "00000000-0000-4000-8000-000000000003"}
         ), patch.object(
             machines,
-            "load_machine_context"
+            "load_machine_context_reference",
+            return_value=machines.MachineContext(
+                "desktop",
+                "Desktop",
+                {},
+                "00000000-0000-4000-8000-000000000003"
+            )
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
         ), patch.object(
             inspection,
             "inspect_local_machine",
@@ -259,21 +269,87 @@ class MachineInspectionTests(unittest.TestCase):
             result = inspection.machine_inspect(argparse.Namespace())
 
         self.assertEqual(result, 0)
-        self.assertEqual(
-            [call.args[0] for call in rot_say.call_args_list],
-            ["Portable machine metadata", "Local machine metadata"]
-        )
+        messages = [call.args[0] for call in rot_say.call_args_list]
+        self.assertEqual(messages[:2], [
+            "Portable machine metadata", "Local machine metadata"
+        ])
+        self.assertIn("already exists", messages[2])
         output = "\n".join(call.args[0] for call in rot_continue.call_args_list)
         self.assertIn("Operating system: CachyOS", output)
         self.assertIn("Hostname: desktop-host", output)
         create_machine.assert_not_called()
         create_local.assert_not_called()
 
-    def test_unconfigured_machine_inspect_uses_shared_registration(self):
+    def test_configured_duplicate_can_rebind_to_verified_existing_machine(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
+        configured = machines.MachineContext(
+            "desktop-host",
+            "Desktop Host",
+            {},
+            "00000000-0000-4000-8000-000000000003"
+        )
+        matched = machines.MachineContext(
+            "existing-laptop",
+            "Existing Laptop",
+            {},
+            "00000000-0000-4000-8000-000000000004"
+        )
         with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={"machine": configured.id}
+        ), patch.object(
+            machines,
+            "load_machine_context_reference",
+            return_value=configured
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=matched
+        ), patch.object(
+            inspection,
+            "_confirm_registration",
+            return_value=True
+        ), patch.object(
+            inspection,
+            "set_local_context_binding"
+        ) as set_binding, patch.object(inspection, "rot_say"):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        set_binding.assert_called_once_with("machine", matched.id)
+
+    def test_unconfigured_machine_inspect_uses_shared_registration(self):
+        facts = inspection.MachineInspection(
+            {"operating_system": "TestOS"},
+            {"connection": {"hostname": "desktop-host"}}
+        )
+        with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
             inspection,
             "get_local_context_bindings",
             return_value={}
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
+        ), patch.object(
+            inspection,
+            "_ask_machine_display_name",
+            return_value="Studio Workstation"
+        ), patch.object(
+            inspection,
+            "_confirm_registration",
+            return_value=True
         ), patch.object(
             inspection,
             "register_local_machine"
@@ -281,13 +357,37 @@ class MachineInspectionTests(unittest.TestCase):
             result = inspection.machine_inspect(argparse.Namespace())
 
         self.assertEqual(result, 0)
-        register.assert_called_once_with()
+        register.assert_called_once_with(
+            facts,
+            display=False,
+            existing_machine=None,
+            display_name="Studio Workstation"
+        )
 
     def test_registration_failure_is_reported(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
         with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
             inspection,
             "get_local_context_bindings",
             return_value={}
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
+        ), patch.object(
+            inspection,
+            "_ask_machine_display_name",
+            return_value="Desktop Host"
+        ), patch.object(
+            inspection,
+            "_confirm_registration",
+            return_value=True
         ), patch.object(
             inspection,
             "register_local_machine",
@@ -297,6 +397,140 @@ class MachineInspectionTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         self.assertIn("inspection failed", rot_say.call_args.args[0])
+
+    def test_declined_registration_only_displays_inspection(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
+        with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection") as show, patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={}
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
+        ), patch.object(
+            inspection,
+            "_ask_machine_display_name",
+            return_value="Desktop Host"
+        ), patch.object(
+            inspection,
+            "_confirm_registration",
+            return_value=False
+        ), patch.object(inspection, "register_local_machine") as register, patch.object(
+            inspection,
+            "rot_say"
+        ):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        show.assert_called_once_with(facts)
+        register.assert_not_called()
+
+    def test_display_name_eof_cancels_before_confirmation(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
+        with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={}
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
+        ), patch.object(
+            inspection,
+            "_ask_machine_display_name",
+            return_value=None
+        ), patch.object(inspection, "_confirm_registration") as confirm, patch.object(
+            inspection,
+            "register_local_machine"
+        ) as register, patch.object(inspection, "rot_say"):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        confirm.assert_not_called()
+        register.assert_not_called()
+
+    def test_existing_machine_does_not_prompt_for_display_name(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
+        machine = machines.MachineContext(
+            "desktop",
+            "Desktop",
+            {},
+            "00000000-0000-4000-8000-000000000003"
+        )
+        with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={"machine": machine.id}
+        ), patch.object(
+            machines,
+            "load_machine_context_reference",
+            return_value=machine
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=machine
+        ), patch.object(
+            inspection,
+            "_ask_machine_display_name"
+        ) as ask_display, patch.object(inspection, "rot_say"):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        ask_display.assert_not_called()
+
+    def test_legacy_name_binding_is_not_migrated_without_confirmation(self):
+        facts = inspection.MachineInspection(
+            {}, {"connection": {"hostname": "desktop-host"}}
+        )
+        machine = machines.MachineContext(
+            "desktop",
+            "Desktop",
+            {},
+            "00000000-0000-4000-8000-000000000003"
+        )
+        with patch.object(
+            inspection,
+            "inspect_local_machine",
+            return_value=facts
+        ), patch.object(inspection, "show_inspection"), patch.object(
+            inspection,
+            "get_local_context_bindings",
+            return_value={"machine": "desktop"}
+        ), patch.object(
+            machines,
+            "load_machine_context_reference",
+            return_value=machine
+        ), patch.object(
+            machines,
+            "associated_machine_context",
+            return_value=None
+        ), patch.object(
+            inspection,
+            "set_local_context_binding"
+        ) as set_binding, patch.object(inspection, "rot_say"):
+            result = inspection.machine_inspect(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        set_binding.assert_not_called()
 
     def test_empty_sections_are_reported_cleanly(self):
         with patch.object(inspection, "rot_say"), patch.object(

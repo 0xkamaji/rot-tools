@@ -16,6 +16,7 @@ from rotbot.contexts.matching import (
     match_source_definition,
     parse_match_document
 )
+from rotbot.contexts.identifiers import new_context_id
 from rotbot.contexts.config import (
     ConfigError,
     config_path,
@@ -389,7 +390,8 @@ def _add_person_context(name, role, display_name, related_projects=()):
             name,
             role,
             display_name,
-            related_projects=related_projects
+            related_projects=related_projects,
+            context_id=person.id
         )
     except people.PersonContextError as error:
         rot_say(str(error))
@@ -441,7 +443,8 @@ def _add_machine_context(
         destination = machines.create_machine(
             name,
             display_name,
-            portable_facts
+            portable_facts,
+            machine.id
         )
     except machines.MachineContextError as error:
         rot_say(str(error))
@@ -450,7 +453,8 @@ def _add_machine_context(
         try:
             local_destination = machines.create_local_machine_record(
                 name,
-                local_facts
+                local_facts,
+                machine.id
             )
         except machines.MachineContextError as error:
             rot_say(
@@ -605,8 +609,8 @@ def _destination_exists(destination):
 def _rollback_context(destination):
     errors = []
     for name in (
-        "identity.md", "state.md", "match.md",
-        ".identity.md.tmp", ".state.md.tmp", ".match.md.tmp"
+        "metadata.toml", "identity.md", "state.md", "match.md",
+        ".metadata.toml.tmp", ".identity.md.tmp", ".state.md.tmp", ".match.md.tmp"
     ):
         try:
             (destination / name).unlink(missing_ok=True)
@@ -626,19 +630,28 @@ def _write_document(path, content):
         os.fsync(destination.fileno())
 
 
-def _create_and_bind(name, destination, project, documents, match_document, target_config):
+def _create_and_bind(
+    name,
+    context_id,
+    destination,
+    project,
+    documents,
+    match_document,
+    target_config
+):
     created = False
     try:
         destination.mkdir()
         created = True
         files = {
+            "metadata.toml": loader.render_project_metadata(name, context_id),
             "identity.md": documents["identity"],
             "state.md": documents["state"],
             "match.md": match_document
         }
         for filename, content in files.items():
             _write_document(destination / f".{filename}.tmp", content)
-        for filename in ("match.md", "identity.md", "state.md"):
+        for filename in ("metadata.toml", "match.md", "identity.md", "state.md"):
             os.replace(destination / f".{filename}.tmp", destination / filename)
 
         current_binding = get_context_binding(name, target_config)
@@ -744,9 +757,11 @@ def _add_project_context(args):
         rot_say(str(error))
         return 1
 
+    context_id = new_context_id()
     rot_say(f"Create context '{name}' from:\n\n  {project}")
     rot_continue(
         "Proposed files:\n\n"
+        f"  context/projects/{name}/metadata.toml\n"
         f"  context/projects/{name}/identity.md\n"
         f"  context/projects/{name}/state.md\n"
         f"  context/projects/{name}/match.md\n\n"
@@ -789,6 +804,7 @@ def _add_project_context(args):
     try:
         _create_and_bind(
             name,
+            context_id,
             destination,
             project,
             documents,

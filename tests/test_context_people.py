@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -32,14 +33,15 @@ class PersonContextTests(unittest.TestCase):
                 "state.md"
             }
         )
-        self.assertEqual(
-            (destination / "metadata.toml").read_text(encoding="utf-8"),
-            'type = "person"\n'
-            'role = "contact"\n'
-            'name = "alex"\n'
-            'display_name = "Alex Example"\n'
-            'related_projects = []\n'
+        metadata = tomllib.loads(
+            (destination / "metadata.toml").read_text(encoding="utf-8")
         )
+        self.assertEqual(metadata["type"], "person")
+        self.assertEqual(metadata["role"], "contact")
+        self.assertEqual(metadata["name"], "alex")
+        self.assertEqual(metadata["display_name"], "Alex Example")
+        self.assertEqual(metadata["related_projects"], [])
+        self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
 
     def test_user_creation_adds_user_templates_and_defaults_display_name(self):
         destination = people.create_person_context(
@@ -58,14 +60,12 @@ class PersonContextTests(unittest.TestCase):
                 "priorities.md"
             }
         )
-        self.assertEqual(
-            (destination / "metadata.toml").read_text(encoding="utf-8"),
-            'type = "person"\n'
-            'role = "user"\n'
-            'name = "kamaji"\n'
-            'display_name = "kamaji"\n'
-            'related_projects = []\n'
+        metadata = tomllib.loads(
+            (destination / "metadata.toml").read_text(encoding="utf-8")
         )
+        self.assertEqual(metadata["role"], "user")
+        self.assertEqual(metadata["name"], "kamaji")
+        self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
 
     def test_assistant_creation_uses_core_layout_and_related_project(self):
         destination = people.create_person_context(
@@ -88,14 +88,13 @@ class PersonContextTests(unittest.TestCase):
         )
         self.assertFalse((destination / "experience.md").exists())
         self.assertFalse((destination / "priorities.md").exists())
-        self.assertEqual(
-            (destination / "metadata.toml").read_text(encoding="utf-8"),
-            'type = "person"\n'
-            'role = "assistant"\n'
-            'name = "rot"\n'
-            'display_name = "Rot"\n'
-            'related_projects = ["rotbot"]\n'
+        metadata = tomllib.loads(
+            (destination / "metadata.toml").read_text(encoding="utf-8")
         )
+        self.assertEqual(metadata["role"], "assistant")
+        self.assertEqual(metadata["name"], "rot")
+        self.assertEqual(metadata["related_projects"], ["rotbot"])
+        self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
         loaded = people.load_person_context("rot", people_root=self.root)
         self.assertEqual(loaded.role, "assistant")
         self.assertEqual(loaded.related_projects, ("rotbot",))
@@ -202,12 +201,22 @@ class PersonContextTests(unittest.TestCase):
         loaded = people.load_person_context("alpha", people_root=self.root)
 
         self.assertEqual(
-            loaded,
-            people.PersonContext("alpha", "user", "Alpha Person", ())
+            (loaded.name, loaded.role, loaded.display_name, loaded.related_projects),
+            ("alpha", "user", "Alpha Person", ())
         )
+        self.assertIsNotNone(loaded.id)
+
+    def test_person_context_can_be_loaded_by_stable_id(self):
+        people.create_person_context("alex", "user", people_root=self.root)
+        person = people.load_person_context("alex", people_root=self.root)
+
         self.assertEqual(
-            tuple(person.name for person in people.list_person_contexts(people_root=self.root)),
-            ("alpha", "zeta")
+            people.load_person_context_reference(
+                person.id,
+                "user",
+                people_root=self.root
+            ),
+            person
         )
 
     def test_person_documents_return_only_populated_content(self):

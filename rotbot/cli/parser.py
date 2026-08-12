@@ -261,12 +261,12 @@ def create_parser():
 
     context_show_parser = context_commands.add_parser(
         "show",
-        help="Show a context"
+        help="Show the current session context or a saved context"
     )
     context_show_parser.add_argument(
         "name",
         nargs="?",
-        help="Optional context name; omit to choose from a numbered list"
+        help="Optional saved context name; omit to choose current or saved context"
     )
     context_show_parser.add_argument(
         "--vision",

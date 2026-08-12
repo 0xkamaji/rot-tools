@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from rotbot.commands.machine import MachineInspection
 from rotbot.contexts import creation as context_creation
@@ -262,7 +262,7 @@ class ContextCreationTests(unittest.TestCase):
         destination = self.project_context_root / "example"
         self.assertEqual(
             {path.name for path in destination.iterdir()},
-            {"identity.md", "state.md", "match.md"}
+            {"metadata.toml", "identity.md", "state.md", "match.md"}
         )
         self.assertFalse((destination / "vision.md").exists())
         self.assertTrue(any(
@@ -481,7 +481,8 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "alex",
             "user",
             "Alex Example",
-            related_projects=("rotbot", "signalrot")
+            related_projects=("rotbot", "signalrot"),
+            context_id=ANY
         )
 
     def test_person_questions_route_assistant_role(self):
@@ -506,7 +507,8 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "rot",
             "assistant",
             "Rot",
-            related_projects=()
+            related_projects=(),
+            context_id=ANY
         )
 
     def test_preselected_user_reuses_person_creation_workflow(self):
@@ -533,7 +535,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         create_person.assert_called_once_with(
-            "kamaji", "user", "kamaji", related_projects=()
+            "kamaji", "user", "kamaji", related_projects=(), context_id=ANY
         )
 
     def test_person_questions_apply_contact_and_display_defaults(self):
@@ -555,7 +557,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         create_person.assert_called_once_with(
-            "sam", "contact", "sam", related_projects=()
+            "sam", "contact", "sam", related_projects=(), context_id=ANY
         )
         self.assertTrue(any(
             "Leave blank to use their context name: sam" in call.args[0]
@@ -583,7 +585,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         inspect.assert_not_called()
-        create_machine.assert_called_once_with("desktop", "Desktop", None)
+        create_machine.assert_called_once_with("desktop", "Desktop", None, ANY)
         create_local.assert_not_called()
 
     def test_machine_inspection_uses_approved_portable_and_declines_local_by_default(self):
@@ -617,7 +619,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
         inspect.assert_called_once_with()
         show.assert_called_once_with(facts)
         create_machine.assert_called_once_with(
-            "desktop", "Main Desktop", facts.portable
+            "desktop", "Main Desktop", facts.portable, ANY
         )
         create_local.assert_not_called()
 
@@ -652,8 +654,8 @@ class ContextQuestionnaireTests(unittest.TestCase):
             result = context_creation.context_add(args)
 
         self.assertEqual(result, 0)
-        create_machine.assert_called_once_with("desktop", "Desktop", facts.portable)
-        create_local.assert_called_once_with("desktop", facts.local)
+        create_machine.assert_called_once_with("desktop", "Desktop", facts.portable, ANY)
+        create_local.assert_called_once_with("desktop", facts.local, ANY)
 
     def test_declined_portable_facts_are_not_written(self):
         facts = MachineInspection(
@@ -680,7 +682,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             result = context_creation.context_add(argparse.Namespace(agent=None))
 
         self.assertEqual(result, 0)
-        create_machine.assert_called_once_with("desktop", "Desktop", None)
+        create_machine.assert_called_once_with("desktop", "Desktop", None, ANY)
         create_local.assert_not_called()
 
     def test_local_failure_preserves_created_portable_context(self):

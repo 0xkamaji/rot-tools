@@ -5,6 +5,12 @@ import tomllib
 from typing import NamedTuple
 
 from rotbot.contexts import loader
+from rotbot.contexts.identifiers import (
+    ContextIdentifierError,
+    legacy_context_id,
+    new_context_id,
+    validate_context_id
+)
 
 
 PERSON_ROLES = ("contact", "user", "assistant")
@@ -123,6 +129,7 @@ class PersonContext(NamedTuple):
     role: str
     display_name: str
     related_projects: tuple = ()
+    id: str | None = None
 
 
 class PersonDocument(NamedTuple):
@@ -199,7 +206,8 @@ def build_person_context(
     name,
     role,
     display_name=None,
-    related_projects=None
+    related_projects=None,
+    context_id=None
 ):
     try:
         loader.validate_context_name(name)
@@ -215,17 +223,23 @@ def build_person_context(
         or any(ord(character) < 32 for character in display_name)
     ):
         raise PersonContextError("Invalid person display name.")
+    try:
+        normalized_id = validate_context_id(context_id or new_context_id())
+    except ContextIdentifierError as error:
+        raise PersonContextError(str(error)) from None
     return PersonContext(
         name=name,
         role=role,
         display_name=display_name,
-        related_projects=_normalize_related_projects(related_projects)
+        related_projects=_normalize_related_projects(related_projects),
+        id=normalized_id
     )
 
 
 def render_person_files(person):
     metadata = (
         'type = "person"\n'
+        f"id = {json.dumps(person.id, ensure_ascii=False)}\n"
         f"role = {json.dumps(person.role, ensure_ascii=False)}\n"
         f"name = {json.dumps(person.name, ensure_ascii=False)}\n"
         f"display_name = {json.dumps(person.display_name, ensure_ascii=False)}\n"
@@ -361,7 +375,8 @@ def load_person_context(name, *, people_root=None):
         metadata.get("name"),
         metadata.get("role"),
         metadata.get("display_name"),
-        related_projects
+        related_projects,
+        metadata.get("id") or legacy_context_id("person", name)
     )
     if person.role != directory_role:
         raise PersonContextError(f"Person role directory does not match metadata: {name}")
@@ -395,6 +410,19 @@ def list_person_contexts(*, people_root=None):
     return tuple(sorted(person_contexts, key=lambda person: person.name))
 
 
+def load_person_context_reference(reference, role=None, *, people_root=None):
+    matches = tuple(
+        person
+        for person in list_person_contexts(people_root=people_root)
+        if reference in {person.id, person.name} and role in {None, person.role}
+    )
+    if not matches:
+        raise PersonContextError(f"Unknown {role or 'person'} context reference: {reference}")
+    if len(matches) > 1:
+        raise PersonContextError(f"Ambiguous person context reference: {reference}")
+    return matches[0]
+
+
 def _write_document(path, content):
     with path.open("x", encoding="utf-8") as destination:
         destination.write(content)
@@ -421,10 +449,20 @@ def create_person_context(
     role,
     display_name=None,
     related_projects=None,
+    context_id=None,
     *,
     people_root=None
 ):
-    person = build_person_context(name, role, display_name, related_projects)
+    try:
+        person = build_person_context(
+            name,
+            role,
+            display_name,
+            related_projects,
+            context_id
+        )
+    except ContextIdentifierError as error:
+        raise PersonContextError(str(error)) from None
     files = render_person_files(person)
     root = _people_root(people_root)
 

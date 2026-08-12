@@ -183,6 +183,9 @@ class PersonModificationTests(unittest.TestCase):
             related_projects=("rotbot",)
         )
         identity = (destination / "identity.md").read_text(encoding="utf-8")
+        original_id = people.load_person_context(
+            "alex", people_root=self.people_root
+        ).id
 
         modification.replace_person_metadata(
             "alex",
@@ -196,6 +199,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(loaded.role, "contact")
         self.assertEqual(loaded.display_name, "Alex Updated")
         self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
+        self.assertEqual(loaded.id, original_id)
         self.assertEqual(
             (destination / "identity.md").read_text(encoding="utf-8"),
             identity

@@ -236,7 +236,8 @@ def replace_person_metadata(
             current.name,
             current.role,
             display_name,
-            related_projects
+            related_projects,
+            current.id
         )
     except people.PersonContextError as error:
         raise PersonModificationError(str(error)) from None
@@ -339,7 +340,8 @@ def _apply_metadata_change(person, display_name, related_projects):
             person.name,
             person.role,
             display_name,
-            related_projects
+            related_projects,
+            person.id
         )
     except people.PersonContextError as error:
         rot_say(str(error))
