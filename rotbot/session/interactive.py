@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import os
 from pathlib import Path
@@ -11,18 +11,21 @@ from rotbot.contexts.inspection import (
     InspectedContext,
     inspect_current_context
 )
+from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
 from rotbot.ui.interactive import (
     SessionHeader,
     clear_terminal,
     render_session_status
 )
 from rotbot.ui.terminal import rot_say
+from rotbot.ui.input import BasicInput, interactive_input
 
 
 INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
 
   help                Show this help
   status              Show current session status
+  history [N]         Show recent commands (default: 20)
   pwd                 Show current directory
   cd PATH             Change current directory
   clear               Clear and redraw the terminal
@@ -49,12 +52,19 @@ class RotSession:
     started_at: datetime
     cwd: Path
     context: InspectedContext
+    command_history: CommandHistory = field(default_factory=CommandHistory)
 
     @classmethod
     def start(cls):
         cwd = Path.cwd().resolve()
         context = inspect_current_context(cwd=cwd, bootstrap=False)
-        return cls(datetime.now().astimezone(), cwd, context)
+        history = CommandHistory()
+        try:
+            history.load()
+        except HistoryError as error:
+            history.persistence_enabled = False
+            rot_say(f"Warning: command history could not be loaded.\n{error}")
+        return cls(datetime.now().astimezone(), cwd, context, history)
 
     def refresh_context(self):
         cwd = Path.cwd().resolve()
@@ -107,6 +117,27 @@ def evaluate_input(session, line, header=None):
     if command == "status" and len(arguments) == 1:
         rot_say(render_session_status(session))
         return True
+    if command == "history":
+        if len(arguments) > 2 or (
+            len(arguments) == 2
+            and (not arguments[1].isdigit() or int(arguments[1]) < 1)
+        ):
+            rot_say("Usage: history [positive count]")
+            return True
+        limit = int(arguments[1]) if len(arguments) == 2 else DEFAULT_DISPLAY_LIMIT
+        entries = session.command_history.recent(limit)
+        start = len(session.command_history.recent()) - len(entries) + 1
+        rot_say(
+            "COMMAND HISTORY\n---------------\n"
+            + (
+                "\n".join(
+                    f"{index:>5}  {entry}"
+                    for index, entry in enumerate(entries, start)
+                )
+                if entries else "(empty)"
+            )
+        )
+        return True
     if command == "pwd" and len(arguments) == 1:
         rot_say(str(session.cwd))
         return True
@@ -146,18 +177,37 @@ def run_interactive():
         return 2
 
     header = SessionHeader()
+    input_backend = interactive_input()
+    try:
+        input_backend.prepare(session.command_history.recent())
+    except Exception as error:
+        rot_say(f"Warning: command history navigation is unavailable.\n{error}")
+        input_backend = BasicInput()
     header.start(session)
     try:
         while True:
             header.refresh(session)
             try:
-                line = input("rot> ")
+                line = input_backend.read("rot> ")
             except EOFError:
                 return 0
             except KeyboardInterrupt:
                 print()
                 continue
+            if session.command_history.add(line):
+                try:
+                    input_backend.record(line.strip())
+                except Exception as error:
+                    rot_say(
+                        "Warning: command history navigation is unavailable.\n"
+                        f"{error}"
+                    )
+                    input_backend = BasicInput()
             if not evaluate_input(session, line, header=header):
                 return 0
     finally:
+        try:
+            session.command_history.save()
+        except HistoryError as error:
+            rot_say(f"Warning: command history could not be saved.\n{error}")
         header.stop()

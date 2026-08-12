@@ -86,6 +86,27 @@ rot> git status --fetch
 
 Unknown text is not interpreted as an implicit shell command or AI request.
 
+### Interactive command history
+
+Interactive Rot uses the terminal's standard line editor when available. Use
+Up/Down to recall commands, Left/Right to edit, Ctrl+A/Ctrl+E to move across the
+line, and Ctrl+R to search previous commands.
+
+```text
+rot> git status
+rot> context inspect
+rot> history
+rot> history 10
+```
+
+Submitted `history` and exit commands are retained like other completed input.
+
+History is bounded to the most recent 5000 commands and persists locally in
+`~/.config/rot/history` (or the corresponding `XDG_CONFIG_HOME` location). The
+file is private local UI state, created with user-only permissions where the
+platform supports them. It is not portable RotBot context and is never included
+in prompts sent to Codex, OpenCode, or another AI backend.
+
 ## Git commands
 
 | Command          | Alias      | Purpose                                              |

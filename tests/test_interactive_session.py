@@ -11,6 +11,7 @@ from rotbot import __main__ as rotbot
 from rotbot.cli import parser as command_parser
 from rotbot.contexts import inspection
 from rotbot.session import interactive
+from rotbot.session.history import CommandHistory, HistoryError
 from rotbot.ui import interactive as interactive_ui
 
 
@@ -219,8 +220,39 @@ class RotSessionTests(unittest.TestCase):
 
         header.clear.assert_called_once_with(self.session)
 
+    def test_history_displays_itself_and_recent_limit(self):
+        for command in ("git status", "context inspect", "machine inspect", "history"):
+            self.session.command_history.add(command)
+
+        with patch.object(interactive, "rot_say") as rot_say:
+            interactive.evaluate_input(self.session, "history 2")
+
+        output = rot_say.call_args.args[0]
+        self.assertNotIn("git status", output)
+        self.assertNotIn("context inspect", output)
+        self.assertIn("machine inspect", output)
+        self.assertIn("history", output)
+
+    def test_history_rejects_invalid_count(self):
+        with patch.object(interactive, "rot_say") as rot_say:
+            result = interactive.evaluate_input(self.session, "history nope")
+
+        self.assertTrue(result)
+        self.assertIn("Usage: history", rot_say.call_args.args[0])
+
 
 class InteractiveLoopTests(unittest.TestCase):
+    def test_history_load_failure_warns_but_session_starts(self):
+        with patch.object(
+            interactive, "inspect_current_context", return_value=inspected(Path.cwd())
+        ), patch.object(
+            CommandHistory, "load", side_effect=HistoryError("unreadable")
+        ), patch.object(interactive, "rot_say") as rot_say:
+            session = interactive.RotSession.start()
+
+        self.assertFalse(session.command_history.persistence_enabled)
+        self.assertIn("could not be loaded", rot_say.call_args.args[0])
+
     def test_no_argument_main_enters_interactive_session(self):
         args = argparse.Namespace(command=None)
         with patch.object(rotbot, "parse_args", return_value=args), patch(
@@ -244,6 +276,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_exit_quit_and_eof_are_clean(self):
         session = Mock()
+        session.command_history.recent.return_value = []
         for side_effect in (("exit",), ("quit",), (EOFError(),)):
             with self.subTest(side_effect=side_effect), patch.object(
                 interactive.RotSession, "start", return_value=session
@@ -256,6 +289,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_ctrl_c_at_prompt_returns_to_prompt(self):
         session = Mock()
+        session.command_history.recent.return_value = []
         with patch.object(
             interactive.RotSession, "start", return_value=session
         ), patch.object(interactive, "SessionHeader"), patch(
@@ -268,6 +302,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_command_failure_does_not_stop_loop(self):
         session = Mock()
+        session.command_history.recent.return_value = []
         with patch.object(
             interactive.RotSession, "start", return_value=session
         ), patch.object(interactive, "SessionHeader") as header_type, patch(
@@ -284,6 +319,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_header_is_refreshed_before_every_prompt(self):
         session = Mock()
+        session.command_history.recent.return_value = []
         with patch.object(
             interactive.RotSession, "start", return_value=session
         ), patch.object(interactive, "SessionHeader") as header_type, patch(
@@ -296,6 +332,60 @@ class InteractiveLoopTests(unittest.TestCase):
         header.start.assert_called_once_with(session)
         self.assertEqual(header.refresh.call_args_list, [call(session), call(session)])
         header.stop.assert_called_once_with()
+
+    def test_submitted_commands_are_recorded_and_saved_on_exit(self):
+        session = Mock()
+        session.command_history.recent.return_value = []
+        session.command_history.add.side_effect = (True, True)
+        input_backend = Mock()
+        input_backend.read.side_effect = ("git status", "exit")
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader"), patch.object(
+            interactive, "interactive_input", return_value=input_backend
+        ), patch.object(interactive, "evaluate_input", side_effect=(True, False)):
+            result = interactive.run_interactive()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(session.command_history.add.call_args_list, [
+            call("git status"), call("exit")
+        ])
+        self.assertEqual(input_backend.record.call_args_list, [
+            call("git status"), call("exit")
+        ])
+        session.command_history.save.assert_called_once_with()
+
+    def test_eof_and_ctrl_c_save_without_recording_partial_input(self):
+        session = Mock()
+        session.command_history.recent.return_value = []
+        input_backend = Mock()
+        input_backend.read.side_effect = (KeyboardInterrupt(), EOFError())
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader"), patch.object(
+            interactive, "interactive_input", return_value=input_backend
+        ), patch("builtins.print"):
+            result = interactive.run_interactive()
+
+        self.assertEqual(result, 0)
+        session.command_history.add.assert_not_called()
+        session.command_history.save.assert_called_once_with()
+
+    def test_history_failures_warn_without_stopping_session(self):
+        session = Mock()
+        session.command_history.recent.return_value = []
+        session.command_history.save.side_effect = HistoryError("denied")
+        input_backend = Mock()
+        input_backend.read.side_effect = EOFError()
+        with patch.object(
+            interactive.RotSession, "start", return_value=session
+        ), patch.object(interactive, "SessionHeader"), patch.object(
+            interactive, "interactive_input", return_value=input_backend
+        ), patch.object(interactive, "rot_say") as rot_say:
+            result = interactive.run_interactive()
+
+        self.assertEqual(result, 0)
+        self.assertIn("could not be saved", rot_say.call_args.args[0])
 
 
 class InteractiveUiTests(unittest.TestCase):
