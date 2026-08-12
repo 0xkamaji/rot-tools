@@ -7,7 +7,7 @@ from threading import Thread
 from time import perf_counter
 
 from rotbot.agents.config import CODEX as codex_runner, OPENCODE as opencode_runner
-from rotbot.contexts import loader, machines, people
+from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
 from rotbot.contexts.prompt import build_ask_prompt, resolve_prompt_context
 from rotbot.ui.terminal import (
@@ -197,7 +197,8 @@ def ask_agent(args):
         ContextInspectionError,
         loader.ContextError,
         machines.MachineContextError,
-        people.PersonContextError
+        people.PersonContextError,
+        entities.EntityContextError
     ) as error:
         rot_say(str(error))
         return 2

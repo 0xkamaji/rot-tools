@@ -6,13 +6,19 @@ from pathlib import Path
 from rotbot.agents.conversation import ConversationError
 from rotbot.cli.parser import parse_args
 from rotbot.commands.git import PUSH_CANCELLED
-from rotbot.contexts import loader, machines, people
+from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.inspection import (
     ContextInspectionError,
     InspectedContext,
     inspect_current_context
 )
 from rotbot.session.ai import AIConversation
+from rotbot.session.capabilities import (
+    AssistantCapabilityPolicy,
+    load_assistant_policy,
+    resolve_capability_state,
+    safe_policy
+)
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
 from rotbot.session.router import route_input
@@ -82,6 +88,7 @@ class RotSession:
     ai: AIConversation | None = None
     authority_mode: str = "TALK"
     work_project_id: str | None = None
+    assistant_policy: AssistantCapabilityPolicy | None = None
 
     @classmethod
     def start(cls):
@@ -93,13 +100,37 @@ class RotSession:
         except HistoryError as error:
             history.persistence_enabled = False
             rot_say(f"Warning: command history could not be loaded.\n{error}")
-        return cls(datetime.now().astimezone(), cwd, context, history)
+        policy = (
+            load_assistant_policy(context.assistant_id)
+            if context.assistant_id else safe_policy("No assistant is resolved.")
+        )
+        return cls(
+            datetime.now().astimezone(), cwd, context, history,
+            assistant_policy=policy
+        )
 
     def refresh_context(self):
         cwd = Path.cwd().resolve()
         context = inspect_current_context(cwd=cwd, bootstrap=False)
         self.cwd = cwd
         self.context = context
+        self.assistant_policy = (
+            load_assistant_policy(context.assistant_id)
+            if context.assistant_id else safe_policy("No assistant is resolved.")
+        )
+
+    @property
+    def capability_state(self):
+        policy = self.assistant_policy or safe_policy(
+            "No assistant capability policy is resolved."
+        )
+        return resolve_capability_state(
+            self.context.assistant_id,
+            policy,
+            self.authority_mode,
+            self.context.project_id,
+            self.work_project_id
+        )
 
     def change_directory(self, value):
         destination = Path(value).expanduser()
@@ -131,8 +162,20 @@ class RotSession:
     def enable_work(self):
         if self.context.project_id is None:
             return False
-        self.authority_mode = "WORK"
-        self.work_project_id = self.context.project_id
+        policy = self.assistant_policy or safe_policy(
+            "No assistant capability policy is resolved."
+        )
+        state = resolve_capability_state(
+            self.context.assistant_id,
+            policy,
+            "WORK",
+            self.context.project_id,
+            self.context.project_id
+        )
+        if state.mode != "WORK":
+            return False
+        self.authority_mode = state.mode
+        self.work_project_id = state.work_project_id
         return True
 
     def enable_talk(self):
@@ -145,12 +188,19 @@ class RotSession:
             return
         if self.ai is None:
             self.ai = AIConversation.create(store=ConversationStore())
+        state = self.capability_state
+        if not state.conversation:
+            rot_say(state.denial_reason or "AI conversation is unavailable.")
+            return
+        self.authority_mode = state.mode
+        self.work_project_id = state.work_project_id
         try:
             result = self.ai.send(
                 message,
                 self.context,
                 self.cwd,
-                authority=self.authority_mode
+                authority=state.mode,
+                capability_state=state
             )
         except (ConversationError, ConversationStoreError) as error:
             rot_say(str(error))
@@ -200,6 +250,7 @@ def evaluate_input(session, line, header=None):
         except (
             ContextInspectionError,
             loader.ContextError,
+            entities.EntityContextError,
             machines.MachineContextError,
             people.PersonContextError
         ) as error:
@@ -225,7 +276,8 @@ def evaluate_input(session, line, header=None):
         else:
             render_rot_response(
                 session,
-                "Work mode requires an active project. Talk mode remains enabled."
+                "Work mode requires an active project and assistant policy. "
+                "Talk mode remains enabled."
             )
         return True
     if command == "talk" and len(arguments) == 1:

@@ -10,6 +10,7 @@ from unittest.mock import Mock, call, patch
 
 from rotbot import __main__ as rotbot
 from rotbot.session import ai as session_ai
+from rotbot.session.capabilities import AssistantCapabilityPolicy
 from rotbot.cli import parser as command_parser
 from rotbot.contexts import inspection
 from rotbot.session import interactive
@@ -48,6 +49,9 @@ class RotSessionTests(unittest.TestCase):
             datetime(2026, 8, 12, 12, 20),
             self.first,
             inspected(self.first)
+        )
+        self.session.assistant_policy = AssistantCapabilityPolicy(
+            work_enabled=True, valid=True
         )
 
     def tearDown(self):
@@ -94,6 +98,24 @@ class RotSessionTests(unittest.TestCase):
             call(self.session, "Talk mode enabled.")
         ])
 
+    def test_mode_switches_do_not_mutate_assistant_policy(self):
+        policy = AssistantCapabilityPolicy(work_enabled=True, valid=True)
+        self.session.assistant_policy = policy
+
+        self.assertTrue(self.session.enable_work())
+        self.session.enable_talk()
+
+        self.assertIs(self.session.assistant_policy, policy)
+        self.assertEqual(self.session.authority_mode, "TALK")
+
+    def test_invalid_policy_cannot_enable_work(self):
+        self.session.assistant_policy = AssistantCapabilityPolicy(
+            work_enabled=True, valid=False, error="invalid"
+        )
+
+        self.assertFalse(self.session.enable_work())
+        self.assertEqual(self.session.authority_mode, "TALK")
+
     def test_talk_reduction_preserves_existing_conversation(self):
         chat = Mock(spec=session_ai.AIConversation)
         chat.remote_state = [Mock()]
@@ -122,7 +144,8 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(self.session.authority_mode, "TALK")
         response.assert_called_once_with(
             self.session,
-            "Work mode requires an active project. Talk mode remains enabled."
+            "Work mode requires an active project and assistant policy. "
+            "Talk mode remains enabled."
         )
 
     def test_project_change_revokes_work_but_same_project_keeps_it(self):
@@ -316,7 +339,8 @@ class RotSessionTests(unittest.TestCase):
             "modify the resolver",
             self.session.context,
             self.session.cwd,
-            authority="TALK"
+            authority="TALK",
+            capability_state=self.session.capability_state
         )
         self.assertEqual(self.session.authority_mode, "TALK")
 
@@ -375,8 +399,14 @@ class RotSessionTests(unittest.TestCase):
         create.assert_called_once()
         self.assertIsInstance(create.call_args.kwargs["store"], interactive.ConversationStore)
         self.assertEqual(chat.send.call_args_list, [
-            call("first question", self.session.context, self.session.cwd, authority="TALK"),
-            call("follow up", self.session.context, self.session.cwd, authority="TALK")
+            call(
+                "first question", self.session.context, self.session.cwd,
+                authority="TALK", capability_state=self.session.capability_state
+            ),
+            call(
+                "follow up", self.session.context, self.session.cwd,
+                authority="TALK", capability_state=self.session.capability_state
+            )
         ])
 
     def test_ai_success_becomes_active_and_uses_rot_speaker_renderer(self):
@@ -735,6 +765,9 @@ class InteractiveUiTests(unittest.TestCase):
             datetime(2026, 8, 12, 9, 5),
             Path("/tmp"),
             inspected("/tmp")
+        )
+        session.assistant_policy = AssistantCapabilityPolicy(
+            work_enabled=True, valid=True
         )
         session.enable_work()
         session.ai = Mock()

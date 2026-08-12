@@ -311,7 +311,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_omitted_name_lists_people_and_routes_numbered_choices(self):
         self.create_person("alex", "contact", "Alex")
-        self.create_person("zeta", "user", "Zeta")
+        self.create_person("zeta", "contact", "Zeta")
         answers = ("1", "1", "1", "A detail.", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
@@ -334,7 +334,7 @@ class PersonModificationTests(unittest.TestCase):
         )
         self.assertTrue(any(
             "1. alex (Alex, contact)" in call.args[0]
-            and "2. zeta (Zeta, user)" in call.args[0]
+            and "2. zeta (Zeta, contact)" in call.args[0]
             for call in rot_say.call_args_list
         ))
 

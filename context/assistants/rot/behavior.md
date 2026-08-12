@@ -1,6 +1,6 @@
-# Preferences
+# Behavior
 
-<!-- This person's preferences, habits, and preferred ways of communicating or working. -->
+<!-- Rot's durable behavioral preferences and interaction philosophy. -->
 
 ## Communication
 

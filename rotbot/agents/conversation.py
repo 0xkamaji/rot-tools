@@ -37,8 +37,11 @@ class OpenCodeBackend:
         self.session_id = None
         self.directory = None
         self.current_process = None
+        self.authority = None
 
     def _command(self, message, authority):
+        if authority not in {"TALK", "WORK"}:
+            raise ConversationError(f"Unsupported AI authority mode: {authority}")
         command = [
             "opencode", "run", "--format", "json", "--dir", str(self.directory)
         ]
@@ -50,10 +53,12 @@ class OpenCodeBackend:
         return command
 
     def _environment(self, authority):
+        if authority not in {"TALK", "WORK"}:
+            raise ConversationError(f"Unsupported AI authority mode: {authority}")
         environment = os.environ.copy()
         permissions = (
             {"*": "deny"}
-            if authority == "TALK"
+            if authority != "WORK"
             else {
                 "*": "allow",
                 "external_directory": "deny",
@@ -81,10 +86,17 @@ class OpenCodeBackend:
         return environment
 
     def prepare(self, authority, cwd):
-        if authority != "WORK" or self.directory in {None, cwd}:
+        if authority not in {"TALK", "WORK"}:
+            raise ConversationError(f"Unsupported AI authority mode: {authority}")
+        if self.directory is None:
+            self.directory = cwd
+            self.authority = authority
+            return False
+        if self.directory == cwd and self.authority == authority:
             return False
         self.session_id = None
         self.directory = cwd
+        self.authority = authority
         return True
 
     def generate(self, message, cwd, authority="TALK"):
@@ -93,6 +105,7 @@ class OpenCodeBackend:
         environment = self._environment(authority)
         if self.directory is None:
             self.directory = cwd
+            self.authority = authority
         try:
             process = subprocess.Popen(
                 self._command(message, authority),

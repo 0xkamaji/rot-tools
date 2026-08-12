@@ -92,7 +92,7 @@ class ContextLoaderTests(unittest.TestCase):
             (
                 ("project", "alpha"),
                 ("project", "zeta"),
-                ("person", "sam"),
+                ("contact", "sam"),
                 ("machine", "desktop")
             ),
             fill=False
@@ -359,7 +359,7 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertTrue(any(
             "1. project: alpha" in call.args[0]
-            and "2. person: alex" in call.args[0]
+            and "2. contact: alex" in call.args[0]
             for call in rot_say.call_args_list
         ))
         self.assertTrue(

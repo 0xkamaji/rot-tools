@@ -3,7 +3,7 @@ from pathlib import Path
 import stat
 import tempfile
 
-from rotbot.contexts import loader, people
+from rotbot.contexts import entities, loader, people
 from rotbot.ui.terminal import rot_continue, rot_say
 
 
@@ -15,6 +15,10 @@ DOCUMENTS = {
     "preferences.md": {
         "description": "Preferences, habits, and ways of working",
         "subject": "preferences"
+    },
+    "behavior.md": {
+        "description": "Durable assistant behavior and interaction philosophy",
+        "subject": "behavior"
     },
     "relationship.md": {
         "description": "How the person relates to the active RotBot user",
@@ -40,6 +44,8 @@ class PersonModificationError(Exception):
 
 
 def available_documents(person):
+    if isinstance(person, (entities.UserContext, entities.AssistantContext)):
+        return entities._document_names(person.context_type)
     allowed = people.person_document_names(person)
     return tuple(filename for filename in DOCUMENTS if filename in allowed)
 
@@ -133,6 +139,29 @@ def _person_document(name, filename, people_root):
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid person context document: {filename}")
     return person, document
+
+
+def _entity_document(name, filename, context_type, root=None):
+    try:
+        entity = (
+            entities.load_user_context(name, root=root)
+            if context_type == "user"
+            else entities.load_assistant_context(name, root=root)
+        )
+    except entities.EntityContextError as error:
+        raise PersonModificationError(str(error)) from None
+    if filename not in available_documents(entity):
+        raise PersonModificationError(
+            f"Unsupported document for {context_type} context '{name}': {filename}"
+        )
+    directory = entities.entity_directory(entity, root)
+    if not directory.exists():
+        base = loader.CONTEXT_ROOT if root is None else Path(root)
+        directory = base / "people" / context_type / entity.name
+    document = directory / filename
+    if document.is_symlink() or not document.is_file():
+        raise PersonModificationError(f"Invalid {context_type} context document: {filename}")
+    return entity, document
 
 
 def person_document_categories(name, filename, *, people_root=None):
@@ -335,6 +364,37 @@ def _confirm(message):
 
 
 def _apply_metadata_change(person, display_name, related_projects):
+    if isinstance(person, (entities.UserContext, entities.AssistantContext)):
+        try:
+            proposed = (
+                entities.build_user_context(
+                    person.name, display_name, related_projects, person.id
+                )
+                if isinstance(person, entities.UserContext)
+                else entities.build_assistant_context(
+                    person.name, display_name, related_projects, person.id
+                )
+            )
+        except entities.EntityContextError as error:
+            rot_say(str(error))
+            return 1
+        metadata = entities.render_metadata(proposed).rstrip()
+        rot_say(f"Update metadata for {person.role} context '{person.name}'?")
+        rot_continue(metadata)
+        if not _confirm("Apply this metadata modification?"):
+            rot_say("Context modification cancelled. No files were changed.")
+            return 0
+        destination = entities.entity_directory(person) / "metadata.toml"
+        try:
+            _atomic_replace_document(
+                destination, entities.render_metadata(proposed),
+                "context metadata"
+            )
+        except PersonModificationError as error:
+            rot_say(str(error))
+            return 1
+        rot_say(f"{person.role.title()} context '{person.name}' metadata updated:\n{destination}")
+        return 0
     try:
         proposed = people.build_person_context(
             person.name,
@@ -364,6 +424,45 @@ def _apply_metadata_change(person, display_name, related_projects):
         return 1
     rot_say(f"Person context '{person.name}' metadata updated:\n{destination}")
     return 0
+
+
+def _atomic_replace_document(document, updated, label):
+    if document.is_symlink() or not document.is_file():
+        raise PersonModificationError(f"Invalid {label}.")
+    temporary_path = None
+    try:
+        original_stat = document.stat()
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=document.parent,
+            prefix=f".{document.name}.", suffix=".tmp", delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.chmod(temporary_path, stat.S_IMODE(original_stat.st_mode))
+            temporary.write(updated)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        current_stat = document.stat()
+        if (
+            document.is_symlink()
+            or current_stat.st_dev != original_stat.st_dev
+            or current_stat.st_ino != original_stat.st_ino
+            or current_stat.st_mtime_ns != original_stat.st_mtime_ns
+            or current_stat.st_size != original_stat.st_size
+        ):
+            raise PersonModificationError(f"{label.title()} changed before update.")
+        os.replace(temporary_path, document)
+        temporary_path = None
+    except PersonModificationError:
+        raise
+    except OSError as error:
+        raise PersonModificationError(f"Could not update {label}: {error}") from None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+    return document
 
 
 def _modify_person_metadata(person):
@@ -437,9 +536,32 @@ def _modify_person_metadata(person):
 def context_mod(args):
     try:
         if args.name:
-            person = people.load_person_context(args.name)
+            matches = []
+            for context_type, loader_function in (
+                ("user", entities.load_user_context),
+                ("assistant", entities.load_assistant_context),
+                ("contact", people.load_person_context)
+            ):
+                try:
+                    item = loader_function(args.name)
+                except (entities.EntityContextError, people.PersonContextError):
+                    continue
+                if context_type != "contact" or item.role == "contact":
+                    matches.append(item)
+            if len(matches) != 1:
+                raise PersonModificationError(
+                    f"Unknown or ambiguous modifiable context: {args.name}"
+                )
+            person = matches[0]
         else:
-            person_contexts = people.list_person_contexts()
+            person_contexts = (
+                entities.list_user_contexts()
+                + entities.list_assistant_contexts()
+                + tuple(
+                    person for person in people.list_person_contexts()
+                    if person.role == "contact"
+                )
+            )
             if not person_contexts:
                 rot_say("No person contexts are available to modify.")
                 return 1
@@ -454,7 +576,10 @@ def context_mod(args):
                 rot_say("Context modification cancelled. No files were changed.")
                 return 0
             person = person_contexts[choice]
-    except people.PersonContextError as error:
+    except (
+        people.PersonContextError, entities.EntityContextError,
+        PersonModificationError
+    ) as error:
         rot_say(str(error))
         return 1
 
@@ -475,7 +600,16 @@ def context_mod(args):
         return _modify_person_metadata(person)
     definition = DOCUMENTS[filename]
     try:
-        categories = person_document_categories(person.name, filename)
+        if isinstance(person, (entities.UserContext, entities.AssistantContext)):
+            _entity, document = _entity_document(
+                person.name, filename, person.context_type.value
+            )
+            content = document.read_text(encoding="utf-8")
+            categories = tuple(
+                name for name, _index in _document_headings(content.splitlines())
+            )
+        else:
+            categories = person_document_categories(person.name, filename)
     except PersonModificationError as error:
         rot_say(str(error))
         return 1
@@ -538,13 +672,25 @@ def context_mod(args):
         rot_say("Context modification cancelled. No files were changed.")
         return 0
     try:
-        destination = add_person_information(
-            person.name,
-            filename,
-            category,
-            information,
-            category_description=category_description
-        )
+        if isinstance(person, (entities.UserContext, entities.AssistantContext)):
+            entity, document = _entity_document(
+                person.name, filename, person.context_type.value
+            )
+            original = document.read_text(encoding="utf-8")
+            updated = _updated_document(
+                original, category, information, category_description
+            )
+            destination = _atomic_replace_document(
+                document, updated, f"{person.role} context document"
+            )
+        else:
+            destination = add_person_information(
+                person.name,
+                filename,
+                category,
+                information,
+                category_description=category_description
+            )
     except PersonModificationError as error:
         rot_say(str(error))
         return 1

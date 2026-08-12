@@ -2,7 +2,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import inspection, loader, machines, people, prompt
+from rotbot.contexts import entities, inspection, loader, machines, people, prompt
+from rotbot.session.capabilities import CapabilityState
 
 
 class PromptCompilerTests(unittest.TestCase):
@@ -97,6 +98,28 @@ class PromptCompilerTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_HISTORY_MUST_NOT_ENTER_AI_PROMPT", rendered)
         self.assertNotIn("SHELL_OUTPUT_MUST_NOT_ENTER_AI_PROMPT", rendered)
 
+    def test_runtime_capability_snapshot_is_fresh_and_separate(self):
+        runtime = CapabilityState(
+            assistant_id="assistant-id", mode="TALK", project_id="project-id",
+            work_project_id=None, conversation=True, file_read=False,
+            file_write=False, agent_execution=False, policy_valid=True,
+            policy_fingerprint="fingerprint"
+        )
+        context = prompt.PromptContext(
+            assistant=None, user=None, machine=None, project=None,
+            working_directory="/work", execution_backend="OpenCode",
+            runtime=runtime
+        )
+
+        rendered = prompt.build_ask_prompt(context, "Question")
+
+        self.assertIn("Current mode: TALK", rendered)
+        self.assertIn("AI file modification: unavailable", rendered)
+        self.assertIn("Agent execution: unavailable", rendered)
+        self.assertIn("<runtime_capability_state>", rendered)
+        self.assertIn("Do not claim, promise, or imply", rendered)
+        self.assertIn("must explicitly enter WORK mode", rendered)
+
     def test_resolver_loads_only_portable_machine_context(self):
         inspected = inspection.InspectedContext(
             None, None,
@@ -158,24 +181,25 @@ class PromptCompilerTests(unittest.TestCase):
             ),
             ()
         )
-        assistant = people.PersonContext("rot", "assistant", "Rot", id="assistant-id")
-        user = people.PersonContext("kamaji", "user", "Kamaji", id="user-id")
-
-        def load_person(name):
-            if name == "rot":
-                return assistant, (
-                    people.PersonDocument("identity.md", (("Traits", "Curious"),)),
-                    people.PersonDocument("state.md", ())
-                )
-            return user, (
-                people.PersonDocument("experience.md", (("Technical", "Python"),)),
-            )
+        assistant = entities.AssistantContext("rot", "Rot", (), "assistant-id")
+        user = entities.UserContext("kamaji", "Kamaji", (), "user-id")
 
         project = loader.Context(
             "rotbot", "Stable project identity", "Current project state", "project-id"
         )
         with patch.object(
-            people, "load_person_documents", side_effect=load_person
+            entities,
+            "load_assistant_documents",
+            return_value=(assistant, (
+                people.PersonDocument("identity.md", (("Traits", "Curious"),)),
+                people.PersonDocument("behavior.md", (("Communication", "Direct"),))
+            ))
+        ), patch.object(
+            entities,
+            "load_user_documents",
+            return_value=(user, (
+                people.PersonDocument("experience.md", (("Technical", "Python"),)),
+            ))
         ), patch.object(loader, "load_context", return_value=project), patch.object(
             loader, "load_vision"
         ) as load_vision:
@@ -184,6 +208,7 @@ class PromptCompilerTests(unittest.TestCase):
 
         load_vision.assert_not_called()
         self.assertIn("Curious", rendered)
+        self.assertIn("Direct", rendered)
         self.assertIn("Python", rendered)
         self.assertIn("Stable project identity", rendered)
         self.assertIn("Current project state", rendered)

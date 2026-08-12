@@ -87,6 +87,19 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(permissions["external_directory"], "deny")
         self.assertEqual(permissions["question"], "deny")
 
+    def test_unknown_authority_fails_closed_before_backend_launch(self):
+        backend = conversation.OpenCodeBackend()
+        with patch.object(
+            conversation, "which", return_value="/bin/opencode"
+        ), patch.object(
+            conversation.subprocess, "Popen"
+        ) as popen, self.assertRaisesRegex(
+            conversation.ConversationError, "Unsupported AI authority"
+        ):
+            backend.generate("unsafe", Path("/scope"), authority="ADMIN")
+
+        popen.assert_not_called()
+
     def test_talk_deny_all_cannot_be_overridden_by_auto_defaults(self):
         process = self.process([
             event("text", part={"type": "text", "text": "Talked"})
@@ -151,6 +164,18 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertTrue(replaced)
         self.assertEqual(backend.directory, Path("/new"))
         self.assertIsNone(backend.session_id)
+
+    def test_authority_or_directory_change_replaces_backend_session(self):
+        backend = conversation.OpenCodeBackend()
+        backend.directory = Path("/old")
+        backend.authority = "WORK"
+        backend.session_id = "ses_old"
+
+        self.assertTrue(backend.prepare("TALK", Path("/old")))
+        self.assertIsNone(backend.session_id)
+        backend.session_id = "ses_talk"
+        self.assertTrue(backend.prepare("TALK", Path("/new")))
+        self.assertEqual(backend.directory, Path("/new"))
 
     def test_known_remote_state_exposes_observed_backend_session(self):
         backend = conversation.OpenCodeBackend()

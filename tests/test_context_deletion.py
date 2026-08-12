@@ -77,7 +77,7 @@ class ContextDeletionTests(unittest.TestCase):
             target_config=self.config
         )
 
-        self.assertEqual(context_type, "person")
+        self.assertEqual(context_type, "contact")
         self.assertFalse(source.exists())
         self.assertEqual(
             destination.parents[2],
@@ -217,7 +217,7 @@ class ContextDeletionTests(unittest.TestCase):
             target_config=self.config
         )
 
-        self.assertEqual(context_type, "person")
+        self.assertEqual(context_type, "contact")
         self.assertTrue((self.projects / "shared").exists())
         self.assertFalse((self.people / "contact" / "shared").exists())
 
@@ -263,7 +263,7 @@ class ContextDeletionTests(unittest.TestCase):
         with patch("builtins.input", side_effect=("2", "yes")), patch.object(
             deletion,
             "archive_context",
-            return_value=("person", Path(".archive/contacts/alex"))
+            return_value=("contact", Path(".archive/contacts/alex"))
         ) as archive_context, patch.object(
             deletion,
             "rot_say"
@@ -271,10 +271,10 @@ class ContextDeletionTests(unittest.TestCase):
             result = deletion.context_delete(argparse.Namespace(name=None))
 
         self.assertEqual(result, 0)
-        archive_context.assert_called_once_with("alex", context_type="person")
+        archive_context.assert_called_once_with("alex", context_type="contact")
         self.assertTrue(any(
             "1. project: zeta" in call.args[0]
-            and "2. person: alex" in call.args[0]
+            and "2. contact: alex" in call.args[0]
             for call in rot_say.call_args_list
         ))
 
@@ -305,7 +305,7 @@ class ContextDeletionTests(unittest.TestCase):
             deletion.list_deletable_contexts(context_root=self.context_root),
             (
                 ("project", "valid"),
-                ("person", "incomplete"),
+                ("contact", "incomplete"),
                 ("machine", "unconfigured")
             )
         )

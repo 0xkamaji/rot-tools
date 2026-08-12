@@ -4,7 +4,7 @@ import subprocess
 from types import SimpleNamespace
 from typing import NamedTuple
 
-from rotbot.contexts import loader, machines, matching, people
+from rotbot.contexts import entities, loader, machines, matching, people
 from rotbot.contexts.config import (
     ConfigError,
     get_context_bindings,
@@ -41,12 +41,12 @@ class InspectedContext(NamedTuple):
 
 def _available_people(role):
     try:
-        return tuple(
-            person.name
-            for person in people.list_person_contexts()
-            if person.role == role
+        contexts = (
+            entities.list_user_contexts()
+            if role == "user" else entities.list_assistant_contexts()
         )
-    except people.PersonContextError as error:
+        return tuple(item.name for item in contexts)
+    except entities.EntityContextError as error:
         raise ContextInspectionError(str(error)) from None
 
 
@@ -94,15 +94,14 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
     stale = False
     if name is not None:
         try:
-            person = people.load_person_context_reference(name, role)
-        except people.PersonContextError as error:
-            people_root = loader.CONTEXT_ROOT / "people"
-            if people_root.is_symlink() or not people_root.is_dir():
-                raise ContextInspectionError(str(error)) from None
-            if any(
-                os.path.lexists(people_root / candidate_role / name)
-                for candidate_role in people.PERSON_ROLES
-            ):
+            person = (
+                entities.load_user_context(name)
+                if role == "user" else entities.load_assistant_context(name)
+            )
+        except entities.EntityContextError as error:
+            canonical = entities.context_root(role) / str(name)
+            legacy = loader.CONTEXT_ROOT / "people" / role / str(name)
+            if os.path.lexists(canonical) or os.path.lexists(legacy):
                 raise ContextInspectionError(str(error)) from None
             stale = True
         else:
@@ -131,9 +130,12 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
         warnings.append(f"No local {context_type} was selected.")
         return None, None, "not configured"
     try:
-        person = people.load_person_context(selected)
+        person = (
+            entities.load_user_context(selected)
+            if role == "user" else entities.load_assistant_context(selected)
+        )
         set_local_context_binding(context_type, person.id)
-    except (ConfigError, people.PersonContextError) as error:
+    except (ConfigError, entities.EntityContextError) as error:
         raise ContextInspectionError(str(error)) from None
     rot_say(f"Default {context_type} set: {selected}")
     return selected, person.id, "local config"

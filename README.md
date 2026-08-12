@@ -393,12 +393,30 @@ records.
 
 ## Contexts
 
-Contexts give RotBot durable knowledge about projects, people, and machines.
+Contexts give RotBot durable, authoritative information about users,
+assistants, machines, and projects.
 
 A context generally contains:
 
 ```text
 context/
+├── users/
+│   └── NAME/
+│       ├── metadata.toml
+│       ├── identity.md
+│       ├── preferences.md
+│       ├── experience.md
+│       ├── priorities.md
+│       ├── relationship.md
+│       └── state.md
+├── assistants/
+│   └── NAME/
+│       ├── metadata.toml
+│       ├── identity.md
+│       ├── behavior.md
+│       ├── relationship.md
+│       ├── capabilities.toml
+│       └── state.md
 ├── projects/
 │   └── NAME/
 │       ├── metadata.toml
@@ -412,26 +430,17 @@ context/
 │       ├── identity.md
 │       └── software.toml
 └── people/
-    ├── contact/
-    │   └── NAME/
-    ├── user/
-    │   └── NAME/
-    └── assistant/
+    └── contact/
         └── NAME/
-            ├── metadata.toml
-            ├── identity.md
-            ├── preferences.md
-            ├── relationship.md
-            ├── state.md
-            ├── experience.md (user role only)
-            └── priorities.md (user role only)
 ```
 
 Project contexts are still addressed by name, such as `rotbot` or `signalrot`;
 the `projects/` filesystem category is not part of the public context name.
-Person contexts are grouped under `people/contact/`, `people/user/`, or
-`people/assistant/`. Their names remain unique across all three roles, and they
-are created through the same interactive add command as project contexts.
+Users and assistants are first-class context types under `users/` and
+`assistants/`. Legacy `people/user/` and `people/assistant/` records remain
+readable during migration, but canonical records win by UUID and all new writes
+target the first-class directories. Contacts remain under `people/contact/`
+until a separate contact architecture is designed.
 Machine contexts keep safe identity and normalized hardware facts under
 `machines/NAME/`. Private host-specific facts use the same machine name in one
 TOML file under RotBot's platform-aware local configuration directory, such as
@@ -446,7 +455,7 @@ never contain passwords, private keys, tokens, cookies, recovery codes, or
 other authentication secrets. RotBot never automatically loads local records
 when listing, showing, matching, or building AI prompts.
 
-Every active project, person, and machine context has a portable UUID in its
+Every active project, user, assistant, contact, and machine context has a portable UUID in its
 `metadata.toml`. Names remain the human-facing CLI identifiers; local bindings
 store UUIDs so renaming a context does not change its backend identity.
 
@@ -468,6 +477,24 @@ Machine files:
 | `identity.md`   | Human-authored purpose and environment context |
 | `software.toml` | Deliberately selected relevant software      |
 
+Assistant `capabilities.toml` declares operating intent, such as a safe TALK
+default and whether project-scoped WORK may be requested. It does not grant
+permissions directly. RotBot core intersects that policy with supported modes,
+the current project scope, and backend enforcement to produce a runtime
+capability state.
+
+The architecture boundary is:
+
+```text
+Context       durable entity knowledge and intended policy
+RotBot core   mechanisms, validation, and enforcement
+RotSession    current TALK/WORK mode, cwd, project scope, and AI activity
+```
+
+Context says what is intended or known. Core code enforces what that means.
+Runtime state says what is true right now. TALK/WORK transitions never write to
+assistant context files.
+
 ### Context commands
 
 Run `rot context` without a subcommand to choose an action from an interactive
@@ -480,7 +507,9 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context show [NAME]`    | Display the current session or a saved context |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
-| `rot context add`            | Interactively create a project, person, or machine context |
+| `rot context add`            | Interactively create a project, user, assistant, contact, or machine context |
+| `rot context add user [NAME]` | Create a first-class user context |
+| `rot context add assistant [NAME]` | Create an assistant with safe capability defaults |
 | `rot context add machine [NAME]` | Create a machine directly, then inspect or leave empty |
 | `rot context add user [NAME]` | Create a user with the person workflow |
 | `rot context add assistant [NAME]` | Create an assistant with the person workflow |

@@ -179,21 +179,34 @@ def atomic_replace_state(name, content):
 
 
 def context_list(args):
+    from rotbot.contexts.entities import (
+        EntityContextError, list_assistant_contexts, list_user_contexts
+    )
     from rotbot.contexts.machines import MachineContextError, list_machine_contexts
     from rotbot.contexts.people import PersonContextError, list_person_contexts
 
     try:
         names = list_contexts()
-        person_contexts = list_person_contexts()
+        person_contexts = tuple(
+            person for person in list_person_contexts()
+            if person.role == "contact"
+        )
+        users = list_user_contexts()
+        assistants = list_assistant_contexts()
         machine_contexts = list_machine_contexts()
-    except (ContextError, MachineContextError, PersonContextError) as error:
+    except (
+        ContextError, MachineContextError, PersonContextError,
+        EntityContextError
+    ) as error:
         rot_say(str(error))
         return 1
 
     rot_say("CONTEXTS")
     rows = (
         tuple(("project", name) for name in names)
-        + tuple(("person", person.name) for person in person_contexts)
+        + tuple(("user", item.name) for item in users)
+        + tuple(("assistant", item.name) for item in assistants)
+        + tuple(("contact", person.name) for person in person_contexts)
         + tuple(("machine", machine.name) for machine in machine_contexts)
     )
     if rows:
@@ -204,12 +217,18 @@ def context_list(args):
 
 
 def _available_context_entries():
+    from rotbot.contexts.entities import list_assistant_contexts, list_user_contexts
     from rotbot.contexts.machines import list_machine_contexts
     from rotbot.contexts.people import list_person_contexts
 
     return (
         tuple(("project", name) for name in list_contexts())
-        + tuple(("person", person.name) for person in list_person_contexts())
+        + tuple(("user", item.name) for item in list_user_contexts())
+        + tuple(("assistant", item.name) for item in list_assistant_contexts())
+        + tuple(
+            ("contact", person.name)
+            for person in list_person_contexts() if person.role == "contact"
+        )
         + tuple(("machine", machine.name) for machine in list_machine_contexts())
     )
 
@@ -352,6 +371,44 @@ def _show_person_context(name):
     return 0
 
 
+def _show_entity_context(name, context_type):
+    from rotbot.contexts import entities
+
+    try:
+        entity, documents = (
+            entities.load_user_documents(name)
+            if context_type == "user"
+            else entities.load_assistant_documents(name)
+        )
+    except entities.EntityContextError as error:
+        rot_say(str(error))
+        return 1
+    metadata = entities.render_metadata(entity).rstrip()
+    blocks = [f"METADATA (metadata.toml; read-only)\n"
+              f"------------------------------------\n{metadata}"]
+    for document in documents:
+        populated = [
+            f"## {heading}\n\n{content}" if heading is not None else content
+            for heading, content in document.sections
+        ]
+        if populated:
+            title = f"{document.filename.removesuffix('.md').upper()} " \
+                    f"({document.filename}; read-only)"
+            blocks.append(f"{title}\n{'-' * len(title)}\n" + "\n\n".join(populated))
+    if context_type == "assistant":
+        path = entities.entity_directory(entity) / "capabilities.toml"
+        if path.is_file() and not path.is_symlink():
+            content = path.read_text(encoding="utf-8").rstrip()
+            blocks.append(
+                "CAPABILITIES (capabilities.toml; policy, not enforcement)\n"
+                "---------------------------------------------------------\n"
+                + content
+            )
+    rot_say(f"{context_type.upper()} CONTEXT: {entity.name} ({entity.display_name})")
+    rot_continue("\n\n".join(blocks))
+    return 0
+
+
 def _show_machine_context(name):
     from rotbot.contexts.machines import MachineContextError, load_machine_files
 
@@ -372,12 +429,16 @@ def _show_machine_context(name):
 
 
 def context_show(args):
+    from rotbot.contexts.entities import EntityContextError
     from rotbot.contexts.machines import MachineContextError
     from rotbot.contexts.people import PersonContextError
 
     try:
         entries = _available_context_entries()
-    except (ContextError, MachineContextError, PersonContextError) as error:
+    except (
+        ContextError, MachineContextError, PersonContextError,
+        EntityContextError
+    ) as error:
         rot_say(str(error))
         return 1
     if args.name:
@@ -419,7 +480,9 @@ def context_show(args):
     if context_type != "project" and vision_only:
         rot_say("--vision is only supported for project contexts.")
         return 1
-    if context_type == "person":
+    if context_type in {"user", "assistant"}:
+        return _show_entity_context(name, context_type)
+    if context_type == "contact":
         return _show_person_context(name)
     if context_type == "machine":
         return _show_machine_context(name)

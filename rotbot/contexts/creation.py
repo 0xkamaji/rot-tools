@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from rotbot.agents.runner import stream_agent
 from rotbot.commands.machine import inspect_local_machine, show_inspection
-from rotbot.contexts import loader, machines, people
+from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.matching import (
     MatchError,
     build_source_match_document,
@@ -362,6 +362,36 @@ def _choose_related_projects():
 
 
 def _add_person_context(name, role, display_name, related_projects=()):
+    if role in {"user", "assistant"}:
+        try:
+            entity = (
+                entities.build_user_context(name, display_name, related_projects)
+                if role == "user"
+                else entities.build_assistant_context(name, display_name, related_projects)
+            )
+            files = entities.render_entity_files(entity)
+        except entities.EntityContextError as error:
+            rot_say(str(error))
+            return 1
+        rot_say(f"Create {role} context '{name}' for {display_name}?")
+        rot_continue(
+            "Proposed files:\n\n"
+            + "\n".join(
+                f"  context/{entities.CONTEXT_TYPES[entity.context_type]}/"
+                f"{name}/{filename}"
+                for filename in files
+            )
+        )
+        if not _confirm(f"Create this {role} context?"):
+            rot_say("Context creation cancelled. No files were changed.")
+            return 0
+        try:
+            destination = entities.create_entity_context(entity)
+        except entities.EntityContextError as error:
+            rot_say(str(error))
+            return 1
+        rot_say(f"{role.title()} context '{name}' created at:\n{destination}")
+        return 0
     try:
         person = people.build_person_context(
             name,

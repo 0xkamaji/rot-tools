@@ -467,23 +467,21 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "list_contexts",
             return_value=("rotbot", "signalrot")
         ), patch.object(
-            context_creation.people,
-            "create_person_context",
-            return_value=Path("context/people/user/alex")
-        ) as create_person, patch.object(
+            context_creation.entities,
+            "create_entity_context",
+            return_value=Path("context/users/alex")
+        ) as create_entity, patch.object(
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
             result = context_creation.context_add(argparse.Namespace(agent="codex"))
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with(
-            "alex",
-            "user",
-            "Alex Example",
-            related_projects=("rotbot", "signalrot"),
-            context_id=ANY
-        )
+        entity = create_entity.call_args.args[0]
+        self.assertIsInstance(entity, context_creation.entities.UserContext)
+        self.assertEqual(entity.name, "alex")
+        self.assertEqual(entity.display_name, "Alex Example")
+        self.assertEqual(entity.related_projects, ("rotbot", "signalrot"))
 
     def test_person_questions_route_assistant_role(self):
         answers = ("person", "rot", "assistant", "Rot", "", "yes")
@@ -493,23 +491,19 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "list_contexts",
             return_value=("rotbot", "signalrot")
         ), patch.object(
-            context_creation.people,
-            "create_person_context",
-            return_value=Path("context/people/assistant/rot")
-        ) as create_person, patch.object(
+            context_creation.entities,
+            "create_entity_context",
+            return_value=Path("context/assistants/rot")
+        ) as create_entity, patch.object(
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
             result = context_creation.context_add(argparse.Namespace(agent=None))
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with(
-            "rot",
-            "assistant",
-            "Rot",
-            related_projects=(),
-            context_id=ANY
-        )
+        entity = create_entity.call_args.args[0]
+        self.assertIsInstance(entity, context_creation.entities.AssistantContext)
+        self.assertEqual((entity.name, entity.display_name), ("rot", "Rot"))
 
     def test_preselected_user_reuses_person_creation_workflow(self):
         answers = ("", "yes")
@@ -524,19 +518,19 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "list_contexts",
             return_value=()
         ), patch.object(
-            context_creation.people,
-            "create_person_context",
-            return_value=Path("context/people/user/kamaji")
-        ) as create_person, patch.object(
+            context_creation.entities,
+            "create_entity_context",
+            return_value=Path("context/users/kamaji")
+        ) as create_entity, patch.object(
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
             result = context_creation.context_add(args)
 
         self.assertEqual(result, 0)
-        create_person.assert_called_once_with(
-            "kamaji", "user", "kamaji", related_projects=(), context_id=ANY
-        )
+        entity = create_entity.call_args.args[0]
+        self.assertIsInstance(entity, context_creation.entities.UserContext)
+        self.assertEqual((entity.name, entity.display_name), ("kamaji", "kamaji"))
 
     def test_person_questions_apply_contact_and_display_defaults(self):
         answers = ("2", "sam", "", "", "", "yes")

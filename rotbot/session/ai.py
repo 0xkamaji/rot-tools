@@ -102,8 +102,14 @@ class AIConversation:
     def mark_context_dirty(self):
         self.context_dirty = True
 
-    def _compiled_input(self, inspected, user_message):
-        context = resolve_prompt_context(inspected, self.backend.name)
+    def _compiled_input(self, inspected, user_message, capability_state=None):
+        context = (
+            resolve_prompt_context(
+                inspected, self.backend.name, capability_state=capability_state
+            )
+            if capability_state is not None
+            else resolve_prompt_context(inspected, self.backend.name)
+        )
         fingerprint = hashlib.sha256(repr(context).encode("utf-8")).hexdigest()
         if self.context_fingerprint is None:
             return build_ask_prompt(context, user_message), fingerprint, True
@@ -136,7 +142,12 @@ class AIConversation:
             "remote_state": references
         })())
 
-    def send(self, user_message, inspected, cwd, authority="TALK"):
+    def send(
+        self, user_message, inspected, cwd, authority="TALK",
+        capability_state=None
+    ):
+        if capability_state is not None:
+            authority = capability_state.mode
         self._persist_start(inspected, cwd)
         backend_replaced = self.backend.prepare(authority, cwd) is True
         prior_messages = tuple(self.messages)
@@ -157,7 +168,7 @@ class AIConversation:
         self.status = "thinking"
         try:
             prompt, fingerprint, context_updated = self._compiled_input(
-                inspected, user_message
+                inspected, user_message, capability_state
             )
             if transcript:
                 prompt = transcript + "\n\n" + prompt
