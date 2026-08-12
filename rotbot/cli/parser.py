@@ -123,6 +123,11 @@ def _add_git_push_arguments(command_parser):
     _add_note_argument(command_parser)
 
 
+def show_command_help(args):
+    args.command_parser.print_help()
+    return 0
+
+
 def create_parser():
     parser = RotArgumentParser(
         prog="rotbot",
@@ -146,7 +151,7 @@ def create_parser():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
 
     ask_parser = commands.add_parser(
         "ask",
@@ -178,9 +183,9 @@ def create_parser():
         help="Git repository commands"
     )
     git_commands = git_parser.add_subparsers(
-        dest="git_command",
-        required=True
+        dest="git_command"
     )
+    git_parser.set_defaults(func=show_command_help, command_parser=git_parser)
 
     git_pull_parser = git_commands.add_parser(
         "pull",
@@ -229,8 +234,11 @@ def create_parser():
         help="Inspect local machine information"
     )
     machine_commands = machine_parser.add_subparsers(
-        dest="machine_command",
-        required=True
+        dest="machine_command"
+    )
+    machine_parser.set_defaults(
+        func=show_command_help,
+        command_parser=machine_parser
     )
     machine_inspect_parser = machine_commands.add_parser(
         "inspect",
@@ -355,9 +363,9 @@ def create_parser():
 
     sr_parser = commands.add_parser("sr", help="Signal Rot commands")
     sr_commands = sr_parser.add_subparsers(
-        dest="sr_command",
-        required=True
+        dest="sr_command"
     )
+    sr_parser.set_defaults(func=show_command_help, command_parser=sr_parser)
 
     status_parser = sr_commands.add_parser(
         "status",
@@ -369,10 +377,16 @@ def create_parser():
         "context",
         help="Show or refresh signalrot context"
     )
-    context_parser.add_argument(
+    context_display = context_parser.add_mutually_exclusive_group()
+    context_display.add_argument(
         "--refresh",
         action="store_true",
         help="Inspect signalrot and regenerate current-state context"
+    )
+    context_display.add_argument(
+        "--full",
+        action="store_true",
+        help="Show the complete signalrot identity and state context"
     )
     _add_agent_argument(context_parser)
     _add_note_argument(context_parser)

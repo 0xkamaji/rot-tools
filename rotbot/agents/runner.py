@@ -7,6 +7,9 @@ from threading import Thread
 from time import perf_counter
 
 from rotbot.agents.config import CODEX as codex_runner, OPENCODE as opencode_runner
+from rotbot.contexts import loader, machines, people
+from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
+from rotbot.contexts.prompt import build_ask_prompt, resolve_prompt_context
 from rotbot.ui.terminal import (
     rot_break,
     rot_output_end,
@@ -183,10 +186,27 @@ def ask_agent(args):
         if isinstance(args.question, list)
         else args.question
     )
+    agent = _select_agent(getattr(args, "agent", None))
+    if agent is None:
+        return 127
+    try:
+        inspected = inspect_current_context(bootstrap=False)
+        context = resolve_prompt_context(inspected, agent.NAME)
+        prompt = build_ask_prompt(context, question)
+    except (
+        ContextInspectionError,
+        loader.ContextError,
+        machines.MachineContextError,
+        people.PersonContextError
+    ) as error:
+        rot_say(str(error))
+        return 2
+
     rot_say("Let Rot think about that ...")
     returncode, output, elapsed = stream_agent(
-        question,
+        prompt,
         "Rot is still thinking...",
+        working_directory=inspected.cwd,
         display_question=question,
         agent_name=getattr(args, "agent", None)
     )

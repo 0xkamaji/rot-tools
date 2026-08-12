@@ -10,6 +10,8 @@
 
 <!-- Experience with technologies, tools, systems, programming, engineering, or technical problem-solving. -->
 
+- Kamaji has hands-on reverse-engineering and DFIR experience and is comfortable with disassembly/decompilation, malware analysis concepts, Windows internals tooling, and common RE workflows. Explanations of reverse engineering do not need to begin at an introductory level.
+
 ## Creative
 
 <!-- Experience with music, writing, photography, design, art, performance, or other creative practices. -->

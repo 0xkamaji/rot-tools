@@ -47,6 +47,40 @@ It can also run directly from the repository:
 python -m rotbot --help
 ```
 
+## Interactive Rot
+
+Run `rot` without arguments to start a persistent, deterministic Rot session:
+
+```bash
+rot
+```
+
+```text
+rot> git status
+rot> context inspect
+rot> cd ~/dev/signalrot
+rot> status
+rot> ask "What should I work on next?"
+rot> pwd
+rot> exit
+```
+
+The session keeps its working directory between commands and refreshes the
+resolved project after `cd`. Enter `help` for the concise interactive command
+list, `clear` to redraw the header, or `exit`/`quit` to leave.
+
+Every normal Rot command can be entered without the leading `rot` while inside
+the session. The REPL uses the same parser and command handlers as the one-shot
+CLI, including aliases, options, help, and explicit AI commands:
+
+```text
+rot> ask "What should I work on next?"
+rot> wtf --deep rotbot/contexts
+rot> git status --fetch
+```
+
+Unknown text is not interpreted as an implicit shell command or AI request.
+
 ## Git commands
 
 | Command          | Alias      | Purpose                                              |
@@ -130,7 +164,7 @@ rot wtf --note "Explain how this command reaches its handler"
 
 ## Asking an agent
 
-Use `rot ask` to send a direct request to a supported coding agent:
+Use `rot ask` to send a context-aware request to a supported coding agent:
 
 ```bash
 rot ask "Explain how context matching works"
@@ -153,6 +187,20 @@ export ROTBOT_AGENT=opencode
 ```
 
 If no agent is selected, RotBot uses the first supported agent it finds.
+
+`rot ask` resolves the current assistant, user, machine, project, and working
+directory, then sends their portable RotBot context with the request. Project
+identity and current state are included when a project resolves; project vision
+is not included automatically.
+
+Rot is the persistent assistant identity. Codex and OpenCode are execution
+backends operating through that identity, not replacements for it.
+
+`rot ask` uses portable RotBot context. Local/private context may help RotBot
+resolve the current environment but is not included in prompts sent to AI
+backends. In particular, prompt construction loads only the portable machine
+files under `context/machines/`, never installation-specific local machine
+records.
 
 ## Contexts
 
@@ -280,8 +328,9 @@ rot context inspect
 On first use, inspection prompts for an existing or new user and assistant, then
 inspects and registers the local machine if needed. These three selections are
 persisted locally. Projects remain directory-specific and are never saved as a
-global default. The final summary excludes local/private machine metadata and
-does not supply the inspected context to AI commands.
+global default. The final summary excludes local/private machine metadata.
+Normal `rot ask` resolution is non-interactive and does not bootstrap missing
+bindings.
 
 Inspect the current host:
 
@@ -391,9 +440,14 @@ rot sr context
 | Flag        | Purpose                                          |
 | ----------- | ------------------------------------------------ |
 | `--refresh` | Inspect SignalRot and refresh its recorded state |
+| `--full`    | Show the complete identity and state context     |
 
 ```bash
 rot sr context --refresh
+```
+
+```bash
+rot sr context --full
 ```
 
 This differs from:
@@ -404,6 +458,7 @@ rot context show signalrot
 
 `rot context show signalrot` displays the portable context files.
 `rot sr context` provides a SignalRot-specific dashboard and refresh workflow.
+`rot sr context --full` is a shortcut for the complete portable context display.
 
 ### Compare source and production
 

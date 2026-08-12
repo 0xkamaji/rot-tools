@@ -280,7 +280,7 @@ def _strip_markdown_comment(line, in_comment):
     return output, in_comment
 
 
-def _populated_sections(markdown, filename):
+def populated_markdown_sections(markdown, filename):
     sections = []
     heading = None
     body = []
@@ -340,7 +340,7 @@ def load_person_documents(name, *, people_root=None):
                 f"Could not load person document '{name}/{filename}': {error}"
             ) from None
         documents.append(
-            PersonDocument(filename, _populated_sections(content, filename))
+            PersonDocument(filename, populated_markdown_sections(content, filename))
         )
     return person, tuple(documents)
 

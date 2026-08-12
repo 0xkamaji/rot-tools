@@ -11,6 +11,22 @@ from rotbot.integrations.signalrot import context as signalrot_context
 
 
 class SignalRotContextCompatibilityTests(unittest.TestCase):
+    def test_full_context_delegates_to_generic_context_display(self):
+        args = argparse.Namespace(
+            refresh=False,
+            full=True,
+            agent=None,
+            note=None
+        )
+
+        with patch.object(signalrot, "context_show", return_value=6) as context_show:
+            result = signalrot.sr_context(args)
+
+        self.assertEqual(result, 6)
+        shown_args = context_show.call_args.args[0]
+        self.assertEqual(shown_args.name, "signalrot")
+        self.assertFalse(shown_args.vision)
+
     def test_refresh_still_delegates_to_specialized_implementation(self):
         args = argparse.Namespace(refresh=True, agent="codex", note="check")
         repository = Path("/signalrot")

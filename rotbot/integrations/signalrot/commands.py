@@ -2,11 +2,13 @@ from pathlib import Path
 import shlex
 import subprocess
 from time import perf_counter
+from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from rotbot.agents.runner import stream_agent
 from rotbot.commands.git import PUSH_CANCELLED, git_push
+from rotbot.contexts.loader import context_show
 from rotbot.integrations.signalrot.context import (
     refresh_signalrot_context,
     signalrot_context_block,
@@ -284,6 +286,8 @@ def sr_context(args):
         if getattr(args, "note", None) or getattr(args, "agent", None):
             rot_say("--note and --agent require --refresh for signalrot context.")
             return 2
+        if getattr(args, "full", False):
+            return context_show(SimpleNamespace(name="signalrot", vision=False))
         return show_signalrot_context()
 
     repository = _repo_path()

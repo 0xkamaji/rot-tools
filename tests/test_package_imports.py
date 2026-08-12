@@ -13,6 +13,8 @@ class PackageImportTests(unittest.TestCase):
         "rotbot",
         "rotbot.__main__",
         "rotbot.cli.parser",
+        "rotbot.session.interactive",
+        "rotbot.ui.interactive",
         "rotbot.ui.terminal",
         "rotbot.agents.config",
         "rotbot.agents.runner",

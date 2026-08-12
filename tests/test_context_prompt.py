@@ -1,0 +1,173 @@
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+
+from rotbot.contexts import inspection, loader, machines, people, prompt
+
+
+class PromptCompilerTests(unittest.TestCase):
+    def block(self, context_type, name, *sections):
+        return prompt.PromptContextBlock(
+            context_type,
+            f"{context_type}-id",
+            name,
+            tuple(sections)
+        )
+
+    def test_renders_semantic_blocks_and_separated_request(self):
+        context = prompt.PromptContext(
+            assistant=self.block(
+                "assistant", "Rot", ("identity", "Rot identity marker")
+            ),
+            user=self.block(
+                "user", "Kamaji", ("experience", "User experience marker")
+            ),
+            machine=self.block(
+                "machine", "Laptop", ("portable facts", "CachyOS marker")
+            ),
+            project=self.block(
+                "project",
+                "rotbot",
+                ("identity", "Project identity marker"),
+                ("state", "Project state marker")
+            ),
+            working_directory="/work/rotbot",
+            execution_backend="Codex"
+        )
+
+        rendered = prompt.build_ask_prompt(context, "What should I do next?")
+
+        self.assertTrue(rendered.startswith("<rotbot_context_instructions>"))
+        self.assertIn("<assistant_context>", rendered)
+        self.assertIn("persistent assistant identity", rendered)
+        self.assertIn("execution backend is not itself", rendered)
+        self.assertIn("Rot identity marker", rendered)
+        self.assertIn("<user_context>", rendered)
+        self.assertIn("calibrate explanations", rendered)
+        self.assertIn("User experience marker", rendered)
+        self.assertIn("<machine_context>", rendered)
+        self.assertIn("portable/shareable", rendered)
+        self.assertIn("CachyOS marker", rendered)
+        self.assertIn("<project_context>", rendered)
+        self.assertIn("Project identity marker", rendered)
+        self.assertIn("Project state marker", rendered)
+        self.assertIn("Active project: rotbot", rendered)
+        self.assertIn("Execution backend: Codex", rendered)
+        self.assertIn(
+            "<user_request>\n\nWhat should I do next?\n\n</user_request>",
+            rendered
+        )
+
+    def test_missing_optional_context_omits_empty_blocks(self):
+        context = prompt.PromptContext(
+            assistant=None,
+            user=None,
+            machine=None,
+            project=None,
+            working_directory="/tmp",
+            execution_backend="OpenCode"
+        )
+
+        rendered = prompt.build_ask_prompt(context, "Hello")
+
+        for tag in ("assistant", "user", "machine", "project"):
+            self.assertNotIn(f"<{tag}_context>", rendered)
+        self.assertIn("Working directory: /tmp", rendered)
+        self.assertIn("Execution backend: OpenCode", rendered)
+        self.assertIn("<user_request>", rendered)
+
+    def test_resolver_loads_only_portable_machine_context(self):
+        inspected = inspection.InspectedContext(
+            None, None,
+            None, None,
+            "laptop", "machine-id",
+            None, None,
+            Path("/work"),
+            inspection.IdentificationSources(
+                "not configured", "not configured", "local config",
+                "no matching project context"
+            ),
+            ()
+        )
+        portable_machine = machines.MachineContext(
+            "laptop", "Laptop", {"operating_system": "PortableOS"}, "machine-id"
+        )
+        documents = (
+            machines.MachineDocument(
+                "metadata.toml",
+                'type = "machine"\nname = "laptop"\n'
+                'display_name = "Laptop"\noperating_system = "PortableOS"\n'
+            ),
+            machines.MachineDocument(
+                "identity.md",
+                "# Identity\n\n<!-- guidance -->\n\n## Purpose\n\nPortable purpose\n"
+            ),
+            machines.MachineDocument(
+                "software.toml", '[[software]]\nname = "PortableTool"\n'
+            )
+        )
+
+        with patch.object(
+            machines, "load_machine_files", return_value=(portable_machine, documents)
+        ) as load_portable, patch.object(
+            machines,
+            "load_local_machine_record",
+            return_value={"connection": {"hostname": "PRIVATE_CONTEXT_MUST_NOT_LEAVE_ROTBOT"}}
+        ) as load_private:
+            context = prompt.resolve_prompt_context(inspected, "Codex")
+            rendered = prompt.build_ask_prompt(context, "Question")
+
+        load_portable.assert_called_once_with("laptop")
+        load_private.assert_not_called()
+        self.assertIn("PortableOS", rendered)
+        self.assertIn("Portable purpose", rendered)
+        self.assertIn("PortableTool", rendered)
+        self.assertNotIn("PRIVATE_CONTEXT_MUST_NOT_LEAVE_ROTBOT", rendered)
+        self.assertNotIn("<!--", rendered)
+
+    def test_resolver_uses_populated_people_and_project_without_vision(self):
+        inspected = inspection.InspectedContext(
+            "rot", "assistant-id",
+            "kamaji", "user-id",
+            None, None,
+            "rotbot", "project-id",
+            Path("/work/rotbot"),
+            inspection.IdentificationSources(
+                "local config", "local config", "not configured", "source binding"
+            ),
+            ()
+        )
+        assistant = people.PersonContext("rot", "assistant", "Rot", id="assistant-id")
+        user = people.PersonContext("kamaji", "user", "Kamaji", id="user-id")
+
+        def load_person(name):
+            if name == "rot":
+                return assistant, (
+                    people.PersonDocument("identity.md", (("Traits", "Curious"),)),
+                    people.PersonDocument("state.md", ())
+                )
+            return user, (
+                people.PersonDocument("experience.md", (("Technical", "Python"),)),
+            )
+
+        project = loader.Context(
+            "rotbot", "Stable project identity", "Current project state", "project-id"
+        )
+        with patch.object(
+            people, "load_person_documents", side_effect=load_person
+        ), patch.object(loader, "load_context", return_value=project), patch.object(
+            loader, "load_vision"
+        ) as load_vision:
+            context = prompt.resolve_prompt_context(inspected, "OpenCode")
+            rendered = prompt.build_ask_prompt(context, "Question")
+
+        load_vision.assert_not_called()
+        self.assertIn("Curious", rendered)
+        self.assertIn("Python", rendered)
+        self.assertIn("Stable project identity", rendered)
+        self.assertIn("Current project state", rendered)
+        self.assertNotIn("vision", rendered.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

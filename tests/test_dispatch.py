@@ -155,6 +155,11 @@ class ParserDispatchTests(unittest.TestCase):
             {"refresh": True, "agent": "codex"}
         ),
         (
+            ["sr", "context", "--full"],
+            "sr_context",
+            {"refresh": False, "full": True}
+        ),
+        (
             ["sr", "diff", "--note", "production only"],
             "sr_diff",
             {"note": "production only"}
@@ -206,11 +211,35 @@ class ParserDispatchTests(unittest.TestCase):
 
     def test_missing_required_arguments_are_rejected(self):
         for argv in (
-            [], ["ask"], ["git"],
-            ["sr"], ["machine"]
+            ["ask"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
+
+    def test_no_arguments_are_reserved_for_interactive_mode(self):
+        args = command_parser.parse_args([])
+
+        self.assertIsNone(args.command)
+        self.assertFalse(hasattr(args, "func"))
+
+    def test_command_groups_show_scoped_next_steps(self):
+        cases = (
+            (["git"], ("pull", "push", "status")),
+            (["machine"], ("inspect",)),
+            (["sr"], ("status", "context", "diff", "pull", "push", "publish"))
+        )
+        for argv, expected in cases:
+            with self.subTest(argv=argv), patch.object(
+                command_parser, "rot_say"
+            ) as rot_say:
+                args = command_parser.parse_args(argv)
+                result = args.func(args)
+
+            self.assertEqual(result, 0)
+            message = rot_say.call_args.args[0]
+            self.assertIn(f"usage: rotbot {argv[0]}", message)
+            for command in expected:
+                self.assertIn(command, message)
 
     def test_malformed_options_are_rejected(self):
         for argv in (
@@ -222,13 +251,22 @@ class ParserDispatchTests(unittest.TestCase):
             ["context", "add", "machine", "desktop", "--inspect"],
             ["machine", "inspect", "--inspect"],
             ["context", "mod", "alex", "extra"],
-            ["context", "delete", "example", "extra"]
+            ["context", "delete", "example", "extra"],
+            ["sr", "context", "--refresh", "--full"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
 
     def test_help_is_rendered_by_rot(self):
-        for argv, expected in ((["-h"], "Signal Rot commands"), (["sr", "-h"], "status")):
+        cases = (
+            (["-h"], ("Signal Rot commands",)),
+            (["sr", "-h"], ("usage: rotbot sr", "publish")),
+            (["machine", "-h"], ("usage: rotbot machine", "inspect")),
+            (["git", "-h"], ("usage: rotbot git", "status")),
+            (["git", "status", "-h"], ("usage: rotbot git status", "--fetch")),
+            (["context", "show", "-h"], ("usage: rotbot context show", "--vision"))
+        )
+        for argv, expected in cases:
             with self.subTest(argv=argv), patch.object(
                 command_parser,
                 "rot_say"
@@ -236,8 +274,10 @@ class ParserDispatchTests(unittest.TestCase):
                 command_parser.parse_args(argv)
 
             self.assertEqual(raised.exception.code, 0)
-            self.assertIn("usage:", rot_say.call_args.args[0])
-            self.assertIn(expected, rot_say.call_args.args[0])
+            message = rot_say.call_args.args[0]
+            self.assertIn("usage:", message)
+            for text in expected:
+                self.assertIn(text, message)
 
     def test_context_add_help_describes_interactive_creation(self):
         with patch.object(

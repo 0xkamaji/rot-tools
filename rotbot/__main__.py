@@ -14,6 +14,10 @@ from rotbot.commands.git import PUSH_CANCELLED
 
 def main():
     args = parse_args()
+    if not hasattr(args, "func"):
+        from rotbot.session.interactive import run_interactive
+
+        return run_interactive()
     result = args.func(args)
 
     if result is PUSH_CANCELLED:
