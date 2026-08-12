@@ -253,7 +253,24 @@ portable semantic context, and is not included by `rot push`.
 
 Interactive Rot uses the terminal's standard line editor when available. Use
 Up/Down to recall commands, Left/Right to edit, Ctrl+A/Ctrl+E to move across the
-line, and Ctrl+R to search previous commands.
+line, Ctrl+R to search previous commands, and Tab to complete Rot commands,
+available executables, context names, and filesystem paths.
+
+```text
+kamaji ❯ context <Tab>
+add  bind  delete  inspect  list  mod  show
+
+kamaji ❯ cd ~/Doc<Tab>
+kamaji ❯ cd ~/Documents/
+```
+
+Rot command, subcommand, option, and fixed-choice completion comes from the
+same argparse grammar used for execution. Executables come from the current
+`PATH`, and paths resolve against the live RotSession directory. Arbitrary
+third-party subcommand grammars and shell-native completion engines are not yet
+included. Platforms without a compatible readline backend continue without
+Tab completion; Windows PATHEXT and shell-specific built-ins remain an isolated
+future completion-provider concern rather than Unix assumptions in the REPL.
 
 ```text
 kamaji ❯ git status

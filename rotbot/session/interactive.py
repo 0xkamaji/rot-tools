@@ -19,6 +19,7 @@ from rotbot.session.capabilities import (
     resolve_capability_state,
     safe_policy
 )
+from rotbot.session.completion import CompletionProvider
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
 from rotbot.session.router import route_input
@@ -46,6 +47,7 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   unset NAME          Remove a session environment variable
   talk                Use reasoning-only AI with no tool authority
   work                Grant scoped agentic authority for this project
+  Tab                 Complete commands, contexts, executables, and paths
   exit / quit         End the Rot session
 
 Rot commands can also be entered directly, including:
@@ -397,6 +399,7 @@ def run_interactive():
     input_backend = interactive_input()
     try:
         input_backend.prepare(session.command_history.recent())
+        input_backend.set_completion_provider(CompletionProvider(session))
     except Exception as error:
         rot_say(f"Warning: command history navigation is unavailable.\n{error}")
         input_backend = BasicInput()

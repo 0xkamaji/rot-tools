@@ -132,6 +132,37 @@ class InputBackendTests(unittest.TestCase):
             self.assertEqual(backend.read("rot> "), "pwd")
         read.assert_called_once_with("rot> ")
 
+    def test_readline_completion_installs_for_read_and_restores_state(self):
+        readline = Mock()
+        readline.get_completer.return_value = "previous"
+        readline.get_completer_delims.return_value = "old-delims"
+        readline.get_line_buffer.return_value = "con"
+        readline.get_endidx.return_value = 3
+        provider = Mock()
+        provider.complete.return_value = [Mock(value="context ")]
+        backend = input_ui.ReadlineInput(readline)
+        backend.set_completion_provider(provider)
+
+        with patch.object(input_ui.builtins, "input", return_value="context"):
+            self.assertEqual(backend.read("rot> "), "context")
+            completer = readline.set_completer.call_args_list[0].args[0]
+            self.assertEqual(completer("con", 0), "context ")
+            self.assertIsNone(completer("con", 1))
+
+        self.assertEqual(readline.set_completer.call_args_list[-1].args[0], "previous")
+        self.assertEqual(
+            readline.set_completer_delims.call_args_list,
+            [unittest.mock.call(" \t\n"), unittest.mock.call("old-delims")]
+        )
+
+    def test_readline_completion_failure_keeps_normal_input(self):
+        readline = Mock()
+        readline.get_completer.side_effect = RuntimeError("unsupported")
+        backend = input_ui.ReadlineInput(readline)
+        backend.set_completion_provider(Mock())
+        with patch.object(input_ui.builtins, "input", return_value="pwd"):
+            self.assertEqual(backend.read("rot> "), "pwd")
+
 
 if __name__ == "__main__":
     unittest.main()
