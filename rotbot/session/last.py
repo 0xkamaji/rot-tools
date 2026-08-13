@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tempfile
@@ -27,7 +28,7 @@ def edit_text(text, environ=None):
     environ = os.environ if environ is None else environ
     editor = environ.get("VISUAL") or environ.get("EDITOR")
     if not editor:
-        raise LastResponseError("Set VISUAL or EDITOR before using `last edit`.")
+        raise LastResponseError("Set VISUAL or EDITOR before editing text.")
     try:
         command = shlex.split(editor)
     except ValueError as error:
@@ -37,7 +38,7 @@ def edit_text(text, environ=None):
     path = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", prefix="rotbot-last-", suffix=".txt",
+            mode="w", encoding="utf-8", prefix="rotbot-edit-", suffix=".txt",
             delete=False
         ) as temporary:
             path = Path(temporary.name)
@@ -50,12 +51,12 @@ def edit_text(text, environ=None):
             raise LastResponseError(f"Could not start editor: {error}") from None
         if completed.returncode != 0:
             raise LastResponseError(
-                f"Editor exited with status {completed.returncode}; LAST was not changed."
+                f"Editor exited with status {completed.returncode}; text was not changed."
             )
         try:
             return path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as error:
-            raise LastResponseError(f"Could not read edited LAST: {error}") from None
+            raise LastResponseError(f"Could not read edited text: {error}") from None
     finally:
         if path is not None:
             try:
@@ -64,21 +65,26 @@ def edit_text(text, environ=None):
                 pass
 
 
-def save_text(text, now=None):
-    directory = data_root() / "last"
+def save_text(text, now=None, category="responses", filename_hint=None):
+    if category not in {"responses", "debug"}:
+        raise LastResponseError(f"Unsupported local text category: {category}")
+    directory = data_root() / category
     try:
         directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if directory.is_symlink() or not directory.is_dir():
-            raise LastResponseError(f"Invalid LAST save directory: {directory}")
+            raise LastResponseError(f"Invalid local save directory: {directory}")
         if os.name != "nt":
             os.chmod(directory, 0o700)
     except LastResponseError:
         raise
     except OSError as error:
-        raise LastResponseError(f"Could not create LAST save directory: {error}") from None
+        raise LastResponseError(f"Could not create local save directory: {error}") from None
 
     now = datetime.now().astimezone() if now is None else now
-    stem = now.strftime("%Y%m%d_%H%M%S_ai-response")
+    default_hint = "ai-response" if category == "responses" else "debug-output"
+    hint = filename_hint or default_hint
+    hint = re.sub(r"[^a-z0-9]+", "-", hint.lower()).strip("-") or default_hint
+    stem = now.strftime(f"%Y%m%d_%H%M%S_{hint}")
     for index in range(1, 10_000):
         suffix = "" if index == 1 else f"_{index}"
         path = directory / f"{stem}{suffix}.txt"
@@ -88,7 +94,7 @@ def save_text(text, now=None):
         except FileExistsError:
             continue
         except OSError as error:
-            raise LastResponseError(f"Could not save LAST: {error}") from None
+            raise LastResponseError(f"Could not save text: {error}") from None
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
                 destination.write(text)
@@ -97,11 +103,11 @@ def save_text(text, now=None):
                 path.unlink()
             except OSError:
                 pass
-            raise LastResponseError(f"Could not save LAST: {error}") from None
+            raise LastResponseError(f"Could not save text: {error}") from None
         if os.name != "nt":
             os.chmod(path, 0o600)
         return path
-    raise LastResponseError("Could not choose a unique LAST filename.")
+    raise LastResponseError("Could not choose a unique local filename.")
 
 
 def learn_text(_text):

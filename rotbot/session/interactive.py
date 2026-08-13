@@ -58,10 +58,13 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   talk                Use reasoning-only AI with no tool authority
   work                Grant scoped agentic authority for this project
   last show           Show the latest AI response
-  last edit           Edit it in $VISUAL/$EDITOR
-  last ask [MESSAGE]  Ask AI about it
-  last save           Save it to Rot's local data
-  last learn          Teach Rot from it
+  last edit           Edit the latest AI response
+  last save           Save the latest AI response locally
+  last ask [MESSAGE]  Ask AI about the latest response
+  last learn          Teach Rot from the latest response
+  debug show          Show the latest debug output
+  debug edit          Edit the latest debug output
+  debug save          Save the latest debug output locally
   debug last ask [MESSAGE]   Inspect its next follow-up without sending
   Tab                 Complete commands, contexts, executables, and paths
   exit / quit         End the Rot session
@@ -104,6 +107,13 @@ class LastResponse:
 
 
 @dataclass
+class DebugResponse:
+    text: str
+    source: str
+    edited: bool = False
+
+
+@dataclass
 class RotSession:
     started_at: datetime
     cwd: Path
@@ -114,6 +124,7 @@ class RotSession:
     work_project_id: str | None = None
     assistant_policy: AssistantCapabilityPolicy | None = None
     last_response: LastResponse | None = None
+    debug_response: DebugResponse | None = None
 
     @classmethod
     def start(cls):
@@ -274,6 +285,22 @@ class RotSession:
         self.last_response.text = edited
         self.last_response.edited = True
 
+    def edit_debug(self, header=None):
+        if self.debug_response is None:
+            raise LastResponseError("No debug output is available in this session.")
+        if header is not None:
+            header.stop()
+        try:
+            edited = edit_text(self.debug_response.text)
+        finally:
+            if header is not None:
+                header.start(self)
+        self.debug_response.text = edited
+        self.debug_response.edited = True
+
+    def store_debug(self, text, source):
+        self.debug_response = DebugResponse(text, source)
+
     def ask_last(self, instruction=None, header=None):
         if self.last_response is None:
             raise LastResponseError("No AI response is available in this session.")
@@ -301,7 +328,9 @@ class RotSession:
             authority=state.mode,
             capability_state=state
         )
-        print(render_ai_debug_plan(prepare(request)))
+        text = render_ai_debug_plan(prepare(request))
+        print(text)
+        self.store_debug(text, "debug-last-ask")
 
 
 def _run_rot_command(arguments, session=None):
@@ -312,6 +341,8 @@ def _run_rot_command(arguments, session=None):
     parsed.active_conversation_id = (
         session.ai.id if session is not None and session.ai is not None else None
     )
+    if session is not None:
+        parsed.debug_sink = session.store_debug
     result = parsed.func(parsed)
     if result is PUSH_CANCELLED:
         return 0
@@ -366,6 +397,38 @@ def evaluate_input(session, line, header=None):
             session.debug_last_ask(instruction)
         except LastResponseError as error:
             rot_say(str(error))
+        except KeyboardInterrupt:
+            rot_say("Command interrupted.")
+        return True
+    if command == "debug" and len(arguments) == 2 and arguments[1].lower() in {
+        "show", "edit", "save"
+    }:
+        action = arguments[1].lower()
+        if action == "show":
+            if session.debug_response is None:
+                rot_say("No debug output is available in this session.")
+            else:
+                print(session.debug_response.text)
+            return True
+        if action == "edit":
+            try:
+                session.edit_debug(header=header)
+            except LastResponseError as error:
+                rot_say(str(error))
+            return True
+        if session.debug_response is None:
+            rot_say("No debug output is available in this session.")
+            return True
+        try:
+            path = save_text(
+                session.debug_response.text,
+                category="debug",
+                filename_hint=session.debug_response.source
+            )
+        except LastResponseError as error:
+            rot_say(str(error))
+        else:
+            rot_say(f"Saved DEBUG to:\n{path}")
         return True
     if command == "last":
         action = arguments[1].lower() if len(arguments) > 1 else None
@@ -393,7 +456,7 @@ def evaluate_input(session, line, header=None):
                 rot_say("No AI response is available in this session.")
                 return True
             try:
-                path = save_text(session.last_response.text)
+                path = save_text(session.last_response.text, category="responses")
             except LastResponseError as error:
                 rot_say(str(error))
             else:

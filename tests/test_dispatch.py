@@ -34,6 +34,9 @@ class ParserDispatchTests(unittest.TestCase):
             "debug_last_ask",
             {"debug_command": "last", "debug_last_command": "ask", "instruction": ["why"]}
         ),
+        (["debug", "show"], "debug_session_register", {"debug_command": "show"}),
+        (["debug", "edit"], "debug_session_register", {"debug_command": "edit"}),
+        (["debug", "save"], "debug_session_register", {"debug_command": "save"}),
         (["ai", "sessions"], "ai_sessions", {"ai_command": "sessions"}),
         (
             ["ai", "session", "show", "rotconv_abc"],

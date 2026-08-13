@@ -442,6 +442,7 @@ class RotSessionTests(unittest.TestCase):
 
     def test_new_session_has_no_last_and_successive_ai_responses_replace_it(self):
         self.assertIsNone(self.session.last_response)
+        self.assertIsNone(self.session.debug_response)
         chat = Mock(spec=session_ai.AIConversation)
         chat.send.side_effect = (Mock(response="first"), Mock(response="second"))
         self.session.ai = chat
@@ -450,6 +451,7 @@ class RotSessionTests(unittest.TestCase):
             self.session.send_ai("prompt two")
 
         self.assertEqual(self.session.last_response.text, "second")
+        self.assertIsNone(self.session.debug_response)
 
     def test_failed_interrupted_and_empty_ai_do_not_replace_last(self):
         self.session.last_response = interactive.LastResponse("keep")
@@ -469,6 +471,18 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertEqual(self.session.last_response.text, "keep")
 
+    def test_normal_ai_response_does_not_change_debug(self):
+        previous = interactive.DebugResponse("keep debug", "debug-ask")
+        self.session.debug_response = previous
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.send.return_value = Mock(response="new answer")
+        self.session.ai = chat
+        with patch.object(interactive, "render_rot_response"):
+            self.session.send_ai("question")
+
+        self.assertEqual(self.session.last_response.text, "new answer")
+        self.assertIs(self.session.debug_response, previous)
+
     def test_last_show_edit_save_and_learn_preserve_expected_ownership(self):
         self.session.last_response = interactive.LastResponse("original")
         header = Mock()
@@ -486,7 +500,7 @@ class RotSessionTests(unittest.TestCase):
         before = self.session.last_response
         with patch.object(interactive, "save_text", return_value=Path("/saved")) as save:
             interactive.evaluate_input(self.session, "last save")
-        save.assert_called_once_with("edited\n")
+        save.assert_called_once_with("edited\n", category="responses")
         self.assertIs(self.session.last_response, before)
 
         with patch.object(
@@ -611,6 +625,8 @@ class RotSessionTests(unittest.TestCase):
         prepare.assert_called_once_with(request)
         render.assert_called_once_with(plan)
         output.assert_called_once_with("rendered plan")
+        self.assertEqual(self.session.debug_response.text, "rendered plan")
+        self.assertEqual(self.session.debug_response.source, "debug-last-ask")
         conversation_type.create.assert_not_called()
         chat.send.assert_not_called()
         self.assertIs(self.session.last_response, previous_last)
@@ -622,6 +638,87 @@ class RotSessionTests(unittest.TestCase):
                 chat.model, self.session.authority_mode, self.session.work_project_id
             )
         )
+
+    def test_debug_register_show_edit_save_and_register_independence(self):
+        last_response = interactive.LastResponse("LAST stays")
+        self.session.last_response = last_response
+        self.session.debug_response = interactive.DebugResponse(
+            "exact debug", "debug-last-ask"
+        )
+
+        with patch("builtins.print") as output:
+            interactive.evaluate_input(self.session, "debug show")
+        output.assert_called_once_with("exact debug")
+
+        header = Mock()
+        with patch.object(interactive, "edit_text", return_value="edited debug") as edit:
+            interactive.evaluate_input(self.session, "debug edit", header=header)
+        edit.assert_called_once_with("exact debug")
+        self.assertEqual(self.session.debug_response.text, "edited debug")
+        self.assertTrue(self.session.debug_response.edited)
+        self.assertIs(self.session.last_response, last_response)
+
+        before = self.session.debug_response
+        with patch.object(interactive, "save_text", return_value=Path("/saved")) as save:
+            interactive.evaluate_input(self.session, "debug save")
+        save.assert_called_once_with(
+            "edited debug", category="debug", filename_hint="debug-last-ask"
+        )
+        self.assertIs(self.session.debug_response, before)
+        self.assertIs(self.session.last_response, last_response)
+
+    def test_debug_register_empty_and_editor_failure_preserve_state(self):
+        with patch.object(interactive, "rot_say") as say:
+            interactive.evaluate_input(self.session, "debug show")
+        self.assertIn("No debug output", say.call_args.args[0])
+
+        previous = interactive.DebugResponse("keep debug", "debug-ask")
+        self.session.debug_response = previous
+        with patch.object(
+            interactive, "edit_text", side_effect=interactive.LastResponseError("failed")
+        ), patch.object(interactive, "rot_say"):
+            interactive.evaluate_input(self.session, "debug edit")
+        self.assertIs(self.session.debug_response, previous)
+        self.assertEqual(previous.text, "keep debug")
+        self.assertFalse(previous.edited)
+
+    def test_cli_debug_sink_replaces_edited_debug_but_not_last(self):
+        previous_last = interactive.LastResponse("keep LAST")
+        self.session.last_response = previous_last
+        self.session.debug_response = interactive.DebugResponse(
+            "edited old debug", "debug-ask", edited=True
+        )
+
+        def handler(parsed):
+            parsed.debug_sink("new exact rendering", "debug-context-develop")
+            return 0
+
+        parsed = Mock(func=handler)
+        with patch.object(interactive, "parse_args", return_value=parsed), patch(
+            "rotbot.session.router.rot_command_names", return_value=("debug",)
+        ):
+            interactive.evaluate_input(self.session, "debug context develop rotbot")
+
+        self.assertEqual(self.session.debug_response.text, "new exact rendering")
+        self.assertFalse(self.session.debug_response.edited)
+        self.assertIs(self.session.last_response, previous_last)
+
+    def test_failed_or_interrupted_cli_debug_preserves_existing_debug(self):
+        previous = interactive.DebugResponse("keep", "debug-ask")
+        self.session.debug_response = previous
+        failed = Mock(func=lambda _args: 2)
+        with patch.object(interactive, "parse_args", return_value=failed), patch(
+            "rotbot.session.router.rot_command_names", return_value=("debug",)
+        ):
+            interactive.evaluate_input(self.session, "debug ask failure")
+        self.assertIs(self.session.debug_response, previous)
+
+        interrupted = Mock(func=Mock(side_effect=KeyboardInterrupt))
+        with patch.object(interactive, "parse_args", return_value=interrupted), patch(
+            "rotbot.session.router.rot_command_names", return_value=("debug",)
+        ), patch.object(interactive, "rot_say"):
+            interactive.evaluate_input(self.session, "debug ask interrupted")
+        self.assertIs(self.session.debug_response, previous)
 
     def test_debug_last_ask_no_last_fails_and_work_authority_is_preserved(self):
         with patch.object(interactive, "rot_say") as say:
@@ -644,6 +741,19 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(chat.build_request.call_args.kwargs["authority"], "WORK")
         self.assertEqual(chat.build_request.call_args.kwargs["capability_state"].mode, "WORK")
         self.assertEqual(self.session.authority_mode, "WORK")
+
+    def test_interrupted_debug_last_ask_preserves_existing_debug(self):
+        previous = interactive.DebugResponse("keep", "debug-ask")
+        self.session.debug_response = previous
+        self.session.last_response = interactive.LastResponse("last")
+        self.session.ai = Mock(spec=session_ai.AIConversation)
+        self.session.ai.build_request.side_effect = KeyboardInterrupt
+
+        with patch.object(interactive, "rot_say") as say:
+            interactive.evaluate_input(self.session, "debug last ask")
+
+        self.assertIs(self.session.debug_response, previous)
+        self.assertIn("interrupted", say.call_args.args[0].lower())
 
     def test_real_last_ask_after_debug_still_executes_and_replaces_last(self):
         chat = Mock(spec=session_ai.AIConversation)

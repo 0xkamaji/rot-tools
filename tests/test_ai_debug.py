@@ -116,6 +116,34 @@ class AIDebugTests(unittest.TestCase):
         invoke.assert_not_called()
         start.assert_not_called()
 
+    def test_debug_ask_prints_and_sinks_the_same_rendered_text(self):
+        request = invocation.AIRequest("ask", "ask", "question")
+        operation = runner.AskOperation(request, object(), "question")
+        sink = Mock()
+        args = argparse.Namespace(question=["question"], agent=None, debug_sink=sink)
+
+        with patch.object(
+            debug, "build_ask_request", return_value=operation
+        ), patch.object(debug, "prepare", return_value=self.plan()), patch.object(
+            debug, "render_ai_debug_plan", return_value="exact debug text"
+        ) as render, patch("builtins.print") as output:
+            result = debug.debug_ask(args)
+
+        self.assertEqual(result, 0)
+        render.assert_called_once()
+        output.assert_called_once_with("exact debug text")
+        sink.assert_called_once_with("exact debug text", "debug-ask")
+
+    def test_failed_debug_does_not_call_sink(self):
+        sink = Mock()
+        args = argparse.Namespace(question=["question"], agent=None, debug_sink=sink)
+        with patch.object(
+            debug, "build_ask_request", side_effect=debug.ContextInspectionError("failed")
+        ), patch.object(debug, "rot_say"):
+            result = debug.debug_ask(args)
+        self.assertEqual(result, 2)
+        sink.assert_not_called()
+
     def test_normal_ask_and_debug_share_request_builder(self):
         args = argparse.Namespace(question=["question"], agent=None)
         operation = runner.AskOperation(
@@ -168,6 +196,25 @@ class AIDebugTests(unittest.TestCase):
         self.assertEqual(prepare.call_args_list[0].args[0], request)
         replace.assert_not_called()
         start.assert_not_called()
+
+    def test_debug_context_develop_sinks_exact_combined_rendering(self):
+        request = invocation.AIRequest("context_development", "context develop", "draft")
+        operation = self.development_operation(request)
+        sink = Mock()
+        args = argparse.Namespace(name="example", agent=None, debug_sink=sink)
+        with patch.object(
+            debug, "build_context_develop_request", return_value=operation
+        ), patch.object(debug, "prepare", return_value=self.plan()), patch.object(
+            debug, "render_ai_debug_plan", side_effect=("identity plan", "state plan")
+        ), patch("builtins.print") as output:
+            debug.debug_context_develop(args)
+
+        rendered = output.call_args.args[0]
+        self.assertIn("CONTEXT DEVELOPMENT: IDENTITY", rendered)
+        self.assertIn("identity plan", rendered)
+        self.assertIn("CONTEXT DEVELOPMENT: STATE", rendered)
+        self.assertIn("state plan", rendered)
+        sink.assert_called_once_with(rendered, "debug-context-develop")
 
     def test_normal_and_debug_context_develop_share_request_builder(self):
         request = invocation.AIRequest(

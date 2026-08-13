@@ -50,10 +50,10 @@ class LastResponseHelperTests(unittest.TestCase):
             os.environ, {"XDG_DATA_HOME": temporary}, clear=True
         ):
             now = datetime(2026, 8, 13, 13, 52)
-            first = last.save_text("exact\ntext", now)
-            second = last.save_text("exact\ntext", now)
+            first = last.save_text("exact\ntext", now, category="debug")
+            second = last.save_text("exact\ntext", now, category="debug")
 
-            self.assertEqual(first.parent, Path(temporary) / "rotbot" / "last")
+            self.assertEqual(first.parent, Path(temporary) / "rotbot" / "debug")
             self.assertNotEqual(first, second)
             self.assertEqual(first.read_text(encoding="utf-8"), "exact\ntext")
             if os.name != "nt":
@@ -64,13 +64,27 @@ class LastResponseHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
             os.environ, {"HOME": temporary}, clear=True
         ):
-            path = last.save_text("text", datetime(2026, 8, 13, 13, 52))
+            path = last.save_text(
+                "text", datetime(2026, 8, 13, 13, 52), category="responses"
+            )
 
         self.assertEqual(
             path,
-            Path(temporary) / ".local" / "share" / "rotbot" / "last"
+            Path(temporary) / ".local" / "share" / "rotbot" / "responses"
             / "20260813_135200_ai-response.txt"
         )
+
+    def test_save_rejects_arbitrary_categories_and_sanitizes_hint(self):
+        with self.assertRaises(last.LastResponseError):
+            last.save_text("text", category="../project")
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"XDG_DATA_HOME": temporary}, clear=True
+        ):
+            path = last.save_text(
+                "text", datetime(2026, 8, 13, 13, 52),
+                category="debug", filename_hint="Debug Last Ask / unsafe"
+            )
+        self.assertEqual(path.name, "20260813_135200_debug-last-ask-unsafe.txt")
 
 
 if __name__ == "__main__":

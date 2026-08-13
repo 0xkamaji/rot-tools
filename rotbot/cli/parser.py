@@ -7,7 +7,8 @@ from rotbot.commands.debug import (
     debug_ask,
     debug_context_add,
     debug_context_develop,
-    debug_last_ask
+    debug_last_ask,
+    debug_session_register
 )
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
@@ -158,6 +159,13 @@ def create_parser():
     )
     debug_commands = debug_parser.add_subparsers(dest="debug_command")
     debug_parser.set_defaults(func=show_command_help, command_parser=debug_parser)
+
+    for action in ("show", "edit", "save"):
+        register_parser = debug_commands.add_parser(
+            action,
+            help=f"Available only inside an interactive Rot session"
+        )
+        register_parser.set_defaults(func=debug_session_register)
 
     debug_ask_parser = debug_commands.add_parser(
         "ask",
