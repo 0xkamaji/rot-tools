@@ -14,6 +14,21 @@ class ParserDispatchTests(unittest.TestCase):
             "ask_agent",
             {"question": ["what", "now"], "agent": "codex"}
         ),
+        (
+            ["debug", "ask", "what", "now", "--agent", "codex"],
+            "debug_ask",
+            {"debug_command": "ask", "question": ["what", "now"], "agent": "codex"}
+        ),
+        (
+            ["debug", "context", "develop", "rotbot", "--agent", "opencode"],
+            "debug_context_develop",
+            {
+                "debug_command": "context",
+                "debug_context_command": "develop",
+                "name": "rotbot",
+                "agent": "opencode"
+            }
+        ),
         (["ai", "sessions"], "ai_sessions", {"ai_command": "sessions"}),
         (
             ["ai", "session", "show", "rotconv_abc"],
@@ -213,6 +228,7 @@ class ParserDispatchTests(unittest.TestCase):
         cases = (
             (["git"], ("pull", "push", "status")),
             (["ai"], ("sessions", "session")),
+            (["debug"], ("ask", "context")),
             (["ai", "session"], ("show",)),
             (["machine"], ("inspect",)),
             (["sr"], ("status", "context", "diff", "pull", "push", "publish"))
@@ -312,7 +328,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 18)
+        self.assertEqual(message.count("=" * 60), 20)
         self.assertNotIn("COMMAND: rotbot wtf", message)
 
     def test_verbose_help_can_be_scoped_to_a_command_group(self):

@@ -10,6 +10,7 @@ from unittest.mock import ANY, Mock, patch
 
 from rotbot.agents.invocation import AIResult
 from rotbot.commands.machine import MachineInspection
+from rotbot.commands import debug as debug_commands
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
 from rotbot.contexts import matching as context_matching
@@ -285,6 +286,31 @@ class ContextCreationTests(unittest.TestCase):
         self.assertNotIn("Project directory name", request.task)
         self.assertIn("Project directory name", request.context_material)
         self.assertIn("exactly two string keys", request.output_contract)
+
+    def test_debug_context_develop_real_builder_does_not_modify_context_or_binding(self):
+        result, _agent, _rot_say, _rot_continue = self.run_add(
+            answer="yes", output="not json"
+        )
+        self.assertEqual(result, 0)
+        destination = self.project_context_root / "example" / "local"
+        identity = (destination / "identity.md").read_bytes()
+        state = (destination / "state.md").read_bytes()
+        binding = dict(get_context_binding("example"))
+
+        with patch.object(
+            debug_commands, "_display_request", return_value=0
+        ) as display:
+            debug_result = debug_commands.debug_context_develop(
+                argparse.Namespace(name="example", agent="opencode")
+            )
+
+        self.assertEqual(debug_result, 0)
+        display.assert_called_once()
+        request = display.call_args.args[0]
+        self.assertIn("Project directory name: project", request.context_material)
+        self.assertEqual((destination / "identity.md").read_bytes(), identity)
+        self.assertEqual((destination / "state.md").read_bytes(), state)
+        self.assertEqual(get_context_binding("example"), binding)
 
     def test_context_is_created_bound_and_loadable_before_enrichment(self):
         destination = self.project_context_root / "example"

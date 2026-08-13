@@ -3,6 +3,7 @@ import argparse
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
 from rotbot.commands.ai import ai_context_preview, ai_session_show, ai_sessions
+from rotbot.commands.debug import debug_ask, debug_context_add, debug_context_develop
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
@@ -145,6 +146,53 @@ def create_parser():
     )
     _add_agent_argument(ask_parser)
     ask_parser.set_defaults(func=ask_agent)
+
+    debug_parser = commands.add_parser(
+        "debug",
+        help="Inspect an AI invocation plan without invoking a provider"
+    )
+    debug_commands = debug_parser.add_subparsers(dest="debug_command")
+    debug_parser.set_defaults(func=show_command_help, command_parser=debug_parser)
+
+    debug_ask_parser = debug_commands.add_parser(
+        "ask",
+        help="Inspect the exact prepared plan for an ask operation"
+    )
+    debug_ask_parser.add_argument(
+        "question",
+        nargs="+",
+        help="Question to prepare without sending"
+    )
+    _add_agent_argument(debug_ask_parser)
+    debug_ask_parser.set_defaults(func=debug_ask)
+
+    debug_context_parser = debug_commands.add_parser(
+        "context",
+        help="Inspect supported context AI plans"
+    )
+    debug_context_commands = debug_context_parser.add_subparsers(
+        dest="debug_context_command"
+    )
+    debug_context_parser.set_defaults(
+        func=show_command_help, command_parser=debug_context_parser
+    )
+
+    debug_context_develop_parser = debug_context_commands.add_parser(
+        "develop",
+        help="Inspect context development without invoking or modifying"
+    )
+    debug_context_develop_parser.add_argument(
+        "name",
+        help="Existing project context name to inspect"
+    )
+    _add_agent_argument(debug_context_develop_parser)
+    debug_context_develop_parser.set_defaults(func=debug_context_develop)
+
+    debug_context_add_parser = debug_context_commands.add_parser(
+        "add",
+        help="Explain why context add cannot be safely debugged yet"
+    )
+    debug_context_add_parser.set_defaults(func=debug_context_add)
 
     ai_parser = commands.add_parser(
         "ai",

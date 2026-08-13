@@ -1,4 +1,5 @@
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 import uuid
 
@@ -16,10 +17,33 @@ from rotbot.ui.terminal import (
 )
 
 
-def ask_agent(args):
+@dataclass(frozen=True)
+class AskOperation:
+    request: AIRequest
+    inspected: object
+    question: str
+
+
+def build_ask_request(args):
     question = " ".join(args.question) if isinstance(args.question, list) else args.question
+    inspected = inspect_current_context(bootstrap=False)
+    return AskOperation(
+        request=AIRequest(
+            purpose="ask",
+            parent_command="ask",
+            task=question,
+            working_directory=Path(inspected.cwd),
+            agent_name=getattr(args, "agent", None),
+            inspected_context=inspected
+        ),
+        inspected=inspected,
+        question=question
+    )
+
+
+def ask_agent(args):
     try:
-        inspected = inspect_current_context(bootstrap=False)
+        operation = build_ask_request(args)
     except (
         ContextInspectionError,
         loader.ContextError,
@@ -32,6 +56,8 @@ def ask_agent(args):
 
     presenter = AIActivityPresenter("thinking")
     output_started = False
+    question = operation.question
+    inspected = operation.inspected
 
     def output(line):
         nonlocal output_started
@@ -43,14 +69,7 @@ def ask_agent(args):
 
     try:
         result = invoke(
-            AIRequest(
-                purpose="ask",
-                parent_command="ask",
-                task=question,
-                working_directory=Path(inspected.cwd),
-                agent_name=getattr(args, "agent", None),
-                inspected_context=inspected
-            ),
+            operation.request,
             on_event=presenter,
             on_output=output
         )
