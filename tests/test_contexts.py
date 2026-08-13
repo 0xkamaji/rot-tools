@@ -555,7 +555,7 @@ class ContextLoaderTests(unittest.TestCase):
             for path in directory.rglob("*") if path.is_file()
         }
 
-        with patch("rotbot.agents.runner.stream_agent") as stream_agent, patch.object(
+        with patch("rotbot.agents.invocation.invoke") as stream_agent, patch.object(
             contexts,
             "rot_say"
         ), patch.object(contexts, "rot_continue"):

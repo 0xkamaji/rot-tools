@@ -47,7 +47,7 @@ class SshPushPreflightTests(unittest.TestCase):
         run.assert_not_called()
         self.assertIn("Could not determine", rot_say.call_args.args[0])
 
-    def test_ssh_configured_identity_verifies_without_an_agent(self):
+    def test_ssh_configured_identity_verifies_with_normal_prompting(self):
         with patch.object(
             git_commands,
             "_push_remote_url",
@@ -65,7 +65,8 @@ class SshPushPreflightTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0][:2], ["git", "ls-remote"])
         environment = run.call_args.kwargs["env"]
-        self.assertIn("BatchMode=yes", environment["GIT_SSH_COMMAND"])
+        self.assertNotIn("BatchMode", environment["GIT_SSH_COMMAND"])
+        self.assertIn("ConnectTimeout=10", environment["GIT_SSH_COMMAND"])
         self.assertNotIn("-i", environment["GIT_SSH_COMMAND"].split())
         self.assertIn("verified", rot_say.call_args.args[0])
 
@@ -173,9 +174,6 @@ class GitPushPreflightTests(unittest.TestCase):
 
     def stage_until_commit(self, working_directory):
         arguments = argparse.Namespace(
-            review=False,
-            note=None,
-            agent=None,
             message="test staging"
         )
         real_run = subprocess.run
@@ -220,6 +218,14 @@ class GitPushPreflightTests(unittest.TestCase):
         add_call = next(call for call in calls if call[0] == ["git", "add", "--all"])
         self.assertEqual(Path(add_call[1]["cwd"]), self.repository)
 
+    def test_ssh_preflight_allows_normal_identity_prompting(self):
+        with patch.dict(git_commands.os.environ, {}, clear=True):
+            environment = git_commands._ssh_push_environment()
+
+        self.assertNotIn("GIT_TERMINAL_PROMPT", environment)
+        self.assertNotIn("BatchMode", environment["GIT_SSH_COMMAND"])
+        self.assertIn("ConnectTimeout=10", environment["GIT_SSH_COMMAND"])
+
     def test_staging_from_nested_directory_includes_repository_root_changes(self):
         nested = self.repository / "nested" / "directory"
         nested.mkdir(parents=True)
@@ -248,9 +254,6 @@ class GitPushPreflightTests(unittest.TestCase):
 
     def test_failed_preflight_does_not_stage_or_commit_changes(self):
         args = argparse.Namespace(
-            review=False,
-            note=None,
-            agent=None,
             message="should not commit"
         )
 
@@ -310,9 +313,6 @@ class GitPushPreflightTests(unittest.TestCase):
             return real_run(command, *args, **kwargs)
 
         arguments = argparse.Namespace(
-            review=False,
-            note=None,
-            agent=None,
             message="verified push"
         )
         with patch("builtins.input", return_value="yes"), patch.object(

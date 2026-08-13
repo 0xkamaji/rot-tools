@@ -80,7 +80,6 @@ CLI, including aliases, options, help, and explicit AI commands:
 
 ```text
 kamaji ❯ ask "What should I work on next?"
-kamaji ❯ wtf --deep rotbot/contexts
 kamaji ❯ git status --fetch
 ```
 
@@ -329,51 +328,11 @@ rot push -m "Add Git status command"
 | Flag              | Purpose                                          |
 | ----------------- | ------------------------------------------------ |
 | `-m`, `--message` | Supply the commit message                        |
-| `--review`        | Ask an AI agent to review changes before pushing |
-| `--agent AGENT`   | Choose `codex` or `opencode`                     |
-| `--note TEXT`     | Add instructions for the review                  |
 
-Example:
-
-```bash
-rot push --review --agent codex \
-  --note "Focus on CLI compatibility"
-```
-
-The same options work with:
+The same option works with:
 
 ```bash
 rot git push
-```
-
-## Understanding code with `wtf`
-
-`rot wtf` collects relevant project evidence and asks an AI agent to explain it.
-
-```bash
-rot wtf
-rot wtf path/to/file.py
-rot wtf path/to/directory
-```
-
-| Flag            | Purpose                         |
-| --------------- | ------------------------------- |
-| `--deep`        | Inspect a directory more deeply |
-| `--note TEXT`   | Tell the agent what to focus on |
-| `--agent AGENT` | Choose `codex` or `opencode`    |
-
-Examples:
-
-```bash
-rot wtf rotbot/contexts/matching.py
-```
-
-```bash
-rot wtf --deep rotbot/contexts
-```
-
-```bash
-rot wtf --note "Explain how this command reaches its handler"
 ```
 
 ## Asking an agent
@@ -509,6 +468,7 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific context            |
 | `rot context add`            | Interactively create a project, user, assistant, contact, or machine context |
+| `rot context develop NAME`   | Enrich a newly created project context through the shared AI runtime |
 | `rot context add user [NAME]` | Create a first-class user context |
 | `rot context add assistant [NAME]` | Create an assistant with safe capability defaults |
 | `rot context add machine [NAME]` | Create a machine directly, then inspect or leave empty |
@@ -631,7 +591,7 @@ Local paths are saved in RotBot’s local configuration rather than portable con
 
 The `rot sr` namespace is a specialized wrapper for maintaining SignalRot.
 
-It combines RotBot’s generic Git, context, AI, and confirmation systems with SignalRot-specific operations.
+It combines RotBot’s generic Git, context, and confirmation systems with SignalRot-specific operations.
 
 | Command          | Purpose                                           |
 | ---------------- | ------------------------------------------------- |
@@ -656,14 +616,9 @@ Reports the site’s HTTP status and response time.
 rot sr context
 ```
 
-| Flag        | Purpose                                          |
-| ----------- | ------------------------------------------------ |
-| `--refresh` | Inspect SignalRot and refresh its recorded state |
-| `--full`    | Show the complete identity and state context     |
-
-```bash
-rot sr context --refresh
-```
+| Flag     | Purpose                                      |
+| -------- | -------------------------------------------- |
+| `--full` | Show the complete identity and state context |
 
 ```bash
 rot sr context --full
@@ -676,7 +631,7 @@ rot context show signalrot
 ```
 
 `rot context show signalrot` displays the portable context files.
-`rot sr context` provides a SignalRot-specific dashboard and refresh workflow.
+`rot sr context` provides a SignalRot-specific dashboard.
 `rot sr context --full` is a shortcut for the complete portable context display.
 
 ### Compare source and production
@@ -685,7 +640,8 @@ rot context show signalrot
 rot sr diff
 ```
 
-This performs a dry-run comparison and explains what publishing would add, replace, or remove.
+This prints the raw rsync dry-run facts showing what publishing would add,
+replace, or remove. It does not invoke an AI agent.
 
 ### Publish SignalRot
 
@@ -693,20 +649,9 @@ This performs a dry-run comparison and explains what publishing would add, repla
 rot sr publish
 ```
 
-RotBot previews and confirms the Git and deployment operations before changing production.
-
-| Flag            | Purpose                                           |
-| --------------- | ------------------------------------------------- |
-| `--review`      | Review changes with an AI agent before publishing |
-| `--agent AGENT` | Choose `codex` or `opencode`                      |
-| `--note TEXT`   | Add review instructions                           |
-
-Example:
-
-```bash
-rot sr publish --review --agent codex \
-  --note "Check for broken links and deployment risks"
-```
+RotBot previews and confirms the Git and deployment operations before changing
+production. `rot sr push` and `rot sr publish` accept `-m`/`--message` for the
+Git commit message.
 
 SignalRot locations can be configured through context bindings or environment variables:
 
@@ -726,7 +671,6 @@ by the installed version:
 rot --help
 rot git --help
 rot git push --help
-rot wtf --help
 rot context --help
 rot sr --help
 rot sr publish --help

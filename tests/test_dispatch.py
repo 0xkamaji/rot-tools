@@ -27,17 +27,9 @@ class ParserDispatchTests(unittest.TestCase):
         ),
         (["pull"], "git_pull", {"command": "pull"}),
         (
-            [
-                "push", "--review", "--message", "ship it",
-                "--agent", "opencode", "--note", "check tests"
-            ],
+            ["push", "--message", "ship it"],
             "git_push",
-            {
-                "review": True,
-                "message": "ship it",
-                "agent": "opencode",
-                "note": "check tests"
-            }
+            {"message": "ship it"}
         ),
         (["git", "pull"], "git_pull", {"git_command": "pull"}),
         (
@@ -51,23 +43,9 @@ class ParserDispatchTests(unittest.TestCase):
             {"git_command": "status", "fetch": True}
         ),
         (
-            [
-                "git", "push", "--review", "--message", "ship it",
-                "--agent", "opencode", "--note", "check tests"
-            ],
+            ["git", "push", "--message", "ship it"],
             "git_push",
-            {
-                "git_command": "push",
-                "review": True,
-                "message": "ship it",
-                "agent": "opencode",
-                "note": "check tests"
-            }
-        ),
-        (
-            ["wtf", "src", "--deep", "--note", "focus here"],
-            "directory_report",
-            {"target": "src", "deep": True, "note": "focus here"}
+            {"git_command": "push", "message": "ship it"}
         ),
         (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
@@ -161,34 +139,29 @@ class ParserDispatchTests(unittest.TestCase):
         ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
-            ["sr", "context", "--refresh", "--agent", "codex"],
-            "sr_context",
-            {"refresh": True, "agent": "codex"}
-        ),
-        (
             ["sr", "context", "--full"],
             "sr_context",
-            {"refresh": False, "full": True}
+            {"full": True}
         ),
         (
-            ["sr", "diff", "--note", "production only"],
+            ["sr", "diff"],
             "sr_diff",
-            {"note": "production only"}
+            {"sr_command": "diff"}
         ),
         (
-            ["sr", "pull", "--review"],
+            ["sr", "pull"],
             "sr_pull",
-            {"review": True}
+            {"sr_command": "pull"}
         ),
         (
-            ["sr", "push", "--agent", "opencode"],
+            ["sr", "push", "-m", "ship source"],
             "sr_push",
-            {"agent": "opencode"}
+            {"message": "ship source"}
         ),
         (
-            ["sr", "publish", "--review", "--note", "dry run"],
+            ["sr", "publish", "--message", "publish site"],
             "sr_publish",
-            {"review": True, "note": "dry run"}
+            {"message": "publish site"}
         )
     )
 
@@ -261,6 +234,8 @@ class ParserDispatchTests(unittest.TestCase):
         for argv in (
             ["ask", "hello", "--agent", "invalid"],
             ["push", "--message"],
+            ["push", "--review"],
+            ["git", "push", "--agent", "codex"],
             ["pull", "--review"],
             ["context", "add", "example", "/srv/example"],
             ["context", "add", "machine", "desktop", "extra"],
@@ -268,7 +243,12 @@ class ParserDispatchTests(unittest.TestCase):
             ["machine", "inspect", "--inspect"],
             ["context", "mod", "alex", "extra"],
             ["context", "delete", "example", "extra"],
-            ["sr", "context", "--refresh", "--full"]
+            ["wtf"],
+            ["sr", "context", "--refresh"],
+            ["sr", "diff", "--note", "production only"],
+            ["sr", "pull", "--review"],
+            ["sr", "push", "--agent", "opencode"],
+            ["sr", "publish", "--note", "dry run"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -332,11 +312,8 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 20)
-        self.assertLess(
-            message.index("COMMAND: rotbot git status"),
-            message.index("COMMAND: rotbot wtf")
-        )
+        self.assertEqual(message.count("=" * 60), 18)
+        self.assertNotIn("COMMAND: rotbot wtf", message)
 
     def test_verbose_help_can_be_scoped_to_a_command_group(self):
         with patch.object(

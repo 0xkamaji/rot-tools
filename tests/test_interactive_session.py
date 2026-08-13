@@ -284,7 +284,6 @@ class RotSessionTests(unittest.TestCase):
             ("pull", "git_pull"),
             ('push -m "ship it"', "git_push"),
             ("git status", "git_status"),
-            ("wtf --deep .", "directory_report"),
             ("context list", "context_list"),
             ("machine inspect", "machine_inspect"),
             ("sr status", "sr_status")

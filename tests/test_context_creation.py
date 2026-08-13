@@ -8,8 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, Mock, patch
 
-from rotbot.agents import runner
-from rotbot.agents.config import OPENCODE
+from rotbot.agents.invocation import AIInvocationResult
 from rotbot.commands.machine import MachineInspection
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
@@ -74,16 +73,30 @@ class ContextCreationTests(unittest.TestCase):
     def run_add(self, answer="n", output=None, returncode=0, args=None):
         output = self.agent_output if output is None else output
         args = self.args() if args is None else args
+        def invoke(invocation, validator=None, **_kwargs):
+            if returncode != 0:
+                return AIInvocationResult(
+                    invocation, returncode, output, 0.1, "Test",
+                    validation_error=f"Test failed with exit code {returncode}."
+                )
+            try:
+                value = validator(output) if validator is not None else None
+            except Exception as error:
+                return AIInvocationResult(
+                    invocation, 0, output, 0.1, "Test",
+                    validation_error=str(error), attempts=invocation.retries + 1
+                )
+            return AIInvocationResult(invocation, 0, output, 0.1, "Test", value=value)
         with patch.object(
             context_creation,
-            "stream_agent",
-            return_value=(returncode, output, 0.1)
-        ) as stream_agent, patch("builtins.input", return_value=answer), patch.object(
+            "invoke",
+            side_effect=invoke
+        ) as invocation, patch("builtins.input", return_value=answer), patch.object(
             context_creation,
             "rot_say"
         ) as rot_say, patch.object(context_creation, "rot_continue") as rot_continue:
             result = context_creation._add_project_context(args)
-        return result, stream_agent, rot_say, rot_continue
+        return result, invocation, rot_say, rot_continue
 
     def test_invalid_names_and_existing_context_are_rejected_before_agent(self):
         for name in ("", "../outside", "nested/name", ".hidden"):
@@ -214,37 +227,6 @@ class ContextCreationTests(unittest.TestCase):
                     get_context_binding(name)["source_path"], str(self.project)
                 )
 
-    def test_context_add_parses_stdout_after_opencode_stderr_is_separated(self):
-        process = SimpleNamespace(
-            stdout=iter((self.agent_output + "\n",)),
-            stderr=iter(("\x1b[0m\n", "> build · qwen3:8b\n", "\x1b[0m\n")),
-            wait=Mock(return_value=0),
-            kill=Mock()
-        )
-
-        def stream_agent(*args, **kwargs):
-            with patch.object(runner.subprocess, "Popen", return_value=process):
-                return runner.stream_agent(*args, **kwargs)
-
-        with patch.object(
-            context_creation, "stream_agent", side_effect=stream_agent
-        ), patch.object(
-            runner, "_select_agent", return_value=OPENCODE
-        ), patch.object(runner, "rot_status"), patch.object(
-            runner, "rot_break"
-        ), patch.object(runner, "rot_output_start"), patch.object(
-            runner, "rot_output_line"
-        ) as output_line, patch.object(runner, "rot_output_end"), patch.object(
-            runner, "rot_say"
-        ), patch("builtins.input", return_value="no"), patch.object(
-            context_creation, "rot_say"
-        ), patch.object(context_creation, "rot_continue"):
-            result = context_creation._add_project_context(self.args(agent="opencode"))
-
-        self.assertEqual(result, 0)
-        output_line.assert_not_called()
-        self.assertFalse((self.project_context_root / "example").exists())
-
     def test_agent_output_rejects_control_characters_and_absolute_paths(self):
         outputs = (
             json.dumps({
@@ -288,53 +270,50 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-    def test_invalid_first_draft_is_retried_once(self):
-        with patch.object(
-            context_creation,
-            "stream_agent",
-            side_effect=((0, "not json", 0.1), (0, self.agent_output, 0.1))
-        ) as stream_agent, patch("builtins.input", return_value="yes"), patch.object(
-            context_creation, "rot_say"
-        ), patch.object(context_creation, "rot_continue"), patch.object(
-            context_creation, "rot_status"
-        ) as rot_status:
-            result = context_creation._add_project_context(self.args())
+    def test_context_enrichment_requests_one_runtime_retry(self):
+        result, invocation, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        self.assertEqual(stream_agent.call_count, 2)
-        rot_status.assert_called_once_with(
-            "The AI response was not a valid context draft. Retrying once..."
-        )
+        request = invocation.call_args.args[0]
+        self.assertEqual(request.purpose, "context_development")
+        self.assertEqual(request.parent_command, "context add")
+        self.assertEqual(request.retries, 1)
+        self.assertFalse(request.conversation)
 
     def test_context_is_created_bound_and_loadable_before_enrichment(self):
         destination = self.project_context_root / "example"
 
-        def verify_created(*_args, **_kwargs):
+        def verify_created(invocation, **_kwargs):
             self.assertTrue((destination / "local" / "identity.md").is_file())
             self.assertTrue((destination / "local" / "state.md").is_file())
             self.assertTrue((destination / "local" / "vision.md").is_file())
             self.assertTrue((destination / "local" / "match.toml").is_file())
             self.assertEqual(contexts.load_context("example").name, "example")
             self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
-            return 127, "", 0.1
+            return AIInvocationResult(
+                invocation, 127, "", 0.1, "Test", validation_error="unavailable"
+            )
 
         with patch.object(
-            context_creation, "stream_agent", side_effect=verify_created
-        ) as stream_agent, patch("builtins.input", return_value="yes"), patch.object(
+            context_creation, "invoke", side_effect=verify_created
+        ) as invocation, patch("builtins.input", return_value="yes"), patch.object(
             context_creation, "rot_say"
         ), patch.object(context_creation, "rot_continue"):
             result = context_creation._add_project_context(self.args())
 
         self.assertEqual(result, 0)
-        stream_agent.assert_called_once()
+        invocation.assert_called_once()
 
     def test_context_develop_replaces_only_placeholders(self):
         self.run_add(answer="yes", output="not json")
 
         with patch.object(
             context_creation,
-            "stream_agent",
-            return_value=(0, self.agent_output, 0.1)
+            "invoke",
+            side_effect=lambda invocation, validator, **_kwargs: AIInvocationResult(
+                invocation, 0, self.agent_output, 0.1, "Test",
+                value=validator(self.agent_output)
+            )
         ):
             result = context_creation.context_develop(
                 argparse.Namespace(name="example", agent=None)
@@ -349,8 +328,11 @@ class ContextCreationTests(unittest.TestCase):
         identity.write_text("# Manual\n\n- Keep this.\n", encoding="utf-8")
         with patch.object(
             context_creation,
-            "stream_agent",
-            return_value=(0, self.agent_output, 0.1)
+            "invoke",
+            side_effect=lambda invocation, validator, **_kwargs: AIInvocationResult(
+                invocation, 0, self.agent_output, 0.1, "Test",
+                value=validator(self.agent_output)
+            )
         ):
             result = context_creation.context_develop(
                 argparse.Namespace(name="example", agent=None)
@@ -423,11 +405,7 @@ class ContextCreationTests(unittest.TestCase):
             )
             return "n"
 
-        with patch.object(
-            context_creation,
-            "stream_agent",
-            return_value=(0, self.agent_output, 0.1)
-        ), patch.object(context_creation, "rot_say") as rot_say, patch.object(
+        with patch.object(context_creation, "rot_say") as rot_say, patch.object(
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=decline):
@@ -530,11 +508,7 @@ class ContextCreationTests(unittest.TestCase):
             (destination / "marker").write_text("other process", encoding="utf-8")
             return "yes"
 
-        with patch.object(
-            context_creation,
-            "stream_agent",
-            return_value=(0, self.agent_output, 0.1)
-        ), patch.object(context_creation, "rot_say"), patch.object(
+        with patch.object(context_creation, "rot_say"), patch.object(
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=create_racing_context):
@@ -559,11 +533,7 @@ class ContextCreationTests(unittest.TestCase):
             )
             return "yes"
 
-        with patch.object(
-            context_creation,
-            "stream_agent",
-            return_value=(0, self.agent_output, 0.1)
-        ), patch.object(context_creation, "rot_say"), patch.object(
+        with patch.object(context_creation, "rot_say"), patch.object(
             context_creation,
             "rot_continue"
         ), patch("builtins.input", side_effect=change_remote):

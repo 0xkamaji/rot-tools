@@ -6,12 +6,9 @@ from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from rotbot.agents.runner import stream_agent
 from rotbot.commands.git import PUSH_CANCELLED, git_push
 from rotbot.contexts.loader import context_show
 from rotbot.integrations.signalrot.context import (
-    refresh_signalrot_context,
-    signalrot_context_block,
     show_signalrot_context
 )
 from rotbot.integrations.signalrot.paths import (
@@ -90,26 +87,6 @@ def _validate_repo(repository):
     return True
 
 
-def _review_task(prompt, working_directory, activity, agent_name=None):
-    rot_say("Starting streamed AI review...")
-    returncode, output, elapsed = stream_agent(
-        f"{prompt}\n\n{signalrot_context_block()}",
-        activity,
-        working_directory,
-        agent_name=agent_name
-    )
-    rot_say(f"AI review finished in {elapsed:.1f}s.")
-
-    if returncode != 0:
-        rot_say(f"AI review failed with exit code {returncode}.")
-        return returncode
-    if not output.strip():
-        rot_say("The AI agent returned an empty review.")
-        return 1
-
-    return 0
-
-
 def sr_status(args):
     repository = _repo_path()
     if repository is None:
@@ -161,16 +138,6 @@ def sr_status(args):
 
 
 def sr_pull(args):
-    review_requested = getattr(args, "review", False)
-    review_note = getattr(args, "note", None)
-    review_agent = getattr(args, "agent", None)
-    if review_note and not review_requested:
-        rot_say("--note requires --review for Signal Rot pull.")
-        return 2
-    if review_agent and not review_requested:
-        rot_say("--agent requires --review for Signal Rot pull.")
-        return 2
-
     repository = _repo_path()
     if repository is None:
         return 1
@@ -210,11 +177,6 @@ def sr_pull(args):
         rot_say("Signal Rot is already up to date with GitHub.")
         return 0
 
-    diff = _capture(["git", "diff", "HEAD..@{upstream}"], repository)
-    if diff.returncode != 0:
-        rot_say(f"Could not inspect incoming changes.\n{diff.stderr.strip()}")
-        return diff.returncode
-
     rot_say(
         "SIGNAL ROT PULL PLAN\n"
         "--------------------\n"
@@ -223,30 +185,6 @@ def sr_pull(args):
         "Incoming commits:\n"
         f"{incoming.stdout.rstrip()}"
     )
-
-    if review_requested:
-        review_prompt = (
-            "Review the incoming Signal Rot website changes before they are "
-            "pulled from GitHub. Keep the review read-only and do not modify "
-            "files. Identify bugs, regressions, deployment risks, and missing "
-            "tests, ordered by severity. If there are no findings, say so.\n\n"
-            f"Repository: {repository}\n"
-            f"Incoming commits:\n{incoming.stdout.rstrip()}\n\n"
-            f"Incoming diff:\n{diff.stdout.rstrip()}"
-            + (
-                f"\n\nAdditional user note:\n{review_note}"
-                if review_note
-                else ""
-            )
-        )
-        review_result = _review_task(
-            review_prompt,
-            repository,
-            "Rotbot is still reviewing the pull...",
-            review_agent
-        )
-        if review_result != 0:
-            return review_result
 
     if not _confirm("Pull these changes into the Signal Rot repository?"):
         rot_say("Signal Rot pull cancelled. No working files were changed.")
@@ -275,59 +213,14 @@ def sr_push(args):
     rot_say(f"Preparing Signal Rot changes for GitHub.\nRepository: {repository}")
     return git_push(
         args,
-        str(repository),
-        "Commit and push the signalrot website source to GitHub.\n\n"
-        + signalrot_context_block()
+        str(repository)
     )
 
 
 def sr_context(args):
-    if not getattr(args, "refresh", False):
-        if getattr(args, "note", None) or getattr(args, "agent", None):
-            rot_say("--note and --agent require --refresh for signalrot context.")
-            return 2
-        if getattr(args, "full", False):
-            return context_show(SimpleNamespace(name="signalrot", vision=False))
-        return show_signalrot_context()
-
-    repository = _repo_path()
-    if repository is None:
-        return 1
-    web_root = _web_root()
-    if web_root is None:
-        return 1
-    if not _validate_repo(repository):
-        return 1
-    if not web_root.is_dir():
-        rot_say(f"signalrot web root not found:\n{web_root}")
-        return 1
-
-    status = _capture(["git", "status", "--short"], repository)
-    if status.returncode != 0:
-        rot_say(f"Could not inspect signalrot Git state.\n{status.stderr.strip()}")
-        return status.returncode
-
-    try:
-        deployment = _capture(
-            _rsync_command(repository, web_root, dry_run=True),
-            repository
-        )
-    except FileNotFoundError:
-        rot_say("rsync is not installed or is not available in PATH.")
-        return 127
-
-    if deployment.returncode != 0:
-        detail = deployment.stderr.strip() or deployment.stdout.strip()
-        rot_say(f"Could not compare signalrot with production.\n{detail}")
-        return deployment.returncode
-
-    return refresh_signalrot_context(
-        args,
-        repository,
-        web_root,
-        status.stdout.rstrip(),
-        deployment.stdout.rstrip()
-    )
+    if getattr(args, "full", False):
+        return context_show(SimpleNamespace(name="signalrot", vision=False))
+    return show_signalrot_context()
 
 
 def sr_diff(args):
@@ -371,48 +264,11 @@ def sr_diff(args):
         f"{planned_changes}"
     )
 
-    note = getattr(args, "note", None)
-    prompt = (
-        "Produce a read-only comparison of the signalrot GitHub repository "
-        "and the live Caddy web root. Do not modify files. Inspect both "
-        "directories as needed and explain exactly what a publish would add, "
-        "update, overwrite, or delete. Identify live-only edits, missing assets, "
-        "secret or development files that could be exposed, and deployment "
-        "risks. Distinguish repository content from live content and cite paths. "
-        "Begin with 'SIGNALROT DIFF REPORT'.\n\n"
-        f"Repository source: {repository}\n"
-        f"Live destination: {web_root}\n"
-        f"rsync dry-run:\n{planned_changes}"
-        + (
-            f"\n\nAdditional user note:\n{note}"
-            if note
-            else ""
-        )
-    )
-    review_result = _review_task(
-        prompt,
-        repository,
-        "Rotbot is still comparing signalrot...",
-        getattr(args, "agent", None)
-    )
-    if review_result != 0:
-        return review_result
-
     rot_say("signalrot deployment comparison complete. No files were changed.")
     return 0
 
 
 def sr_publish(args):
-    review_requested = getattr(args, "review", False)
-    review_note = getattr(args, "note", None)
-    review_agent = getattr(args, "agent", None)
-    if review_note and not review_requested:
-        rot_say("--note requires --review for Signal Rot publish.")
-        return 2
-    if review_agent and not review_requested:
-        rot_say("--agent requires --review for Signal Rot publish.")
-        return 2
-
     repository = _repo_path()
     if repository is None:
         return 1
@@ -463,32 +319,6 @@ def sr_publish(args):
         "Changes:\n"
         f"{dry_run.stdout.rstrip()}"
     )
-
-    if review_requested:
-        review_prompt = (
-            "Review this planned deployment of the Signal Rot repository into "
-            "the live Caddy web root. Keep the review read-only and do not "
-            "modify files. Inspect the source and destination as needed. Focus "
-            "on accidental deletions, missing assets, exposed development or "
-            "secret files, broken site behavior, and deployment risks. If the "
-            "publish is safe, say so explicitly.\n\n"
-            f"Source: {repository}\n"
-            f"Destination: {web_root}\n"
-            f"rsync dry-run:\n{dry_run.stdout.rstrip()}"
-            + (
-                f"\n\nAdditional user note:\n{review_note}"
-                if review_note
-                else ""
-            )
-        )
-        review_result = _review_task(
-            review_prompt,
-            repository,
-            "Rotbot is still reviewing the publish...",
-            review_agent
-        )
-        if review_result != 0:
-            return review_result
 
     if not _confirm("Publish these changes to the live Signal Rot website?"):
         rot_say("Signal Rot publish cancelled. The live website was not changed.")

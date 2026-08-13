@@ -4,7 +4,6 @@ import re
 import shlex
 import subprocess
 
-from rotbot.agents.runner import stream_agent
 from rotbot.ui.terminal import rot_say
 
 
@@ -360,15 +359,6 @@ def git_status(args):
     return 0
 
 
-def _suggested_commit_message(review_output):
-    match = re.search(
-        r"^\s*SUGGESTED_COMMIT_MESSAGE:\s*(.+?)\s*$",
-        review_output,
-        re.MULTILINE
-    )
-    return match.group(1).strip("`\"'") if match else ""
-
-
 def _read_input():
     try:
         return input("> ").strip()
@@ -422,9 +412,8 @@ def _ssh_remote_host(remote_url):
 
 def _ssh_push_environment():
     environment = os.environ.copy()
-    environment["GIT_TERMINAL_PROMPT"] = "0"
     if "GIT_SSH_COMMAND" not in environment:
-        command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        command = ["ssh", "-o", "ConnectTimeout=10"]
         environment["GIT_SSH_COMMAND"] = shlex.join(command)
     return environment
 
@@ -471,39 +460,6 @@ def _preflight_ssh_push(repository, branch, upstream):
     return environment
 
 
-def _edit_commit_message(suggested_message):
-    try:
-        import readline
-    except ImportError:
-        return _read_input()
-
-    readline.set_startup_hook(lambda: readline.insert_text(suggested_message))
-    try:
-        return _read_input()
-    finally:
-        readline.set_startup_hook()
-
-
-def _choose_commit_message(suggested_message):
-    while True:
-        rot_say(
-            f"Suggested commit message:\n{suggested_message}\n\n"
-            "[A]ccept, [E]dit, or [R]eplace?"
-        )
-        choice = _read_input().lower()
-
-        if choice in {"", "a", "accept"}:
-            return suggested_message
-        if choice in {"e", "edit"}:
-            rot_say("Edit the prefilled commit message, then press Enter:")
-            return _edit_commit_message(suggested_message)
-        if choice in {"r", "replace"}:
-            rot_say("Enter a replacement commit message:")
-            return _read_input()
-
-        rot_say("Please choose accept, edit, or replace.")
-
-
 def git_pull(args):
     rot_say("Running: git pull")
 
@@ -521,7 +477,7 @@ def git_pull(args):
     return 0
 
 
-def git_push(args, working_directory=None, review_context=None):
+def git_push(args, working_directory=None):
     command_directory = working_directory or os.getcwd()
 
     try:
@@ -571,16 +527,7 @@ def git_push(args, working_directory=None, review_context=None):
         rot_say(f"Could not inspect the Git repository.\n{detail}")
         return 1
 
-    review_requested = getattr(args, "review", False)
-    review_note = getattr(args, "note", None)
-    review_agent = getattr(args, "agent", None)
     provided_message = getattr(args, "message", None)
-    if review_note and not review_requested:
-        rot_say("--note requires --review for a push command.")
-        return 2
-    if review_agent and not review_requested:
-        rot_say("--agent requires --review for a push command.")
-        return 2
 
     branch_name = branch.stdout.strip() or "(detached HEAD)"
     upstream_name = (
@@ -628,78 +575,8 @@ def git_push(args, working_directory=None, review_context=None):
         rot_say("Push complete.")
         return 0
 
-    suggested_message = ""
-
-    if review_requested:
-        rot_say("Running: git status --short\nRunning: git diff HEAD")
-        diff = _capture_git("diff", "HEAD", working_directory=repository_root)
-
-        if diff.returncode != 0:
-            rot_say(f"Could not read the Git diff.\n{diff.stderr.strip()}")
-            return 1
-
-        review_prompt = (
-            "Review the following uncommitted Git changes. Do not modify any "
-            "files. Report bugs, risks, behavioral regressions, and missing "
-            "tests first, ordered by severity with file references. If there "
-            "are no findings, say so explicitly. Be thorough and include "
-            "sections for findings, testing gaps, and a recommendation. You "
-            "may inspect untracked files listed in the status from the current "
-            "repository, but keep the entire review read-only. End with exactly "
-            "one plain-text line in this format, with no Markdown around the "
-            "message:\nSUGGESTED_COMMIT_MESSAGE: <concise commit message>\n\n"
-            f"Task context: {review_context or 'Commit and push this Git repository.'}\n\n"
-            f"Git status:\n{changes}\n\n"
-            f"Git diff:\n{diff.stdout.rstrip() or '(no tracked diff)'}"
-            + (
-                f"\n\nAdditional user note:\n{review_note}"
-                if review_note
-                else ""
-            )
-        )
-
-        changed_paths = len(changes.splitlines())
-        diff_lines = len(diff.stdout.splitlines())
-        rot_say(
-            "Review input collected.\n"
-            f"Changed paths: {changed_paths}\n"
-            f"Diff lines:    {diff_lines}"
-        )
-        rot_say("Starting streamed AI review...")
-        review_returncode, review_output, review_elapsed = stream_agent(
-            review_prompt,
-            "Rotbot is still reviewing...",
-            repository_root,
-            agent_name=review_agent
-        )
-        rot_say(f"AI review finished in {review_elapsed:.1f}s.")
-
-        if review_returncode != 0:
-            rot_say(
-                f"AI review failed with exit code {review_returncode}."
-            )
-            return review_returncode
-
-        if not review_output.strip():
-            rot_say("The AI agent returned an empty review.")
-
-        suggested_message = _suggested_commit_message(review_output)
-        if suggested_message:
-            rot_say(f"Commit suggestion received: {suggested_message}")
-        else:
-            rot_say("The AI agent did not return a usable commit message suggestion.")
-
-        rot_say("Continue with the commit and push? [y/N]")
-        confirmed = _read_input().lower()
-
-        if confirmed not in {"y", "yes"}:
-            rot_say("Push cancelled. No Git changes were made.")
-            return PUSH_CANCELLED
-
     if provided_message:
         commit_message = provided_message.strip()
-    elif suggested_message:
-        commit_message = _choose_commit_message(suggested_message)
     else:
         rot_say("Enter a commit message:")
         commit_message = _read_input()
@@ -726,13 +603,12 @@ def git_push(args, working_directory=None, review_context=None):
         "  3. git push"
     )
 
-    if not review_requested:
-        rot_say("Proceed? [y/N]")
-        confirmed = _read_input().lower()
+    rot_say("Proceed? [y/N]")
+    confirmed = _read_input().lower()
 
-        if confirmed not in {"y", "yes"}:
-            rot_say("Push cancelled. No Git changes were made.")
-            return PUSH_CANCELLED
+    if confirmed not in {"y", "yes"}:
+        rot_say("Push cancelled. No Git changes were made.")
+        return PUSH_CANCELLED
 
     push_environment = _preflight_ssh_push(
         repository_root,

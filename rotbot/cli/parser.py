@@ -6,7 +6,6 @@ from rotbot.commands.ai import ai_context_preview, ai_session_show, ai_sessions
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
-from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add, context_develop
 from rotbot.contexts.deletion import context_delete
@@ -93,14 +92,6 @@ class RotArgumentParser(argparse.ArgumentParser):
         self.exit(2)
 
 
-def _add_note_argument(command_parser):
-    command_parser.add_argument(
-        "-n",
-        "--note",
-        help="Add a user caveat or request to the AI prompt"
-    )
-
-
 def _add_agent_argument(command_parser):
     command_parser.add_argument(
         "-a",
@@ -112,17 +103,10 @@ def _add_agent_argument(command_parser):
 
 def _add_git_push_arguments(command_parser):
     command_parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Ask the AI agent to review changes before committing"
-    )
-    command_parser.add_argument(
         "-m",
         "--message",
         help="Use this commit message instead of prompting"
     )
-    _add_agent_argument(command_parser)
-    _add_note_argument(command_parser)
 
 
 def show_command_help(args):
@@ -140,14 +124,9 @@ def create_parser():
             "  rot sr status\n"
             "  rot pull\n"
             "  rot push\n"
-            "  rot push --review\n"
             "  rot git pull\n"
-            "  rot git push --review\n"
+            "  rot git push -m \"Update project\"\n"
             "  rot git status\n"
-            "  rot wtf\n"
-            "  rot wtf -n \"also count occurrences of chicken\"\n"
-            "  rot wtf path/to/file.py\n"
-            "  rot wtf --deep path/to/directory\n"
             "  rotbot ask \"What is today's date?\"\n"
             "  rot ask \"What is today's date?\""
         ),
@@ -276,24 +255,6 @@ def create_parser():
         help="Fetch the configured upstream remote before comparing"
     )
     git_status_parser.set_defaults(func=git_status)
-
-    wtf_parser = commands.add_parser(
-        "wtf",
-        help="Explain a file or directory and what it does"
-    )
-    wtf_parser.add_argument(
-        "target",
-        nargs="?",
-        help="Optional file or directory to inspect"
-    )
-    wtf_parser.add_argument(
-        "--deep",
-        action="store_true",
-        help="Inspect broader context, architecture, risks, and testing"
-    )
-    _add_agent_argument(wtf_parser)
-    _add_note_argument(wtf_parser)
-    wtf_parser.set_defaults(func=directory_report)
 
     machine_parser = commands.add_parser(
         "machine",
@@ -457,68 +418,39 @@ def create_parser():
 
     context_parser = sr_commands.add_parser(
         "context",
-        help="Show or refresh signalrot context"
+        help="Show signalrot context"
     )
-    context_display = context_parser.add_mutually_exclusive_group()
-    context_display.add_argument(
-        "--refresh",
-        action="store_true",
-        help="Inspect signalrot and regenerate current-state context"
-    )
-    context_display.add_argument(
+    context_parser.add_argument(
         "--full",
         action="store_true",
         help="Show the complete signalrot identity and state context"
     )
-    _add_agent_argument(context_parser)
-    _add_note_argument(context_parser)
     context_parser.set_defaults(func=sr_context)
 
     diff_parser = sr_commands.add_parser(
         "diff",
         help="Compare the signalrot repository with the live website"
     )
-    _add_agent_argument(diff_parser)
-    _add_note_argument(diff_parser)
     diff_parser.set_defaults(func=sr_diff)
 
     pull_parser = sr_commands.add_parser(
         "pull",
         help="Pull the latest Signal Rot version"
     )
-    pull_parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Review incoming changes with the AI agent before pulling"
-    )
-    _add_agent_argument(pull_parser)
-    _add_note_argument(pull_parser)
     pull_parser.set_defaults(func=sr_pull)
 
     push_parser = sr_commands.add_parser(
         "push",
         help="Push the latest Signal Rot version"
     )
-    push_parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Review changes with the AI agent before pushing"
-    )
-    _add_agent_argument(push_parser)
-    _add_note_argument(push_parser)
+    _add_git_push_arguments(push_parser)
     push_parser.set_defaults(func=sr_push)
 
     publish_parser = sr_commands.add_parser(
         "publish",
         help="Publish the latest Signal Rot version"
     )
-    publish_parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Review the deployment plan with the AI agent before publishing"
-    )
-    _add_agent_argument(publish_parser)
-    _add_note_argument(publish_parser)
+    _add_git_push_arguments(publish_parser)
     publish_parser.set_defaults(func=sr_publish)
 
     return parser

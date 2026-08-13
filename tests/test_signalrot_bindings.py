@@ -80,7 +80,7 @@ class SignalRotBindingTests(unittest.TestCase):
             "_validate_repo"
         ) as validate:
             result = signalrot.sr_pull(
-                argparse.Namespace(review=False, note=None, agent=None)
+                argparse.Namespace()
             )
 
         self.assertEqual(result, 1)

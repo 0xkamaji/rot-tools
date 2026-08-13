@@ -1,6 +1,6 @@
 """AI agent selection and execution."""
 
-__all__ = ("ask_agent", "stream_agent")
+__all__ = ("ask_agent",)
 
 
 def __getattr__(name):

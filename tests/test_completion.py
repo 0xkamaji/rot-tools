@@ -124,7 +124,7 @@ class CompletionProviderTests(unittest.TestCase):
         with patch.object(command_parser, "parse_args") as parse, patch(
             "rotbot.session.shell.run_shell"
         ) as run_shell, patch(
-            "rotbot.agents.runner.stream_agent"
+            "rotbot.agents.invocation.invoke"
         ) as stream_agent:
             before = Path.cwd()
             self.values("context ")

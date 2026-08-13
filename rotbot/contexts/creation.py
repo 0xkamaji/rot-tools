@@ -7,7 +7,7 @@ import tempfile
 import shutil
 from types import SimpleNamespace
 
-from rotbot.agents.runner import stream_agent
+from rotbot.agents.invocation import AIInvocation, invoke
 from rotbot.commands.machine import inspect_local_machine, show_inspection
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.matching import (
@@ -27,7 +27,7 @@ from rotbot.contexts.config import (
     remove_context_bindings,
     set_context_binding
 )
-from rotbot.ui.terminal import rot_continue, rot_say, rot_status
+from rotbot.ui.terminal import rot_continue, rot_say
 
 
 IGNORED_NAMES = {
@@ -788,37 +788,42 @@ def _atomic_replace_documents(destination, expected, documents):
                     pass
 
 
-def _enrich_project_context(name, project, synopsis, destination, agent_name=None):
+def _enrich_project_context(
+    name, project, synopsis, destination, agent_name=None,
+    parent_command="context develop"
+):
     try:
         expected = _placeholder_documents(name, load_match_definition(name))
     except (MatchError, loader.ContextError, ContextCreationError) as error:
         return f"AI enrichment could not start: {error}"
-    prompt = _agent_prompt(name, synopsis)
-    draft_error = None
-    for attempt in range(2):
-        with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
-            returncode, output, _elapsed = stream_agent(
-                prompt,
-                "Rotbot is still enriching context documents...",
-                agent_directory,
+    from rotbot.ui.ai import AIActivityPresenter
+
+    presenter = AIActivityPresenter("developing context", stop_on_stream=False)
+    with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
+        result = invoke(
+            AIInvocation(
+                purpose="context_development",
+                parent_command=parent_command,
+                prompt=_agent_prompt(name, synopsis),
+                working_directory=agent_directory,
                 agent_name=agent_name,
                 timeout=300,
+                structured_output="identity/state context documents",
+                retries=1,
+                conversation=False,
                 isolated=True,
                 display_output=False
-            )
-        if returncode != 0:
-            return f"AI enrichment failed with exit code {returncode}."
-        try:
-            if not output.strip():
-                raise ContextCreationError("The AI agent returned no context documents.")
-            documents = _parse_agent_draft(output, project)
-            _atomic_replace_documents(destination, expected, documents)
-            return None
-        except ContextCreationError as error:
-            draft_error = error
-            if attempt == 0:
-                rot_status("The AI response was not a valid context draft. Retrying once...")
-    return str(draft_error)
+            ),
+            validator=lambda output: _parse_agent_draft(output, project),
+            on_event=presenter
+        )
+    if not result.successful:
+        return result.validation_error or f"AI enrichment failed with exit code {result.returncode}."
+    try:
+        _atomic_replace_documents(destination, expected, result.value)
+    except ContextCreationError as error:
+        return str(error)
+    return None
 
 
 def _create_and_bind(
@@ -1028,7 +1033,8 @@ def _add_project_context(args):
         project,
         synopsis,
         destination,
-        getattr(args, "agent", None)
+        getattr(args, "agent", None),
+        parent_command="context add"
     )
     if enrichment_error is not None:
         rot_say(

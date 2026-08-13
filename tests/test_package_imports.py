@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.agents import ask_agent, stream_agent
+from rotbot.agents import ask_agent
 from rotbot.contexts import loader
 from rotbot.contexts.matching import match_contexts
 
@@ -45,7 +45,6 @@ class PackageImportTests(unittest.TestCase):
         "rotbot.commands.git",
         "rotbot.commands.ai",
         "rotbot.commands.machine",
-        "rotbot.commands.wtf",
         "rotbot.integrations.signalrot.commands",
         "rotbot.integrations.signalrot.context",
         "rotbot.integrations.signalrot.paths"
@@ -57,7 +56,6 @@ class PackageImportTests(unittest.TestCase):
                 self.assertIsNotNone(importlib.import_module(module_name))
 
         self.assertTrue(callable(ask_agent))
-        self.assertTrue(callable(stream_agent))
 
     def test_python_module_entry_point_renders_help(self):
         repository = Path(__file__).resolve().parent.parent

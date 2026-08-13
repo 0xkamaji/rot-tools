@@ -31,7 +31,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         backend = conversation.OpenCodeBackend()
 
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
-            conversation.subprocess, "Popen", side_effect=(first, second)
+            conversation, "start_provider_process", side_effect=(first, second)
         ) as popen:
             first_result = backend.generate(
                 "initial context", Path("/one"), authority="TALK"
@@ -55,10 +55,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         permissions = json.loads(
             popen.call_args_list[0].kwargs["env"]["OPENCODE_PERMISSION"]
         )
-        self.assertIs(
-            popen.call_args_list[0].kwargs["stderr"],
-            conversation.subprocess.STDOUT
-        )
+        self.assertTrue(popen.call_args_list[0].kwargs["merge_stderr"])
         self.assertEqual(permissions, {"*": "deny"})
         inline_config = json.loads(
             popen.call_args_list[0].kwargs["env"]["OPENCODE_CONFIG_CONTENT"]
@@ -88,7 +85,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         with patch.object(
             conversation, "which", return_value="/bin/opencode"
         ), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ):
             stream = backend.stream_generate("question", Path("/scope"), "TALK")
             first = next(stream)
@@ -111,7 +108,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         with patch.object(
             conversation, "which", return_value="/bin/opencode"
         ), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ):
             stream = backend.stream_generate("question", Path("/scope"), "TALK")
             self.assertEqual(next(stream), conversation.TextDelta("partial"))
@@ -131,7 +128,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         with patch.object(
             conversation, "which", return_value="/bin/opencode"
         ), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ):
             result = backend.generate("question", Path("/scope"), "TALK")
 
@@ -143,7 +140,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         ])
         backend = conversation.OpenCodeBackend()
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ) as popen:
             backend.generate("work", Path("/scope"), authority="WORK")
 
@@ -157,7 +154,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         with patch.object(
             conversation, "which", return_value="/bin/opencode"
         ), patch.object(
-            conversation.subprocess, "Popen"
+            conversation, "start_provider_process"
         ) as popen, self.assertRaisesRegex(
             conversation.ConversationError, "Unsupported AI authority"
         ):
@@ -171,7 +168,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         ])
         backend = conversation.OpenCodeBackend()
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ) as popen:
             backend.generate("talk", Path("/scope"), authority="TALK")
 
@@ -194,7 +191,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         ), patch.object(
             conversation, "which", return_value="/bin/opencode"
         ), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ) as popen:
             backend.generate("talk", Path("/scope"), authority="TALK")
 
@@ -262,7 +259,7 @@ class OpenCodeBackendTests(unittest.TestCase):
 
         failed = self.process([], returncode=1, errors=("provider failed\n",))
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
-            conversation.subprocess, "Popen", return_value=failed
+            conversation, "start_provider_process", return_value=failed
         ), self.assertRaisesRegex(conversation.ConversationError, "provider failed"):
             backend.generate("hello", Path("/tmp"))
 
@@ -277,7 +274,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         backend.session_id = "ses_rot"
 
         with patch.object(conversation, "which", return_value="/bin/opencode"), patch.object(
-            conversation.subprocess, "Popen", return_value=process
+            conversation, "start_provider_process", return_value=process
         ), self.assertRaises(KeyboardInterrupt):
             backend.generate("hello", Path("/tmp"))
 

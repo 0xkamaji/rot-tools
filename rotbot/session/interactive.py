@@ -57,7 +57,6 @@ Rot commands can also be entered directly, including:
   git status
   git pull
   git push
-  wtf
   context inspect
   context list
   context show NAME

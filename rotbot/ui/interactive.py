@@ -2,13 +2,11 @@ from datetime import datetime
 import os
 from shutil import get_terminal_size
 import sys
-import threading
 
 from rotbot.ui.terminal import ROTBOT_ARTIFACT, ROTBOT_BODY, _terminal_width
+from rotbot.ui.ai import ThinkingSpinner, _output_lock
 
 
-SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-_output_lock = threading.RLock()
 
 
 def _context_fields(session):
@@ -105,56 +103,6 @@ def interactive_prompt(session, stream=None):
 def render_rot_response(session, message):
     assistant = (session.context.assistant or "rot").strip().lower()
     print(f"\n{assistant} {ROTBOT_ARTIFACT}\n{message.rstrip()}\n")
-
-
-class ThinkingSpinner:
-    def __init__(self, assistant="rot", stream=None, interval=0.09):
-        self.assistant = assistant
-        self.stream = sys.stdout if stream is None else stream
-        self.interval = interval
-        self.stop_event = threading.Event()
-        self.thread = None
-        self.animated = False
-
-    def _write(self, text):
-        with _output_lock:
-            self.stream.write(text)
-            self.stream.flush()
-
-    def start(self):
-        if self.thread is not None:
-            return
-        self.stop_event.clear()
-        self.animated = (
-            getattr(self.stream, "isatty", lambda: False)()
-            and os.environ.get("TERM", "").lower() not in {"", "dumb"}
-        )
-        if not self.animated:
-            self._write(f"\n{self.assistant} · thinking\n")
-            return
-        self.thread = threading.Thread(target=self._run, name="rot-thinking-spinner")
-        self.thread.start()
-
-    def _run(self):
-        index = 0
-        while not self.stop_event.is_set():
-            self._write(
-                f"\r\033[2K{self.assistant} · thinking  "
-                f"{SPINNER_FRAMES[index % len(SPINNER_FRAMES)]}"
-            )
-            index += 1
-            self.stop_event.wait(self.interval)
-
-    def stop(self, clear=True):
-        self.stop_event.set()
-        thread = self.thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join()
-        self.thread = None
-        was_animated = self.animated
-        self.animated = False
-        if was_animated and clear:
-            self._write("\r\033[2K")
 
 
 class StreamingRotResponse:

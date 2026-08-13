@@ -213,8 +213,6 @@ class CompletionProvider:
                     prefix,
                     "conversation"
                 )
-            if path == ("wtf",) and destination == "target":
-                return self._paths(prefix, quote=quote)
             if path == ("context", "bind"):
                 return self._paths(prefix, directories_only=True, quote=quote)
         except Exception:

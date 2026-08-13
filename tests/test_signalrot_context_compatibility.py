@@ -1,23 +1,15 @@
 import argparse
 from pathlib import Path
-import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import loader, machines
 from rotbot.integrations.signalrot import commands as signalrot
-from rotbot.integrations.signalrot import context as signalrot_context
 
 
 class SignalRotContextCompatibilityTests(unittest.TestCase):
     def test_full_context_delegates_to_generic_context_display(self):
-        args = argparse.Namespace(
-            refresh=False,
-            full=True,
-            agent=None,
-            note=None
-        )
+        args = argparse.Namespace(full=True)
 
         with patch.object(signalrot, "context_show", return_value=6) as context_show:
             result = signalrot.sr_context(args)
@@ -27,212 +19,37 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         self.assertEqual(shown_args.name, "signalrot")
         self.assertFalse(shown_args.vision)
 
-    def test_refresh_still_delegates_to_specialized_implementation(self):
-        args = argparse.Namespace(refresh=True, agent="codex", note="check")
-        repository = Path("/signalrot")
-        web_root = Path.cwd()
-        status = SimpleNamespace(returncode=0, stdout="clean\n", stderr="")
-        deployment = SimpleNamespace(
+    def test_summary_context_uses_specialized_display(self):
+        with patch.object(signalrot, "show_signalrot_context", return_value=4) as show:
+            result = signalrot.sr_context(argparse.Namespace(full=False))
+
+        self.assertEqual(result, 4)
+        show.assert_called_once_with()
+
+    def test_diff_prints_rsync_dry_run_output(self):
+        repository = Path("/signalrot/source")
+        production = Path("/signalrot/production")
+        dry_run = SimpleNamespace(
             returncode=0,
-            stdout="deployment diff\n",
+            stdout=">f.st...... index.html\n*deleting old.html\n",
             stderr=""
         )
 
         with patch.object(signalrot, "_repo_path", return_value=repository), patch.object(
-            signalrot,
-            "_web_root",
-            return_value=web_root
+            signalrot, "_web_root", return_value=production
         ), patch.object(signalrot, "_validate_repo", return_value=True), patch.object(
-            signalrot,
-            "_capture",
-            side_effect=(status, deployment)
-        ), patch.object(
-            signalrot,
-            "refresh_signalrot_context",
-            return_value=7
-        ) as refresh:
-            result = signalrot.sr_context(args)
-
-        self.assertEqual(result, 7)
-        refresh.assert_called_once_with(
-            args,
-            repository,
-            web_root,
-            "clean",
-            "deployment diff"
-        )
-
-    def test_existing_local_signalrot_files_are_excluded_from_prompt(self):
-        block = signalrot_context.signalrot_context_block()
-        identity_path, state_path = loader.context_paths("signalrot")
-
-        self.assertEqual(
-            identity_path.parent,
-            loader.CONTEXT_ROOT / "projects" / "signalrot" / "local"
-        )
-        self.assertNotIn(
-            identity_path.read_text(encoding="utf-8"),
-            block
-        )
-        self.assertNotIn(
-            state_path.read_text(encoding="utf-8"),
-            block
-        )
-
-    def test_existing_prompt_block_does_not_include_sibling_vision(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            context_directory = root / "projects" / "signalrot"
-            context_directory.mkdir(parents=True)
-            shareable = context_directory / "shareable"
-            local = context_directory / "local"
-            shareable.mkdir()
-            local.mkdir()
-            identity_path = shareable / "identity.md"
-            state_path = shareable / "state.md"
-            vision_path = shareable / "vision.md"
-            match_path = shareable / "match.md"
-            (context_directory / "metadata.toml").write_text(
-                loader.render_project_metadata("signalrot"), encoding="utf-8"
-            )
-            identity_path.write_text("identity only", encoding="utf-8")
-            state_path.write_text("state only", encoding="utf-8")
-            vision_path.write_text("vision must stay separate", encoding="utf-8")
-            match_path.write_text("match must stay separate", encoding="utf-8")
-
-            with patch.object(loader, "CONTEXT_ROOT", root):
-                block = signalrot_context.signalrot_context_block()
-
-        self.assertIn("identity only", block)
-        self.assertIn("state only", block)
-        self.assertNotIn("vision must stay separate", block)
-        self.assertNotIn("match must stay separate", block)
-
-    def test_signalrot_prompt_does_not_load_same_named_machine_or_local_record(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            project = root / "context" / "projects" / "signalrot"
-            shareable = project / "shareable"
-            local_project = project / "local"
-            shareable.mkdir(parents=True)
-            local_project.mkdir()
-            (project / "metadata.toml").write_text(
-                loader.render_project_metadata("signalrot"), encoding="utf-8"
-            )
-            (shareable / "identity.md").write_text(
-                "project identity", encoding="utf-8"
-            )
-            (shareable / "state.md").write_text("project state", encoding="utf-8")
-            (local_project / "identity.md").write_text(
-                "ROT_LOCAL_SECRET_SENTINEL_93A7", encoding="utf-8"
-            )
-            machine_root = root / "context" / "machines"
-            machine_root.mkdir()
-            machine = machines.create_machine(
-                "signalrot",
-                machines_root=machine_root
-            )
-            (machine / "local" / "identity.md").write_text(
-                "machine identity sentinel", encoding="utf-8"
-            )
-            config = root / "config" / "rotbot" / "config.toml"
-            local = machines.create_local_machine_record(
-                "signalrot",
-                {"connection": {"hostname": "local sentinel"}},
-                target_config=config
-            )
-
-            with patch.object(
-                machines,
-                "load_local_machine_record"
-            ) as load_local, patch.object(loader, "CONTEXT_ROOT", root / "context"):
-                block = signalrot_context.signalrot_context_block()
-
-        self.assertIn("project identity", block)
-        self.assertIn("project state", block)
-        self.assertNotIn("machine identity sentinel", block)
-        self.assertNotIn("local sentinel", block)
-        self.assertNotIn("ROT_LOCAL_SECRET_SENTINEL_93A7", block)
-        load_local.assert_not_called()
-
-    def test_signalrot_ai_review_uses_generic_context_prompt(self):
-        with patch.object(
-            signalrot,
-            "stream_agent",
-            return_value=(0, "review", 0.1)
-        ) as stream_agent, patch.object(signalrot, "rot_say"):
-            result = signalrot._review_task("Review task", Path.cwd(), "Reviewing...")
+            Path, "is_dir", return_value=True
+        ), patch.object(signalrot, "_capture", return_value=dry_run) as capture, patch.object(
+            signalrot, "rot_say"
+        ) as rot_say:
+            result = signalrot.sr_diff(argparse.Namespace())
 
         self.assertEqual(result, 0)
-        prompt = stream_agent.call_args.args[0]
-        self.assertNotIn("# SignalRot Identity", prompt)
-        self.assertNotIn("# SignalRot Current State", prompt)
-
-    def test_refresh_modifies_only_state(self):
-        refreshed_at = "2026-08-10 17:16 UTC"
-        sections = ("OPPSEC", "Hacks", "Signals", "Beats", "Frames", "Contact")
-        output = (
-            "# SignalRot Current State\n\n"
-            f"Last refreshed: {refreshed_at}\n\n"
-            "## Section updates\n\n"
-            + "\n\n".join(
-                f"### {section}\n- Last changed: unknown"
-                for section in sections
-            )
-        )
-
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            context_directory = root / "projects" / "signalrot"
-            context_directory.mkdir(parents=True)
-            identity_path = context_directory / "identity.md"
-            state_path = context_directory / "state.md"
-            vision_path = context_directory / "vision.md"
-            match_path = context_directory / "match.md"
-            identity_path.write_text("identity unchanged", encoding="utf-8")
-            state_path.write_text("old state", encoding="utf-8")
-            vision_path.write_text("vision unchanged", encoding="utf-8")
-            match_path.write_text("match unchanged", encoding="utf-8")
-
-            with patch.object(loader, "CONTEXT_ROOT", root), patch.object(
-                signalrot_context,
-                "datetime"
-            ) as datetime_mock, patch.object(
-                signalrot_context,
-                "stream_agent",
-                return_value=(0, output, 0.5)
-            ), patch.object(
-                signalrot_context,
-                "show_signalrot_context",
-                return_value=0
-            ), patch.object(signalrot_context, "rot_say"):
-                datetime_mock.now.return_value.strftime.return_value = refreshed_at
-                result = signalrot_context.refresh_signalrot_context(
-                    argparse.Namespace(agent=None, note=None),
-                    root,
-                    root,
-                    "",
-                    ""
-                )
-
-            self.assertEqual(result, 0)
-            self.assertEqual(
-                identity_path.read_text(encoding="utf-8"),
-                "identity unchanged"
-            )
-            self.assertEqual(
-                vision_path.read_text(encoding="utf-8"),
-                "vision unchanged"
-            )
-            self.assertEqual(
-                match_path.read_text(encoding="utf-8"),
-                "match unchanged"
-            )
-            self.assertEqual(
-                (context_directory / "local" / "state.md").read_text(encoding="utf-8"),
-                output + "\n"
-            )
-            self.assertFalse((context_directory / "state.tmp").exists())
+        command = capture.call_args.args[0]
+        self.assertIn("--dry-run", command)
+        self.assertIn("--itemize-changes", command)
+        output = "\n".join(call.args[0] for call in rot_say.call_args_list)
+        self.assertIn(">f.st...... index.html\n*deleting old.html", output)
 
 
 if __name__ == "__main__":

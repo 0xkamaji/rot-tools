@@ -2,7 +2,8 @@ import json
 import os
 from dataclasses import dataclass
 from shutil import which
-import subprocess
+
+from rotbot.agents.invocation import AIInvocation, start_provider_process
 
 TALK_AGENT = "rotbot-talk"
 
@@ -109,14 +110,20 @@ class OpenCodeBackend:
             self.directory = cwd
             self.authority = authority
         try:
-            process = subprocess.Popen(
-                self._command(message, authority),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+            invocation = AIInvocation(
+                purpose="ask",
+                parent_command="interactive",
+                prompt=message,
+                working_directory=self.directory,
+                agent_name="opencode",
+                conversation=True,
+                display_output=True
+            )
+            process = start_provider_process(
+                self._command(invocation.prompt, authority),
                 cwd=self.directory,
-                env=environment
+                env=environment,
+                merge_stderr=True
             )
         except (FileNotFoundError, OSError) as error:
             raise ConversationError(f"Could not start OpenCode: {error}") from None

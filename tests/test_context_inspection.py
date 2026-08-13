@@ -313,7 +313,7 @@ class ContextInspectionTests(unittest.TestCase):
     def test_inspection_never_invokes_an_ai_agent(self):
         self.write_config()
 
-        with patch("rotbot.agents.runner.stream_agent") as stream_agent, patch(
+        with patch("rotbot.agents.invocation.invoke") as stream_agent, patch(
             "rotbot.agents.runner.ask_agent"
         ) as ask_agent:
             inspection.inspect_current_context(self.outside)

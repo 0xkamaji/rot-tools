@@ -350,7 +350,7 @@ class ContextMatchingTests(unittest.TestCase):
     def test_matching_never_invokes_an_agent(self):
         self.create_context("project", SOURCE_ONLY)
         repository = self.create_repository("github.com/example/project")
-        with patch("rotbot.agents.runner.stream_agent") as stream_agent:
+        with patch("rotbot.agents.invocation.invoke") as stream_agent:
             context_matching.match_contexts(repository, caddy_paths=())
         stream_agent.assert_not_called()
 
