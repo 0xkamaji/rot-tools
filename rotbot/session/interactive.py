@@ -22,6 +22,7 @@ from rotbot.session.capabilities import (
 from rotbot.session.completion import CompletionProvider
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
+from rotbot.session.last import LastResponseError, edit_text, learn_text, save_text
 from rotbot.session.router import route_input
 from rotbot.session.shell import run_shell
 from rotbot.ui.interactive import (
@@ -48,6 +49,11 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   unset NAME          Remove a session environment variable
   talk                Use reasoning-only AI with no tool authority
   work                Grant scoped agentic authority for this project
+  last show           Show the latest AI response
+  last edit           Edit it in $VISUAL/$EDITOR
+  last ask [MESSAGE]  Ask AI about it
+  last save           Save it to Rot's local data
+  last learn          Teach Rot from it
   Tab                 Complete commands, contexts, executables, and paths
   exit / quit         End the Rot session
 
@@ -82,6 +88,13 @@ Use the same command and options that would follow `rot` in the normal CLI."""
 
 
 @dataclass
+class LastResponse:
+    text: str
+    source: str = "ai"
+    edited: bool = False
+
+
+@dataclass
 class RotSession:
     started_at: datetime
     cwd: Path
@@ -91,6 +104,7 @@ class RotSession:
     authority_mode: str = "TALK"
     work_project_id: str | None = None
     assistant_policy: AssistantCapabilityPolicy | None = None
+    last_response: LastResponse | None = None
 
     @classmethod
     def start(cls):
@@ -189,13 +203,13 @@ class RotSession:
     def send_ai(self, message, header=None):
         if not message:
             rot_say("Usage: ? MESSAGE")
-            return
+            return None
         if self.ai is None:
             self.ai = AIConversation.create(store=ConversationStore())
         state = self.capability_state
         if not state.conversation:
             rot_say(state.denial_reason or "AI conversation is unavailable.")
-            return
+            return None
         self.authority_mode = state.mode
         self.work_project_id = state.work_project_id
         self.ai.status = "thinking"
@@ -215,13 +229,13 @@ class RotSession:
         except (ConversationError, ConversationStoreError) as error:
             renderer.finish()
             rot_say(str(error))
-            return
+            return None
         except KeyboardInterrupt:
             self.ai.abort_current()
             renderer.finish(interrupted=True)
             if not renderer.started:
                 rot_say("AI response interrupted.")
-            return
+            return None
         finally:
             renderer.finish()
             if self.ai.status == "thinking":
@@ -232,6 +246,38 @@ class RotSession:
             render_rot_response(self, result.response)
         elif not result.response:
             rot_say("The AI backend returned no conversational response.")
+            return None
+        if isinstance(result.response, str) and result.response:
+            self.last_response = LastResponse(result.response)
+            return result.response
+        return None
+
+    def edit_last(self, header=None):
+        if self.last_response is None:
+            raise LastResponseError("No AI response is available in this session.")
+        if header is not None:
+            header.stop()
+        try:
+            edited = edit_text(self.last_response.text)
+        finally:
+            if header is not None:
+                header.start(self)
+        self.last_response.text = edited
+        self.last_response.edited = True
+
+    def ask_last(self, instruction=None, header=None):
+        if self.last_response is None:
+            raise LastResponseError("No AI response is available in this session.")
+        previous = self.last_response.text
+        message = (
+            "FOLLOW-UP INSTRUCTION\n"
+            f"{instruction}\n\n"
+            "PREVIOUS RESPONSE\n"
+            f"{previous}"
+            if instruction else
+            "PREVIOUS RESPONSE\n" + previous
+        )
+        return self.send_ai(message, header=header)
 
 
 def _run_rot_command(arguments, session=None):
@@ -287,6 +333,49 @@ def evaluate_input(session, line, header=None):
         return False
     if command == "help" and len(arguments) == 1:
         rot_say(INTERACTIVE_HELP)
+        return True
+    if command == "last":
+        action = arguments[1].lower() if len(arguments) > 1 else None
+        if action == "show" and len(arguments) == 2:
+            if session.last_response is None:
+                rot_say("No AI response is available in this session.")
+            else:
+                print(session.last_response.text)
+            return True
+        if action == "edit" and len(arguments) == 2:
+            try:
+                session.edit_last(header=header)
+            except LastResponseError as error:
+                rot_say(str(error))
+            return True
+        if action == "ask":
+            instruction = " ".join(arguments[2:]) or None
+            try:
+                session.ask_last(instruction, header=header)
+            except LastResponseError as error:
+                rot_say(str(error))
+            return True
+        if action == "save" and len(arguments) == 2:
+            if session.last_response is None:
+                rot_say("No AI response is available in this session.")
+                return True
+            try:
+                path = save_text(session.last_response.text)
+            except LastResponseError as error:
+                rot_say(str(error))
+            else:
+                rot_say(f"Saved LAST to:\n{path}")
+            return True
+        if action == "learn" and len(arguments) == 2:
+            if session.last_response is None:
+                rot_say("No AI response is available in this session.")
+                return True
+            try:
+                learn_text(session.last_response.text)
+            except LastResponseError as error:
+                rot_say(str(error))
+            return True
+        rot_say("Usage: last show|edit|ask [MESSAGE]|save|learn")
         return True
     if command == "status" and len(arguments) == 1:
         rot_say(render_session_status(session))

@@ -437,6 +437,146 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertEqual(self.session.ai_status, "active")
         response.assert_called_once_with(self.session, "A conversational answer")
+        self.assertEqual(self.session.last_response.text, "A conversational answer")
+        self.assertNotEqual(self.session.last_response.text, "Why?")
+
+    def test_new_session_has_no_last_and_successive_ai_responses_replace_it(self):
+        self.assertIsNone(self.session.last_response)
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.send.side_effect = (Mock(response="first"), Mock(response="second"))
+        self.session.ai = chat
+        with patch.object(interactive, "render_rot_response"):
+            self.session.send_ai("prompt one")
+            self.session.send_ai("prompt two")
+
+        self.assertEqual(self.session.last_response.text, "second")
+
+    def test_failed_interrupted_and_empty_ai_do_not_replace_last(self):
+        self.session.last_response = interactive.LastResponse("keep")
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.send.side_effect = (
+            interactive.ConversationError("failed"),
+            KeyboardInterrupt(),
+            Mock(response="")
+        )
+        self.session.ai = chat
+        with patch.object(interactive, "rot_say"), patch.object(
+            interactive, "StreamingRotResponse"
+        ) as renderer:
+            renderer.return_value.started = False
+            for message in ("failed", "interrupted", "empty"):
+                self.session.send_ai(message)
+
+        self.assertEqual(self.session.last_response.text, "keep")
+
+    def test_last_show_edit_save_and_learn_preserve_expected_ownership(self):
+        self.session.last_response = interactive.LastResponse("original")
+        header = Mock()
+        with patch("builtins.print") as output:
+            interactive.evaluate_input(self.session, "last show")
+        output.assert_called_once_with("original")
+
+        with patch.object(interactive, "edit_text", return_value="edited\n") as edit:
+            interactive.evaluate_input(self.session, "last edit", header=header)
+        edit.assert_called_once_with("original")
+        self.assertEqual(self.session.last_response.text, "edited\n")
+        self.assertTrue(self.session.last_response.edited)
+        self.assertEqual(header.method_calls, [call.stop(), call.start(self.session)])
+
+        before = self.session.last_response
+        with patch.object(interactive, "save_text", return_value=Path("/saved")) as save:
+            interactive.evaluate_input(self.session, "last save")
+        save.assert_called_once_with("edited\n")
+        self.assertIs(self.session.last_response, before)
+
+        with patch.object(
+            interactive, "learn_text", side_effect=interactive.LastResponseError("unavailable")
+        ) as learn, patch.object(interactive, "rot_say"):
+            interactive.evaluate_input(self.session, "last learn")
+        learn.assert_called_once_with("edited\n")
+        self.assertIs(self.session.last_response, before)
+
+    def test_last_show_without_response_fails_cleanly(self):
+        with patch.object(interactive, "rot_say") as say:
+            interactive.evaluate_input(self.session, "last show")
+        self.assertIn("No AI response", say.call_args.args[0])
+
+    def test_last_edit_failure_leaves_response_unchanged(self):
+        self.session.last_response = interactive.LastResponse("keep")
+        with patch.object(
+            interactive, "edit_text", side_effect=interactive.LastResponseError("failed")
+        ), patch.object(interactive, "rot_say"):
+            interactive.evaluate_input(self.session, "last edit")
+        self.assertEqual(self.session.last_response.text, "keep")
+        self.assertFalse(self.session.last_response.edited)
+
+    def test_last_ask_explicitly_sends_edited_text_and_replaces_last(self):
+        self.session.last_response = interactive.LastResponse("edited response", edited=True)
+        with patch.object(self.session, "send_ai", return_value="new response") as send:
+            def update(message, header=None):
+                self.session.last_response = interactive.LastResponse("new response")
+                return "new response"
+            send.side_effect = update
+            interactive.evaluate_input(
+                self.session, 'last ask "Condense this"'
+            )
+
+        message = send.call_args.args[0]
+        self.assertIn("FOLLOW-UP INSTRUCTION\nCondense this", message)
+        self.assertIn("PREVIOUS RESPONSE\nedited response", message)
+        self.assertEqual(self.session.last_response.text, "new response")
+
+    def test_last_ask_failure_preserves_previous_and_authority(self):
+        previous = interactive.LastResponse("keep")
+        self.session.last_response = previous
+        self.session.authority_mode = "TALK"
+        with patch.object(self.session, "send_ai", return_value=None) as send:
+            interactive.evaluate_input(self.session, "last ask")
+
+        self.assertIn("PREVIOUS RESPONSE\nkeep", send.call_args.args[0])
+        self.assertIs(self.session.last_response, previous)
+        self.assertEqual(self.session.authority_mode, "TALK")
+
+    def test_normal_prompt_never_implicitly_includes_last(self):
+        self.session.last_response = interactive.LastResponse("private scratch response")
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.send.return_value = Mock(response="new")
+        self.session.ai = chat
+        with patch.object(interactive, "render_rot_response"):
+            self.session.send_ai("ordinary question")
+
+        self.assertEqual(chat.send.call_args.args[0], "ordinary question")
+        self.assertNotIn("private scratch response", chat.send.call_args.args[0])
+
+    def test_last_ask_uses_current_work_conversation_and_authority(self):
+        self.session.assistant_policy = AssistantCapabilityPolicy(
+            work_enabled=True, valid=True
+        )
+        self.assertTrue(self.session.enable_work())
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.send.return_value = Mock(response="worked answer")
+        self.session.ai = chat
+        self.session.last_response = interactive.LastResponse("previous")
+        with patch.object(interactive, "render_rot_response"):
+            interactive.evaluate_input(self.session, 'last ask "continue"')
+
+        self.assertIs(self.session.ai, chat)
+        self.assertEqual(chat.send.call_args.kwargs["authority"], "WORK")
+        self.assertEqual(chat.send.call_args.kwargs["capability_state"].mode, "WORK")
+        self.assertEqual(self.session.authority_mode, "WORK")
+        self.assertEqual(self.session.last_response.text, "worked answer")
+
+    def test_shell_rot_and_debug_output_do_not_update_last(self):
+        previous = interactive.LastResponse("keep")
+        self.session.last_response = previous
+        with patch.object(interactive, "run_shell", return_value=0), patch.object(
+            interactive, "_run_rot_command", return_value=0
+        ), patch("rotbot.session.router.is_shell_executable", return_value=True):
+            interactive.evaluate_input(self.session, "ls -lah")
+            interactive.evaluate_input(self.session, "pwd")
+            interactive.evaluate_input(self.session, "debug ask question")
+
+        self.assertIs(self.session.last_response, previous)
 
     def test_streamed_ai_text_does_not_refresh_fixed_header_mid_response(self):
         chat = Mock(spec=session_ai.AIConversation)

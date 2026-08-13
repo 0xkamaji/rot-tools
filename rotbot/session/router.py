@@ -11,7 +11,7 @@ from rotbot.session.shell import available_executables, is_shell_executable
 
 BUILTINS = {
     "help", "status", "history", "pwd", "cd", "clear", "exit", "quit",
-    "export", "unset", "talk", "work"
+    "export", "unset", "talk", "work", "last"
 }
 CONVERSATIONAL_STARTERS = {
     "why", "what", "how", "who", "where", "when", "can", "could",
