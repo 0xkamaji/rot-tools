@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import tempfile
 import tomllib
 import unittest
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 from rotbot.agents import invocation
 from rotbot.agents.config import OPENCODE
-from rotbot.contexts import entities, inspection, loader
+from rotbot.contexts import entities, inspection, learning, loader, modification
 
 
 class EntityContextTests(unittest.TestCase):
@@ -150,7 +151,7 @@ class AssistantLayeringTests(unittest.TestCase):
         self.assertEqual(tuple(loaded), ("state.md",))
         self.assertIn("Local state", repr(loaded["state.md"]))
 
-    def test_populated_local_documents_override_defaults_without_duplicates(self):
+    def test_local_assistant_is_authoritative_without_builtin_fallback(self):
         self.create_builtin()
         _assistant, destination = self.create_local()
         self.write(destination / "shareable", "behavior.md", "Local behavior")
@@ -159,15 +160,15 @@ class AssistantLayeringTests(unittest.TestCase):
 
         loaded = self.loaded("egress")
 
-        self.assertEqual(len(loaded), 4)
+        self.assertEqual(len(loaded), 3)
         self.assertIn("Local behavior", repr(loaded["behavior.md"]))
         self.assertNotIn("Builtin behavior", repr(loaded["behavior.md"]))
         self.assertIn("Local identity", repr(loaded["identity.md"]))
         self.assertNotIn("Builtin identity", repr(loaded["identity.md"]))
-        self.assertIn("Builtin relationship", repr(loaded["relationship.md"]))
+        self.assertNotIn("relationship.md", loaded)
         self.assertIn("Local state", repr(loaded["state.md"]))
 
-    def test_empty_local_template_does_not_erase_builtin_default(self):
+    def test_empty_local_document_does_not_resurrect_builtin_default(self):
         self.create_builtin()
         _assistant, destination = self.create_local()
         (destination / "shareable" / "behavior.md").write_text(
@@ -176,7 +177,7 @@ class AssistantLayeringTests(unittest.TestCase):
 
         loaded = self.loaded("egress")
 
-        self.assertIn("Builtin behavior", repr(loaded["behavior.md"]))
+        self.assertNotIn("behavior.md", loaded)
 
     def test_egress_excludes_private_local_override_while_full_retains_it(self):
         self.create_builtin()
@@ -186,18 +187,125 @@ class AssistantLayeringTests(unittest.TestCase):
         egress = self.loaded("egress")
         full = self.loaded("full")
 
-        self.assertIn("Builtin behavior", repr(egress["behavior.md"]))
+        self.assertNotIn("behavior.md", egress)
         self.assertNotIn("Private behavior", repr(egress))
         self.assertIn("Private behavior", repr(full["behavior.md"]))
 
-    def test_different_builtin_and_local_ids_fail_instead_of_merging(self):
+    def test_local_loading_does_not_consult_conflicting_builtin(self):
         self.create_builtin("00000000-0000-4000-8000-000000000007")
         self.create_local()
 
-        with self.assertRaisesRegex(
-            entities.EntityContextError, "Built-in and local assistant contexts conflict"
-        ):
-            entities.load_assistant_documents("rot", view="egress")
+        loaded = self.loaded("egress")
+        self.assertEqual(loaded, {})
+
+    def test_materialization_preserves_seed_and_is_idempotent(self):
+        assistant = self.create_builtin()
+        builtin = self.builtin_root / "rot"
+        before = {
+            path.relative_to(builtin): path.read_bytes()
+            for path in builtin.rglob("*") if path.is_file()
+        }
+
+        materialized, destination = entities.materialize_builtin_assistant(assistant.id)
+
+        self.assertEqual(materialized.id, assistant.id)
+        self.assertEqual(
+            tomllib.loads((destination / "metadata.toml").read_text())["id"],
+            assistant.id
+        )
+        self.assertEqual(
+            (destination / "capabilities.toml").read_text(),
+            (builtin / "capabilities.toml").read_text()
+        )
+        self.assertEqual(
+            (destination / "shareable" / "identity.md").read_text(),
+            (builtin / "shareable" / "identity.md").read_text()
+        )
+        self.assertEqual(
+            (destination / "shareable" / "behavior.md").read_text(),
+            (builtin / "shareable" / "behavior.md").read_text()
+        )
+        for filename in entities.ASSISTANT_DOCUMENTS:
+            self.assertTrue((destination / "local" / filename).is_file())
+        self.assertTrue(
+            (destination / "local" / "learned.md").read_text().startswith("# Learned")
+        )
+        self.assertEqual(before, {
+            path.relative_to(builtin): path.read_bytes()
+            for path in builtin.rglob("*") if path.is_file()
+        })
+
+        (destination / "shareable" / "identity.md").write_text(
+            "# Identity\n\n## Details\n\nLocal evolution\n", encoding="utf-8"
+        )
+        self.write(builtin / "shareable", "identity.md", "Updated builtin")
+        second, same_destination = entities.materialize_builtin_assistant("rot")
+        self.assertEqual(second.id, assistant.id)
+        self.assertEqual(same_destination, destination)
+        loaded = self.loaded("egress")
+        self.assertIn("Local evolution", repr(loaded["identity.md"]))
+        self.assertNotIn("Updated builtin", repr(loaded))
+
+    def test_materialization_rejects_conflicting_local_id(self):
+        self.create_builtin("00000000-0000-4000-8000-000000000007")
+        self.create_local()
+        with self.assertRaisesRegex(entities.EntityContextError, "conflicts"):
+            entities.materialize_builtin_assistant("rot")
+
+    def test_builtin_only_learning_materializes_before_writing(self):
+        assistant = self.create_builtin()
+        inspected = inspection.InspectedContext(
+            "rot", assistant.id, None, None, None, None, None, None,
+            Path("/work"),
+            inspection.IdentificationSources(
+                "local config", "not configured", "not configured", "none"
+            ), ()
+        )
+
+        learned_assistant, path = learning.learn_text(
+            "assistant", "Installation-specific knowledge", inspected=inspected
+        )
+
+        self.assertEqual(learned_assistant.id, assistant.id)
+        self.assertEqual(
+            path,
+            self.context_root / "assistants" / "rot" / "local" / "learned.md"
+        )
+        self.assertIn("Installation-specific knowledge", path.read_text())
+
+    def test_builtin_only_modification_materializes_before_editing(self):
+        assistant = self.create_builtin()
+
+        resolved, document = modification._entity_document(
+            assistant.id, "behavior.md", "assistant"
+        )
+
+        self.assertEqual(resolved.id, assistant.id)
+        self.assertEqual(
+            document,
+            self.context_root / "assistants" / "rot" / "local" / "behavior.md"
+        )
+
+    def test_bootstrap_selection_and_existing_binding_materialize_builtin(self):
+        assistant = self.create_builtin()
+        with patch("builtins.input", return_value="1"), patch.object(
+            inspection, "set_local_context_binding"
+        ) as bind, patch.object(inspection, "rot_say"):
+            selected = inspection._person_identity(
+                {}, "assistant", "assistant", True, []
+            )
+
+        self.assertEqual(selected[:2], ("rot", assistant.id))
+        bind.assert_called_once_with("assistant", assistant.id)
+        destination = self.context_root / "assistants" / "rot"
+        self.assertTrue(destination.is_dir())
+
+        shutil.rmtree(destination)
+        existing = inspection._person_identity(
+            {"assistant": assistant.id}, "assistant", "assistant", True, []
+        )
+        self.assertEqual(existing[:2], ("rot", assistant.id))
+        self.assertTrue(destination.is_dir())
 
     def test_prepared_ask_contains_one_effective_identity_and_behavior_document(self):
         self.create_builtin()

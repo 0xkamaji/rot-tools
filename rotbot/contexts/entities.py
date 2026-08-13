@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import tempfile
 import tomllib
 import uuid
 
@@ -337,30 +338,23 @@ def list_assistant_contexts(*, root=None):
 
 def load_entity_documents(entity, *, root=None, view="full"):
     directory = entity_directory(entity, root)
-    builtin = None
     if directory.exists():
         metadata = _read_metadata(directory, entity.context_type)
         if metadata.get("id") != entity.id:
             raise EntityContextError(
-                f"Canonical and legacy {entity.context_type.value} contexts conflict: "
+                f"Canonical {entity.context_type.value} context conflicts with reference: "
                 f"{entity.name}"
             )
-        if root is None and entity.context_type == ContextType.ASSISTANT:
-            candidate = _builtin_directory(entity.name, entity.context_type)
-            if candidate is not None:
-                builtin_metadata = _read_metadata(candidate, entity.context_type)
-                if builtin_metadata.get("id") != entity.id:
-                    raise EntityContextError(
-                        f"Built-in and local assistant contexts conflict: {entity.name}"
-                    )
-                builtin = candidate
     else:
-        builtin = _builtin_directory(entity.name, entity.context_type) if root is None else None
-        if builtin is None:
+        directory = (
+            _builtin_directory(entity.name, entity.context_type)
+            if root is None else None
+        )
+        if directory is None:
             raise EntityContextError(
                 f"Unknown {entity.context_type.value} context: {entity.name}"
             )
-        directory = builtin
+
     def load_source(source):
         loaded = {}
         paths = documents.semantic_files(
@@ -377,13 +371,10 @@ def load_entity_documents(entity, *, root=None, view="full"):
 
     try:
         if entity.context_type == ContextType.ASSISTANT:
-            effective = load_source(builtin) if builtin is not None else {}
-            if directory != builtin:
-                effective.update(load_source(directory))
-            return entity, tuple(effective.values())
+            return entity, tuple(load_source(directory).values())
 
         paths = []
-        for source in tuple(filter(None, (builtin, directory))):
+        for source in (directory,):
             paths.extend(documents.semantic_files(
                 source, view, set(_document_names(entity.context_type)),
                 include_legacy_local=view == "full"
@@ -442,3 +433,108 @@ def create_entity_context(entity, *, root=None):
             raise
         raise EntityContextError(f"Could not create {entity.context_type.value} context '{entity.name}': {error}") from None
     return destination
+
+
+def materialize_builtin_assistant(reference, *, root=None):
+    builtin = _builtin_directory(reference, ContextType.ASSISTANT)
+    if builtin is None:
+        raise EntityContextError(f"Unknown built-in assistant context: {reference}")
+    metadata = _read_metadata(builtin, ContextType.ASSISTANT)
+    assistant = build_assistant_context(
+        metadata.get("name"), metadata.get("display_name"),
+        metadata.get("related_projects", []), metadata.get("id")
+    )
+    capabilities = builtin / "capabilities.toml"
+    if capabilities.is_symlink() or not capabilities.is_file():
+        raise EntityContextError(
+            f"Invalid built-in assistant capabilities: {assistant.name}"
+        )
+    try:
+        capability_text = capabilities.read_text(encoding="utf-8")
+        tomllib.loads(capability_text)
+        builtin_documents = documents.semantic_files(
+            builtin, "full", set(_document_names(ContextType.ASSISTANT)),
+            include_legacy_local=False
+        )
+        seeded = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in builtin_documents
+        }
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, documents.ContextDocumentError) as error:
+        raise EntityContextError(
+            f"Could not read built-in assistant '{assistant.name}': {error}"
+        ) from None
+
+    category = context_root(ContextType.ASSISTANT, root)
+    destination = category / assistant.name
+    if os.path.lexists(destination):
+        if destination.is_symlink() or not destination.is_dir():
+            raise EntityContextError(
+                f"Conflicting local assistant context: {assistant.name}"
+            )
+        local_metadata = _read_metadata(destination, ContextType.ASSISTANT)
+        if local_metadata.get("id") != assistant.id:
+            raise EntityContextError(
+                f"Local assistant '{assistant.name}' conflicts with built-in ID."
+            )
+        local_assistant = _load_canonical(
+            assistant.name, ContextType.ASSISTANT, root
+        )
+        if local_assistant is None:
+            raise EntityContextError(
+                f"Invalid local assistant context: {assistant.name}"
+            )
+        return local_assistant, destination
+
+    temporary = None
+    try:
+        category.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if category.is_symlink() or not category.is_dir():
+            raise EntityContextError(f"Invalid assistant context directory: {category}")
+        if os.name != "nt":
+            os.chmod(category, 0o700)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{assistant.name}.", dir=category))
+        if os.name != "nt":
+            os.chmod(temporary, 0o700)
+        people._write_document(
+            temporary / "metadata.toml", builtin.joinpath("metadata.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        people._write_document(temporary / "capabilities.toml", capability_text)
+        local = temporary / "local"
+        shareable = temporary / "shareable"
+        local.mkdir(mode=0o700)
+        shareable.mkdir(mode=0o700)
+        templates = render_entity_files(assistant)
+        for filename in ASSISTANT_DOCUMENTS:
+            people._write_document(local / filename, templates[filename])
+        for filename, content in seeded.items():
+            source = builtin / "shareable" / filename
+            if source.is_file() and not source.is_symlink():
+                people._write_document(shareable / filename, content)
+        os.rename(temporary, destination)
+        temporary = None
+        loaded = _load_canonical(assistant.id, ContextType.ASSISTANT, root)
+        if loaded != assistant:
+            raise EntityContextError(
+                f"Materialized assistant validation failed: {assistant.name}"
+            )
+        return assistant, destination
+    except FileExistsError:
+        if os.path.lexists(destination):
+            local_metadata = _read_metadata(destination, ContextType.ASSISTANT)
+            if local_metadata.get("id") == assistant.id:
+                return assistant, destination
+        raise EntityContextError(
+            f"Conflicting local assistant context: {assistant.name}"
+        ) from None
+    except EntityContextError:
+        raise
+    except (OSError, UnicodeError) as error:
+        raise EntityContextError(
+            f"Could not materialize built-in assistant '{assistant.name}': {error}"
+        ) from None
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)

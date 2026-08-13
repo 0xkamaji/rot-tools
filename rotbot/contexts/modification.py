@@ -162,7 +162,12 @@ def _entity_document(name, filename, context_type, root=None):
             f"Unsupported document for {context_type} context '{name}': {filename}"
         )
     directory = entities.entity_directory(entity, root)
-    if not directory.exists():
+    if context_type == "assistant" and root is None and not directory.exists():
+        try:
+            entity, directory = entities.materialize_builtin_assistant(entity.id)
+        except entities.EntityContextError as error:
+            raise PersonModificationError(str(error)) from None
+    elif not directory.exists():
         raise PersonModificationError(
             f"Built-in {context_type} context must be overridden locally before modification."
         )

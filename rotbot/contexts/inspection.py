@@ -103,6 +103,13 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
                 raise ContextInspectionError(str(error)) from None
             stale = True
         else:
+            if bootstrap and role == "assistant" and not entities.entity_directory(
+                person
+            ).exists():
+                try:
+                    person, _directory = entities.materialize_builtin_assistant(person.id)
+                except entities.EntityContextError as error:
+                    raise ContextInspectionError(str(error)) from None
             if bootstrap and name != person.id:
                 try:
                     set_local_context_binding(context_type, person.id)
@@ -132,6 +139,8 @@ def _person_identity(bindings, context_type, role, bootstrap, warnings):
             entities.load_user_context(selected)
             if role == "user" else entities.load_assistant_context(selected)
         )
+        if role == "assistant" and not entities.entity_directory(person).exists():
+            person, _directory = entities.materialize_builtin_assistant(person.id)
         set_local_context_binding(context_type, person.id)
     except (ConfigError, entities.EntityContextError) as error:
         raise ContextInspectionError(str(error)) from None

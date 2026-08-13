@@ -85,6 +85,9 @@ def _resolve(target, inspected=None, reference=None):
         if context is None:
             context = _choose(target)
         if target in {"user", "assistant"}:
+            if target == "assistant" and not entities.entity_directory(context).exists():
+                context, directory = entities.materialize_builtin_assistant(context.id)
+                return context, directory
             return context, entities.entity_directory(context)
         if target == "project":
             return context, loader.project_context_directory(context.name)
