@@ -359,16 +359,36 @@ def load_entity_documents(entity, *, root=None, view="full"):
                 f"Unknown {entity.context_type.value} context: {entity.name}"
             )
         directory = builtin
-    loaded_documents = []
+    def load_source(source):
+        loaded = {}
+        paths = documents.semantic_files(
+            source, view, set(_document_names(entity.context_type)),
+            include_legacy_local=view == "full"
+        )
+        for path in paths:
+            filename = path.name
+            content = path.read_text(encoding="utf-8")
+            sections = documents.populated_markdown_sections(content, filename)
+            if sections:
+                loaded[filename] = EntityDocument(filename, sections)
+        return loaded
+
     try:
+        if entity.context_type == ContextType.ASSISTANT:
+            effective = load_source(builtin) if builtin is not None else {}
+            if directory != builtin:
+                effective.update(load_source(directory))
+            return entity, tuple(effective.values())
+
         paths = []
         for source in tuple(filter(None, (builtin, directory))):
             paths.extend(documents.semantic_files(
                 source, view, set(_document_names(entity.context_type)),
                 include_legacy_local=view == "full"
             ))
-    except documents.ContextDocumentError as error:
+    except (OSError, UnicodeError, documents.ContextDocumentError) as error:
         raise EntityContextError(str(error)) from None
+    loaded_documents = []
     for path in paths:
         filename = path.name
         try:
