@@ -7,11 +7,13 @@ from rotbot.agents.conversation import ConversationError
 from rotbot.cli.parser import parse_args
 from rotbot.commands.git import PUSH_CANCELLED
 from rotbot.contexts import entities, loader, machines, people
+from rotbot.contexts.learning import LearningError, learn_text as store_learned_text
 from rotbot.contexts.inspection import (
     ContextInspectionError,
     InspectedContext,
     inspect_current_context
 )
+from rotbot.contexts.config import ConfigError
 from rotbot.session.ai import AIConversation
 from rotbot.session.capabilities import (
     AssistantCapabilityPolicy,
@@ -26,7 +28,6 @@ from rotbot.session.last import (
     LastResponseError,
     build_last_ask_message,
     edit_text,
-    learn_text,
     save_text
 )
 from rotbot.agents.invocation import prepare
@@ -61,7 +62,9 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   last edit           Edit the latest AI response
   last save           Save the latest AI response locally
   last ask [MESSAGE]  Ask AI about the latest response
-  last learn          Teach Rot from the latest response
+  last learn TARGET   Teach Rot from the latest response
+  learn TARGET TEXT   Store explicit local knowledge
+  learn show TARGET   Show local learned knowledge
   debug show          Show the latest debug output
   debug edit          Edit the latest debug output
   debug save          Save the latest debug output locally
@@ -246,7 +249,7 @@ class RotSession:
                 capability_state=state,
                 on_text=renderer.write
             )
-        except (ConversationError, ConversationStoreError) as error:
+        except (ConversationError, ConversationStoreError, ConfigError) as error:
             renderer.finish()
             rot_say(str(error))
             return None
@@ -343,6 +346,7 @@ def _run_rot_command(arguments, session=None):
     )
     if session is not None:
         parsed.debug_sink = session.store_debug
+        parsed.inspected_context = session.context
     result = parsed.func(parsed)
     if result is PUSH_CANCELLED:
         return 0
@@ -395,7 +399,7 @@ def evaluate_input(session, line, header=None):
         instruction = " ".join(arguments[3:]) or None
         try:
             session.debug_last_ask(instruction)
-        except LastResponseError as error:
+        except (LastResponseError, ConfigError) as error:
             rot_say(str(error))
         except KeyboardInterrupt:
             rot_say("Command interrupted.")
@@ -462,16 +466,31 @@ def evaluate_input(session, line, header=None):
             else:
                 rot_say(f"Saved LAST to:\n{path}")
             return True
-        if action == "learn" and len(arguments) == 2:
+        if action == "learn" and len(arguments) >= 3:
             if session.last_response is None:
                 rot_say("No AI response is available in this session.")
                 return True
+            target = arguments[2].lower()
+            reference = (
+                arguments[3]
+                if target == "contact" and len(arguments) == 4 else None
+            )
+            if (target == "contact" and reference is None) or (
+                target != "contact" and len(arguments) != 3
+            ):
+                rot_say("Usage: last learn TARGET [CONTACT]")
+                return True
             try:
-                learn_text(session.last_response.text)
-            except LastResponseError as error:
+                store_learned_text(
+                    target,
+                    session.last_response.text,
+                    inspected=session.context,
+                    reference=reference
+                )
+            except LearningError as error:
                 rot_say(str(error))
             return True
-        rot_say("Usage: last show|edit|ask [MESSAGE]|save|learn")
+        rot_say("Usage: last show|edit|ask [MESSAGE]|save|learn TARGET [CONTACT]")
         return True
     if command == "status" and len(arguments) == 1:
         rot_say(render_session_status(session))

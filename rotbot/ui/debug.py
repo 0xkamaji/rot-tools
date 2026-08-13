@@ -26,6 +26,8 @@ def render_ai_debug_plan(plan):
         "",
         "Execution",
         f"  provider: {plan.provider_name or 'unresolved'}",
+        f"  trust: {plan.trust_level}",
+        f"  context view: {plan.context_view}",
         f"  model: {plan.model or 'unresolved'}",
         f"  authority: {plan.authority or 'none'}",
         f"  isolated: {_yes_no(plan.isolated)}",

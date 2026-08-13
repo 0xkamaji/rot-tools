@@ -30,6 +30,7 @@ class Context(NamedTuple):
     identity: str
     state: str
     id: str | None = None
+    learned: str = ""
 
 
 def validate_context_name(name):
@@ -124,7 +125,7 @@ def _project_content(directory, filename, view):
     try:
         paths = documents.semantic_files(
             directory, view,
-            {"identity.md", "state.md", "vision.md", "match.md", "match.toml"},
+            {"identity.md", "state.md", "vision.md", "match.md", "match.toml", "learned.md"},
             include_legacy_local=view == "full"
         )
     except documents.ContextDocumentError as error:
@@ -155,7 +156,8 @@ def load_context(name, *, view="full"):
             name=name,
             identity=_project_content(directory, "identity.md", view),
             state=_project_content(directory, "state.md", view),
-            id=context_id
+            id=context_id,
+            learned=_project_content(directory, "learned.md", view)
         )
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, ContextIdentifierError) as error:
         raise ContextError(f"Could not load context '{name}': {error}") from None

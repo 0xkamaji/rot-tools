@@ -70,6 +70,8 @@ class AIDebugTests(unittest.TestCase):
 
         self.assertIn("No provider was invoked.", rendered)
         self.assertIn("provider: OpenCode", rendered)
+        self.assertIn("trust: external", rendered)
+        self.assertIn("context view: egress", rendered)
         self.assertIn("purpose: context_development", rendered)
         self.assertIn("model: unresolved", rendered)
         self.assertIn("available: assistant, user, project", rendered)

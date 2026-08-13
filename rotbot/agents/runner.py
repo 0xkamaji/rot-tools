@@ -6,6 +6,7 @@ import uuid
 from rotbot.agents.invocation import AIRequest, invoke
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
+from rotbot.contexts.config import ConfigError
 from rotbot.session.ai import AIMessage
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.ui.ai import AIActivityPresenter
@@ -49,7 +50,8 @@ def ask_agent(args):
         loader.ContextError,
         machines.MachineContextError,
         people.PersonContextError,
-        entities.EntityContextError
+        entities.EntityContextError,
+        ConfigError
     ) as error:
         rot_say(str(error))
         return 2
@@ -78,7 +80,8 @@ def ask_agent(args):
         loader.ContextError,
         machines.MachineContextError,
         people.PersonContextError,
-        entities.EntityContextError
+        entities.EntityContextError,
+        ConfigError
     ) as error:
         rot_say(str(error))
         return 2

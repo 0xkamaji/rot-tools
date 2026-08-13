@@ -14,8 +14,10 @@ from rotbot.agents.config import CODEX, OPENCODE
 from rotbot.contexts.prompt import (
     build_ask_prompt,
     build_context_refresh_prompt,
-    resolve_egress_context
+    resolve_egress_context,
+    resolve_prompt_context
 )
+from rotbot.contexts.config import get_agent_trust
 
 
 PROVIDERS = {"opencode": OPENCODE, "codex": CODEX}
@@ -78,6 +80,8 @@ class AIInvocationPlan:
     context_sent: bool = False
     conversation_sent: bool = False
     preparation_error: str | None = None
+    trust_level: str = "external"
+    context_view: str = "egress"
 
 
 @dataclass(frozen=True)
@@ -126,29 +130,50 @@ def _conversation_block(messages):
     return "\n\n".join(lines)
 
 
-def _persistent_context(request, provider_name):
+def _persistent_context(request, provider_name, context_view):
     if request.persistent_context is not None:
         return request.persistent_context
     if request.inspected_context is None:
         return None
+    if context_view == "egress":
+        if request.capability_state is None:
+            return resolve_egress_context(request.inspected_context, provider_name)
+        return resolve_egress_context(
+            request.inspected_context,
+            provider_name,
+            capability_state=request.capability_state
+        )
     if request.capability_state is None:
-        return resolve_egress_context(request.inspected_context, provider_name)
-    return resolve_egress_context(
+        return resolve_prompt_context(
+            request.inspected_context, provider_name, view=context_view
+        )
+    return resolve_prompt_context(
         request.inspected_context,
         provider_name,
-        capability_state=request.capability_state
+        capability_state=request.capability_state,
+        view=context_view
     )
 
 
 def prepare(request):
     provider, provider_error = resolve_provider(request.agent_name)
     provider_name = provider.NAME if provider is not None else None
-    available_context = _persistent_context(request, provider_name or "unavailable")
+    agent_name = (
+        provider.EXECUTABLE if provider is not None
+        else (request.agent_name or "unavailable").strip().lower()
+    )
+    trust_level = get_agent_trust(agent_name) if provider is not None else "external"
+    context_view = "full" if trust_level == "trusted_private" else "egress"
+    available_context = _persistent_context(
+        request, provider_name or "unavailable", context_view
+    )
     selected_context = available_context
     available_conversation = tuple(request.conversation_messages)
     selected_conversation = ()
     context_fingerprint = (
-        hashlib.sha256(repr(available_context).encode("utf-8")).hexdigest()
+        hashlib.sha256(
+            repr((context_view, available_context)).encode("utf-8")
+        ).hexdigest()
         if available_context is not None else None
     )
     context_sent = False
@@ -211,7 +236,9 @@ def prepare(request):
         context_fingerprint=context_fingerprint,
         context_sent=context_sent,
         conversation_sent=conversation_sent,
-        preparation_error=provider_error
+        preparation_error=provider_error,
+        trust_level=trust_level,
+        context_view=context_view
     )
 
 
@@ -318,7 +345,7 @@ def execute(
     provider = plan.provider
     automatic = plan.provider_name == OPENCODE.NAME and not os.environ.get(
         "ROTBOT_AGENT", ""
-    ).strip()
+    ).strip() and get_agent_trust("codex") == plan.trust_level
     output = ""
     elapsed = 0
     for attempt in range(1, plan.retries + 2):

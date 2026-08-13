@@ -34,6 +34,14 @@ class ParserDispatchTests(unittest.TestCase):
             "debug_last_ask",
             {"debug_command": "last", "debug_last_command": "ask", "instruction": ["why"]}
         ),
+        (["learn", "project", "exact", "fact"], "learn_command", {
+            "learn_command": "project", "learn_action": "append",
+            "learn_target": "project", "text": ["exact", "fact"]
+        }),
+        (["learn", "show", "user"], "learn_command", {
+            "learn_command": "show", "learn_show_target": "user",
+            "learn_action": "show", "learn_target": "user"
+        }),
         (["debug", "show"], "debug_session_register", {"debug_command": "show"}),
         (["debug", "edit"], "debug_session_register", {"debug_command": "edit"}),
         (["debug", "save"], "debug_session_register", {"debug_command": "save"}),
@@ -336,7 +344,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 20)
+        self.assertEqual(message.count("=" * 60), 22)
         self.assertNotIn("COMMAND: rotbot wtf", message)
 
     def test_verbose_help_can_be_scoped_to_a_command_group(self):

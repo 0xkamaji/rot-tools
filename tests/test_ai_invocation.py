@@ -124,7 +124,7 @@ class AIInvocationTests(unittest.TestCase):
     def test_active_provider_state_does_not_resend_transcript_or_context(self):
         context = PromptContext(None, None, None, None, "/work", "OpenCode")
         fingerprint = invocation.hashlib.sha256(
-            repr(context).encode("utf-8")
+            repr(("egress", context)).encode("utf-8")
         ).hexdigest()
         request = invocation.AIRequest(
             "conversation", "interactive", "Next question",

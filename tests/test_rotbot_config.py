@@ -28,6 +28,26 @@ class RotbotConfigTests(unittest.TestCase):
         with self.assertRaises(rotbot_config.ConfigError):
             rotbot_config.config_path({"XDG_CONFIG_HOME": "relative"})
 
+    def test_agent_trust_defaults_external_and_validates_explicit_values(self):
+        self.assertEqual(rotbot_config.get_agent_trust("opencode", self.config), "external")
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text(
+            '[ai.agents.opencode]\ntrust = "trusted_private"\n'
+            '[ai.agents.codex]\ntrust = "external"\n',
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            rotbot_config.get_agent_trust("opencode", self.config), "trusted_private"
+        )
+        self.assertEqual(rotbot_config.get_agent_trust("codex", self.config), "external")
+        self.assertEqual(rotbot_config.get_agent_trust("qwen", self.config), "external")
+
+        self.config.write_text(
+            '[ai.agents.opencode]\ntrust = "maybe"\n', encoding="utf-8"
+        )
+        with self.assertRaisesRegex(rotbot_config.ConfigError, "Invalid trust"):
+            rotbot_config.get_agent_trust("opencode", self.config)
+
     def test_local_context_bindings_use_id_tables(self):
         self.config = self.root / "rot" / "config.toml"
         self.config.parent.mkdir(parents=True)

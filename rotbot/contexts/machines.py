@@ -16,7 +16,7 @@ from rotbot.contexts.identifiers import (
 )
 
 
-PORTABLE_FILENAMES = ("metadata.toml", "identity.md", "software.toml")
+PORTABLE_FILENAMES = ("metadata.toml", "identity.md", "software.toml", "learned.md")
 IDENTITY_TEMPLATE = (
     "# Identity\n\n"
     "<!-- A general overview of this machine, its purpose, and its place in the larger computing environment. -->\n\n"
@@ -208,7 +208,8 @@ def render_machine_files(machine):
     return {
         "metadata.toml": render_machine_metadata(machine),
         "identity.md": IDENTITY_TEMPLATE,
-        "software.toml": ""
+        "software.toml": "",
+        "learned.md": "# Learned\n"
     }
 
 
@@ -236,7 +237,7 @@ def _read_portable_files(name, directory):
     paths = [metadata_path]
     try:
         paths.extend(documents.semantic_files(
-            directory, "full", {"identity.md", "software.toml"}
+            directory, "full", {"identity.md", "software.toml", "learned.md"}
         ))
     except documents.ContextDocumentError as error:
         raise MachineContextError(str(error)) from None
@@ -284,7 +285,7 @@ def load_machine_files(name, *, machines_root=None, view="full"):
     loaded = [MachineDocument("metadata.toml", (directory / "metadata.toml").read_text(encoding="utf-8"))]
     try:
         paths = documents.semantic_files(
-            directory, view, {"identity.md", "software.toml"},
+            directory, view, {"identity.md", "software.toml", "learned.md"},
             include_legacy_local=view == "full"
         )
     except documents.ContextDocumentError as error:
@@ -389,7 +390,7 @@ def create_machine(
         local = destination / "local"
         local.mkdir(mode=0o700)
         (destination / "shareable").mkdir(mode=0o700)
-        for filename in ("identity.md", "software.toml"):
+        for filename in ("identity.md", "software.toml", "learned.md"):
             _write_document(local / filename, files[filename])
     except BaseException as error:
         rollback_errors = ()

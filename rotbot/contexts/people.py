@@ -270,7 +270,7 @@ def render_person_files(person):
         "related_projects = "
         f"{json.dumps(list(person.related_projects), ensure_ascii=False)}\n"
     )
-    files = {"metadata.toml": metadata, **CORE_TEMPLATES}
+    files = {"metadata.toml": metadata, **CORE_TEMPLATES, "learned.md": "# Learned\n"}
     if person.role == "user":
         files.update(USER_TEMPLATES)
     return files
@@ -348,7 +348,7 @@ def populated_markdown_sections(markdown, filename):
     return tuple(sections)
 
 
-def load_person_documents(name, *, people_root=None):
+def load_person_documents(name, *, people_root=None, view="full"):
     if people_root is None:
         person = load_person_context(name)
         directory = person_context_directory(person)
@@ -356,7 +356,8 @@ def load_person_documents(name, *, people_root=None):
         from rotbot.contexts import documents as context_documents
         try:
             paths = context_documents.semantic_files(
-                directory, "full", set(person_document_names(person))
+                directory, view, set(person_document_names(person)),
+                include_legacy_local=view == "full"
             )
         except context_documents.ContextDocumentError as error:
             raise PersonContextError(str(error)) from None

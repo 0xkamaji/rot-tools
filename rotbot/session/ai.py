@@ -9,6 +9,7 @@ from rotbot.agents.invocation import (
     execute,
     prepare
 )
+from rotbot.contexts.config import get_agent_trust
 from rotbot.session.conversations import ConversationStore
 
 
@@ -42,6 +43,7 @@ class AIConversation:
     context_fingerprint: str | None = None
     context_version: int = 0
     context_dirty: bool = False
+    context_view: str | None = None
     status: str = "idle"
     store: ConversationStore | None = None
     persisted: bool = False
@@ -120,7 +122,18 @@ class AIConversation:
         if capability_state is not None:
             authority = capability_state.mode
         self._persist_start(inspected, cwd)
-        backend_replaced = self.backend.prepare(authority, cwd) is True
+        current_view = (
+            "full" if get_agent_trust(self.backend.agent_name) == "trusted_private"
+            else "egress"
+        )
+        privacy_changed = (
+            self.context_view is not None and self.context_view != current_view
+        )
+        if privacy_changed:
+            reset_session = getattr(self.backend, "reset_session", None)
+            if callable(reset_session):
+                reset_session()
+        backend_replaced = self.backend.prepare(authority, cwd) is True or privacy_changed
         prior_messages = tuple(self.messages)
         user_turn = AIMessage(
             f"msg_{uuid.uuid4().hex}", "user", user_message,
@@ -208,6 +221,7 @@ class AIConversation:
             if self.store is not None:
                 self.store.append_message(self.id, assistant_turn)
         self.context_fingerprint = plan.context_fingerprint
+        self.context_view = plan.context_view
         if plan.context_sent:
             self.context_version += 1
         self.context_dirty = False
@@ -228,6 +242,13 @@ class AIConversation:
             backend_replaced = (
                 would_replace(authority, cwd) is True
                 if callable(would_replace) else False
+            )
+            current_view = (
+                "full" if get_agent_trust(self.backend.agent_name) == "trusted_private"
+                else "egress"
+            )
+            backend_replaced = backend_replaced or (
+                self.context_view is not None and self.context_view != current_view
             )
         known_state = getattr(self.backend, "known_remote_state", lambda: ())()
         if not isinstance(known_state, (tuple, list)):

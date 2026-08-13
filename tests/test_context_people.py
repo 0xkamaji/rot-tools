@@ -30,7 +30,8 @@ class PersonContextTests(unittest.TestCase):
                 "identity.md",
                 "preferences.md",
                 "relationship.md",
-                "state.md"
+                "state.md",
+                "learned.md"
             }
         )
         metadata = tomllib.loads(
@@ -57,7 +58,8 @@ class PersonContextTests(unittest.TestCase):
                 "relationship.md",
                 "state.md",
                 "experience.md",
-                "priorities.md"
+                "priorities.md",
+                "learned.md"
             }
         )
         metadata = tomllib.loads(
@@ -83,7 +85,8 @@ class PersonContextTests(unittest.TestCase):
                 "identity.md",
                 "preferences.md",
                 "relationship.md",
-                "state.md"
+                "state.md",
+                "learned.md"
             }
         )
         self.assertFalse((destination / "experience.md").exists())

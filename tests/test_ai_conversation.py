@@ -272,7 +272,7 @@ class AIConversationTests(unittest.TestCase):
         ))
         context = Mock()
         fingerprint = invocation.hashlib.sha256(
-            repr(context).encode("utf-8")
+            repr(("egress", context)).encode("utf-8")
         ).hexdigest()
         conversation.context_fingerprint = fingerprint
 
@@ -288,6 +288,22 @@ class AIConversationTests(unittest.TestCase):
         self.assertEqual(plan.available_conversation[1].content, "earlier response")
         self.assertEqual(plan.provider_state, (provider_state,))
         self.assertEqual(plan.provider_input, "follow up")
+
+    def test_privacy_view_change_replaces_provider_state_and_replays_context(self):
+        backend = self.backend()
+        backend.agent_name = "opencode"
+        backend.known_remote_state.return_value = (
+            BackendStateReference(
+                "backend", "opencode", "session", "private-session", "local_persistent"
+            ),
+        )
+        conversation = ai.AIConversation.create(backend)
+        conversation.context_view = "full"
+        conversation.context_fingerprint = "private-fingerprint"
+        request = conversation.build_request("external next", Mock(), Path("/work"))
+
+        self.assertEqual(request.provider_state, ())
+        self.assertIsNone(request.previous_context_fingerprint)
 
 
 if __name__ == "__main__":

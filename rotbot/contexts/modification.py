@@ -45,7 +45,10 @@ class PersonModificationError(Exception):
 
 def available_documents(person):
     if isinstance(person, (entities.UserContext, entities.AssistantContext)):
-        return entities._document_names(person.context_type)
+        return tuple(
+            filename for filename in entities._document_names(person.context_type)
+            if filename in DOCUMENTS
+        )
     allowed = people.person_document_names(person)
     return tuple(filename for filename in DOCUMENTS if filename in allowed)
 

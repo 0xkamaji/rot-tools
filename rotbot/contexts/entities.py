@@ -33,10 +33,10 @@ CONTEXT_TYPES = {
 
 USER_DOCUMENTS = (
     "identity.md", "preferences.md", "experience.md", "priorities.md",
-    "relationship.md", "state.md"
+    "relationship.md", "state.md", "learned.md"
 )
 ASSISTANT_DOCUMENTS = (
-    "identity.md", "behavior.md", "relationship.md", "state.md"
+    "identity.md", "behavior.md", "relationship.md", "state.md", "learned.md"
 )
 
 BEHAVIOR_TEMPLATE = (
@@ -189,7 +189,8 @@ def render_entity_files(entity):
     if isinstance(entity, UserContext):
         templates = {
             **people.CORE_TEMPLATES,
-            **people.USER_TEMPLATES
+            **people.USER_TEMPLATES,
+            "learned.md": "# Learned\n"
         }
     elif isinstance(entity, AssistantContext):
         templates = {
@@ -197,6 +198,7 @@ def render_entity_files(entity):
             "behavior.md": BEHAVIOR_TEMPLATE,
             "relationship.md": people.CORE_TEMPLATES["relationship.md"],
             "state.md": people.CORE_TEMPLATES["state.md"],
+            "learned.md": "# Learned\n",
             "capabilities.toml": SAFE_CAPABILITIES
         }
     else:

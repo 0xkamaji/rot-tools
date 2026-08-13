@@ -95,12 +95,12 @@ class PromptContext:
     runtime: object | None = None
 
 
-def _entity_block(reference, context_type):
+def _entity_block(reference, context_type, view):
     try:
         person, documents = (
-            entities.load_assistant_documents(reference, view="egress")
+            entities.load_assistant_documents(reference, view=view)
             if context_type == "assistant"
-            else entities.load_user_documents(reference, view="egress")
+            else entities.load_user_documents(reference, view=view)
         )
     except entities.EntityContextError:
         raise
@@ -116,8 +116,8 @@ def _entity_block(reference, context_type):
     return PromptContextBlock(context_type, person.id, person.display_name, tuple(sections))
 
 
-def _machine_block(name):
-    machine, documents = machines.load_machine_files(name, view="egress")
+def _machine_block(name, view):
+    machine, documents = machines.load_machine_files(name, view=view)
     content = {document.filename: document.content.strip() for document in documents}
     sections = []
     identity_sections = people.populated_markdown_sections(
@@ -131,37 +131,50 @@ def _machine_block(name):
         sections.append(("identity", identity))
     if content.get("software.toml"):
         sections.append(("software", content["software.toml"]))
+    learned_sections = people.populated_markdown_sections(
+        content.get("learned.md", ""), "learned.md"
+    )
+    if learned_sections:
+        sections.append((
+            "learned",
+            "\n\n".join(text for _heading, text in learned_sections)
+        ))
     return PromptContextBlock(
         "machine", machine.id, machine.display_name, tuple(sections)
     )
 
 
-def _project_block(name):
-    project = loader.load_context(name, view="egress")
+def _project_block(name, view):
+    project = loader.load_context(name, view=view)
     sections = tuple(
         (label, content.strip())
-        for label, content in (("identity", project.identity), ("state", project.state))
+        for label, content in (
+            ("identity", project.identity), ("state", project.state),
+            ("learned", project.learned)
+        )
         if content.strip()
     )
     return PromptContextBlock("project", project.id, project.name, sections)
 
 
-def resolve_egress_context(inspected, execution_backend, capability_state=None):
+def resolve_prompt_context(
+    inspected, execution_backend, capability_state=None, view="egress"
+):
     return PromptContext(
         assistant=(
-            _entity_block(inspected.assistant_id or inspected.assistant, "assistant")
+            _entity_block(inspected.assistant_id or inspected.assistant, "assistant", view)
             if inspected.assistant is not None else None
         ),
         user=(
-            _entity_block(inspected.user_id or inspected.user, "user")
+            _entity_block(inspected.user_id or inspected.user, "user", view)
             if inspected.user is not None else None
         ),
         machine=(
-            _machine_block(inspected.machine)
+            _machine_block(inspected.machine, view)
             if inspected.machine is not None else None
         ),
         project=(
-            _project_block(inspected.project)
+            _project_block(inspected.project, view)
             if inspected.project is not None else None
         ),
         working_directory=str(inspected.cwd),
@@ -170,7 +183,10 @@ def resolve_egress_context(inspected, execution_backend, capability_state=None):
     )
 
 
-resolve_prompt_context = resolve_egress_context
+def resolve_egress_context(inspected, execution_backend, capability_state=None):
+    return resolve_prompt_context(
+        inspected, execution_backend, capability_state, view="egress"
+    )
 
 
 def _tag(name, content):

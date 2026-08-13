@@ -108,9 +108,3 @@ def save_text(text, now=None, category="responses", filename_hint=None):
             os.chmod(path, 0o600)
         return path
     raise LastResponseError("Could not choose a unique local filename.")
-
-
-def learn_text(_text):
-    raise LastResponseError(
-        "Learning is not available in this Rot checkout; LAST was not changed."
-    )

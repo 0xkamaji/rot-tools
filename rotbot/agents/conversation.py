@@ -110,6 +110,9 @@ class OpenCodeBackend:
             self.directory != cwd or self.authority != authority
         )
 
+    def reset_session(self):
+        self.session_id = None
+
     def stream_generate(self, message, cwd, authority="TALK"):
         if which("opencode") is None:
             raise ConversationError("OpenCode is not installed or available in PATH.")

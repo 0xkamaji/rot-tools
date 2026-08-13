@@ -504,10 +504,13 @@ class RotSessionTests(unittest.TestCase):
         self.assertIs(self.session.last_response, before)
 
         with patch.object(
-            interactive, "learn_text", side_effect=interactive.LastResponseError("unavailable")
+            interactive, "store_learned_text",
+            side_effect=interactive.LearningError("unavailable")
         ) as learn, patch.object(interactive, "rot_say"):
-            interactive.evaluate_input(self.session, "last learn")
-        learn.assert_called_once_with("edited\n")
+            interactive.evaluate_input(self.session, "last learn project")
+        learn.assert_called_once_with(
+            "project", "edited\n", inspected=self.session.context, reference=None
+        )
         self.assertIs(self.session.last_response, before)
 
     def test_last_show_without_response_fails_cleanly(self):

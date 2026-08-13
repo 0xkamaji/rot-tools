@@ -838,7 +838,8 @@ def _create_and_bind(
             "identity.md": documents["identity"],
             "state.md": documents["state"],
             "vision.md": INITIAL_VISION,
-            "match.toml": match_document
+            "match.toml": match_document,
+            "learned.md": "# Learned\n"
         }
         for filename, content in files.items():
             _write_document(local / filename, content)

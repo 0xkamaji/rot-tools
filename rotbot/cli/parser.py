@@ -18,6 +18,7 @@ from rotbot.contexts.creation import context_add, context_develop
 from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.inspection import context_inspect
 from rotbot.contexts.loader import context_list, context_show
+from rotbot.contexts.learning import learn_command
 from rotbot.contexts.menu import context_menu
 from rotbot.contexts.modification import context_mod
 from rotbot.integrations.signalrot.commands import (
@@ -152,6 +153,97 @@ def create_parser():
     )
     _add_agent_argument(ask_parser)
     ask_parser.set_defaults(func=ask_agent)
+
+    learn_parser = commands.add_parser(
+        "learn",
+        help="Store explicit knowledge in the selected local context"
+    )
+    learn_commands = learn_parser.add_subparsers(
+        dest="learn_command",
+        metavar="TARGET"
+    )
+    learn_parser.set_defaults(func=show_command_help, command_parser=learn_parser)
+    for target in ("user", "assistant", "project", "machine"):
+        target_parser = learn_commands.add_parser(
+            target,
+            help=f"Teach Rot about the current {target} context"
+        )
+        target_parser.add_argument(
+            "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
+        )
+        target_parser.set_defaults(
+            func=learn_command, learn_action="append", learn_target=target
+        )
+
+    learn_contact_parser = learn_commands.add_parser(
+        "contact",
+        help="Teach Rot about a named contact"
+    )
+    learn_contact_parser.add_argument("name", help="Contact name")
+    learn_contact_parser.add_argument(
+        "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
+    )
+    learn_contact_parser.set_defaults(
+        func=learn_command, learn_action="append", learn_target="contact"
+    )
+
+    learn_show_parser = learn_commands.add_parser(
+        "show",
+        help="Show an entire local learned.md document"
+    )
+    learn_show_commands = learn_show_parser.add_subparsers(
+        dest="learn_show_target",
+        metavar="TARGET"
+    )
+    learn_show_parser.set_defaults(
+        func=show_command_help, command_parser=learn_show_parser
+    )
+    for target in ("user", "assistant", "project", "machine"):
+        show_target_parser = learn_show_commands.add_parser(
+            target,
+            help=f"Show learned knowledge for the current {target} context"
+        )
+        show_target_parser.set_defaults(
+            func=learn_command, learn_action="show", learn_target=target
+        )
+
+    learn_show_contact_parser = learn_show_commands.add_parser(
+        "contact",
+        help="Show learned knowledge for a named contact"
+    )
+    learn_show_contact_parser.add_argument("name", help="Contact name")
+    learn_show_contact_parser.set_defaults(
+        func=learn_command, learn_action="show", learn_target="contact"
+    )
+
+    learn_edit_parser = learn_commands.add_parser(
+        "edit",
+        help="Edit an entire local learned.md document"
+    )
+    learn_edit_commands = learn_edit_parser.add_subparsers(
+        dest="learn_edit_target",
+        metavar="TARGET"
+    )
+    learn_edit_parser.set_defaults(
+        func=show_command_help, command_parser=learn_edit_parser
+    )
+    for target in ("user", "assistant", "project", "machine"):
+        edit_target_parser = learn_edit_commands.add_parser(
+            target,
+            help=f"Edit learned knowledge for the current {target} context"
+        )
+        edit_target_parser.set_defaults(
+            func=learn_command, learn_action="edit", learn_target=target
+        )
+
+    learn_edit_contact_parser = learn_edit_commands.add_parser(
+        "contact",
+        help="Edit learned knowledge for a named contact"
+    )
+    learn_edit_contact_parser.add_argument("name", help="Contact name")
+    learn_edit_contact_parser.set_defaults(
+        func=learn_command, learn_action="edit", learn_target="contact"
+    )
 
     debug_parser = commands.add_parser(
         "debug",

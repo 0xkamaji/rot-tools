@@ -13,6 +13,7 @@ from rotbot.contexts.paths import config_root
 CONFIG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONFIG_KEYS = ("source_path", "production_path")
 LOCAL_CONTEXT_TYPES = ("user", "assistant", "machine")
+AGENT_TRUST_VALUES = ("external", "trusted_private")
 
 
 class ConfigError(Exception):
@@ -135,6 +136,32 @@ def get_local_context_bindings(path=None):
 
 def get_defaults(path=None):
     return get_local_context_bindings(path)
+
+
+def get_agent_trust(agent_name, path=None):
+    if not isinstance(agent_name, str) or not CONFIG_NAME_PATTERN.fullmatch(agent_name):
+        raise ConfigError(f"Invalid AI agent name: {agent_name}")
+    document = load_config(path)
+    ai = document.get("ai", {})
+    if not isinstance(ai, dict):
+        raise ConfigError("RotBot configuration 'ai' value must be a table.")
+    agents = ai.get("agents", {})
+    if not isinstance(agents, dict):
+        raise ConfigError("RotBot configuration 'ai.agents' value must be a table.")
+    configured = agents.get(agent_name)
+    if configured is None:
+        return "external"
+    if not isinstance(configured, dict):
+        raise ConfigError(
+            f"RotBot configuration 'ai.agents.{agent_name}' must be a table."
+        )
+    trust = configured.get("trust", "external")
+    if trust not in AGENT_TRUST_VALUES:
+        raise ConfigError(
+            f"Invalid trust for AI agent '{agent_name}': {trust}. "
+            "Expected external or trusted_private."
+        )
+    return trust
 
 
 def _table_header(name):
