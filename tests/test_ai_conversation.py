@@ -7,6 +7,7 @@ from rotbot.agents.conversation import (
     BackendStateReference,
     ConversationError
 )
+from rotbot.agents import invocation
 from rotbot.session import ai
 from rotbot.session.history import CommandHistory
 
@@ -37,11 +38,11 @@ class AIConversationTests(unittest.TestCase):
         conversation = ai.AIConversation.create(backend)
 
         with patch.object(
-            ai, "resolve_prompt_context", return_value=Mock()
+            invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
-            ai, "build_ask_prompt", return_value="INITIAL"
+            invocation, "build_ask_prompt", return_value="INITIAL"
         ), patch.object(
-            ai, "build_context_refresh_prompt", return_value="REFRESH"
+            invocation, "build_context_refresh_prompt", return_value="REFRESH"
         ):
             conversation.send("First question", Mock(), Path("/work"))
             conversation.send("Second question", Mock(), Path("/work"))
@@ -71,8 +72,8 @@ class AIConversationTests(unittest.TestCase):
         )
         conversation = ai.AIConversation.create(backend)
 
-        with patch.object(ai, "resolve_prompt_context", return_value=Mock()), patch.object(
-            ai, "build_ask_prompt", return_value="INITIAL"
+        with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "build_ask_prompt", return_value="INITIAL"
         ):
             conversation.send("First question", Mock(), Path("/work"))
             with self.assertRaisesRegex(ConversationError, "unavailable"):
@@ -99,11 +100,11 @@ class AIConversationTests(unittest.TestCase):
         contexts = (unchanged, unchanged, Mock())
 
         with patch.object(
-            ai, "resolve_prompt_context", side_effect=contexts
+            invocation, "resolve_egress_context", side_effect=contexts
         ), patch.object(
-            ai, "build_ask_prompt", return_value="INITIAL"
+            invocation, "build_ask_prompt", return_value="INITIAL"
         ) as initial, patch.object(
-            ai, "build_context_refresh_prompt", return_value="REFRESH"
+            invocation, "build_context_refresh_prompt", return_value="REFRESH"
         ) as refresh:
             conversation.send("first", Mock(), Path("/work"))
             conversation.send("second", Mock(), Path("/work"))
@@ -129,9 +130,9 @@ class AIConversationTests(unittest.TestCase):
         inspected = Mock()
 
         with patch.object(
-            ai, "resolve_prompt_context", return_value=Mock()
+            invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
-            ai, "build_ask_prompt", return_value="COMPILED ROT CONTEXT"
+            invocation, "build_ask_prompt", return_value="COMPILED ROT CONTEXT"
         ):
             conversation.send("Why?", inspected, Path("/work"))
 
@@ -149,8 +150,8 @@ class AIConversationTests(unittest.TestCase):
         backend.generate.side_effect = (self.result("one"), self.result("two", "ses_new"))
         conversation = ai.AIConversation.create(backend)
 
-        with patch.object(ai, "resolve_prompt_context", return_value=Mock()), patch.object(
-            ai, "build_ask_prompt", return_value="CONTEXT"
+        with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "build_ask_prompt", return_value="CONTEXT"
         ):
             conversation.send("first", Mock(), Path("/old"), authority="TALK")
             conversation.send("second", Mock(), Path("/new"), authority="WORK")

@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from shutil import which
 
-from rotbot.agents.invocation import AIInvocation, start_provider_process
+from rotbot.agents.invocation import start_provider_process
 
 TALK_AGENT = "rotbot-talk"
 
@@ -110,17 +110,8 @@ class OpenCodeBackend:
             self.directory = cwd
             self.authority = authority
         try:
-            invocation = AIInvocation(
-                purpose="ask",
-                parent_command="interactive",
-                prompt=message,
-                working_directory=self.directory,
-                agent_name="opencode",
-                conversation=True,
-                display_output=True
-            )
             process = start_provider_process(
-                self._command(invocation.prompt, authority),
+                self._command(message, authority),
                 cwd=self.directory,
                 env=environment,
                 merge_stderr=True
@@ -211,6 +202,20 @@ class OpenCodeBackend:
                 next(stream)
             except StopIteration as completed:
                 return completed.value
+
+    def execute_plan(self, plan, on_output=None):
+        stream = self.stream_generate(
+            plan.provider_input,
+            plan.working_directory,
+            authority=plan.authority or "TALK"
+        )
+        while True:
+            try:
+                event = next(stream)
+            except StopIteration as completed:
+                return completed.value
+            if on_output is not None and isinstance(event, TextDelta):
+                on_output(event.text)
 
     def abort_current(self):
         if self.current_process is not None:

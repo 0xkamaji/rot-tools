@@ -4,10 +4,19 @@ import unittest
 
 from rotbot.agents import invocation
 from rotbot.agents.config import OPENCODE
+from rotbot.contexts.prompt import PromptContext
 from rotbot.ui.ai import AIActivityPresenter
 
 
 class AIInvocationTests(unittest.TestCase):
+    def request(self, purpose="ask", **kwargs):
+        context = PromptContext(None, None, None, None, "/work", "OpenCode")
+        return invocation.AIRequest(
+            purpose, "ask", "prompt", agent_name="opencode",
+            persistent_context=context if purpose == "ask" else None,
+            **kwargs
+        )
+
     def process(self, stdout=(), stderr=(), returncode=0):
         return SimpleNamespace(
             stdout=iter(stdout), stderr=iter(stderr),
@@ -18,7 +27,7 @@ class AIInvocationTests(unittest.TestCase):
         events = []
         lines = []
         process = self.process(("Hello\n",), ("> model banner\n",))
-        request = invocation.AIInvocation("ask", "ask", "prompt", agent_name="opencode")
+        request = self.request()
         with patch.object(
             invocation, "resolve_provider", return_value=(OPENCODE, None)
         ), patch.object(invocation, "start_provider_process", return_value=process):
@@ -32,9 +41,8 @@ class AIInvocationTests(unittest.TestCase):
     def test_structured_validation_retries_once(self):
         first = self.process(("bad\n",))
         second = self.process(("42\n",))
-        request = invocation.AIInvocation(
-            "context_development", "context develop", "prompt",
-            agent_name="opencode", structured_output="integer", retries=1
+        request = self.request(
+            "context_development", output_contract="integer", retries=1
         )
         events = []
 
@@ -57,10 +65,7 @@ class AIInvocationTests(unittest.TestCase):
         self.assertIn("retrying", events)
 
     def test_retry_exhaustion_and_provider_failure_are_structured(self):
-        request = invocation.AIInvocation(
-            "context_development", "context develop", "prompt",
-            agent_name="opencode", retries=1
-        )
+        request = self.request("context_development", retries=1)
         with patch.object(
             invocation, "resolve_provider", return_value=(OPENCODE, None)
         ), patch.object(
@@ -80,6 +85,57 @@ class AIInvocationTests(unittest.TestCase):
             result = invocation.invoke(request)
         self.assertEqual(result.returncode, 127)
         self.assertEqual(result.validation_error, "provider unavailable")
+
+    def test_prepare_exposes_available_and_selected_material_without_execution(self):
+        context = PromptContext(None, None, None, None, "/work", "OpenCode")
+        messages = (
+            invocation.ConversationMessage("user", "Earlier question"),
+            invocation.ConversationMessage("assistant", "Earlier answer")
+        )
+        request = invocation.AIRequest(
+            "conversation", "interactive", "Next question",
+            agent_name="opencode", persistent_context=context,
+            conversation_messages=messages
+        )
+
+        with patch.object(
+            invocation, "resolve_provider", return_value=(OPENCODE, None)
+        ), patch.object(invocation, "start_provider_process") as start:
+            plan = invocation.prepare(request)
+
+        start.assert_not_called()
+        self.assertIs(plan.available_persistent_context, context)
+        self.assertIs(plan.selected_persistent_context, context)
+        self.assertEqual(plan.available_conversation, messages)
+        self.assertEqual(plan.selected_conversation, messages)
+        self.assertTrue(plan.context_sent)
+        self.assertTrue(plan.conversation_sent)
+        self.assertIn("Earlier answer", plan.provider_input)
+
+    def test_active_provider_state_does_not_resend_transcript_or_context(self):
+        context = PromptContext(None, None, None, None, "/work", "OpenCode")
+        fingerprint = invocation.hashlib.sha256(
+            repr(context).encode("utf-8")
+        ).hexdigest()
+        request = invocation.AIRequest(
+            "conversation", "interactive", "Next question",
+            agent_name="opencode", persistent_context=context,
+            conversation_messages=(
+                invocation.ConversationMessage("assistant", "Earlier answer"),
+            ),
+            provider_state=(object(),),
+            previous_context_fingerprint=fingerprint
+        )
+
+        with patch.object(
+            invocation, "resolve_provider", return_value=(OPENCODE, None)
+        ):
+            plan = invocation.prepare(request)
+
+        self.assertEqual(plan.provider_input, "Next question")
+        self.assertFalse(plan.context_sent)
+        self.assertFalse(plan.conversation_sent)
+        self.assertEqual(plan.selected_conversation, ())
 
     def test_common_presenter_drives_freeform_and_structured_spinner_lifecycles(self):
         freeform = AIActivityPresenter("thinking")

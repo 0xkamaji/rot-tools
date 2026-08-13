@@ -12,6 +12,7 @@ from rotbot.agents.conversation import (
     BackendStateReference,
     ConversationError
 )
+from rotbot.agents import invocation
 from rotbot.contexts.inspection import IdentificationSources, InspectedContext
 from rotbot.session import ai
 from rotbot.session.conversations import (
@@ -53,9 +54,13 @@ class ConversationStoreTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def send(self, conversation, message, authority="TALK"):
-        with patch.object(ai, "resolve_prompt_context", return_value=Mock()), patch.object(
-            ai, "build_ask_prompt", return_value="INITIAL"
-        ), patch.object(ai, "build_context_refresh_prompt", return_value="REFRESH"):
+        with patch.object(
+            invocation, "resolve_egress_context", return_value=Mock()
+        ), patch.object(
+            invocation, "build_ask_prompt", return_value="INITIAL"
+        ), patch.object(
+            invocation, "build_context_refresh_prompt", return_value="REFRESH"
+        ):
             return conversation.send(
                 message, inspected(self.root), self.root, authority=authority
             )

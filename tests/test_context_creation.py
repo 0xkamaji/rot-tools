@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, Mock, patch
 
-from rotbot.agents.invocation import AIInvocationResult
+from rotbot.agents.invocation import AIResult
 from rotbot.commands.machine import MachineInspection
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
@@ -75,18 +75,18 @@ class ContextCreationTests(unittest.TestCase):
         args = self.args() if args is None else args
         def invoke(invocation, validator=None, **_kwargs):
             if returncode != 0:
-                return AIInvocationResult(
+                return AIResult(
                     invocation, returncode, output, 0.1, "Test",
                     validation_error=f"Test failed with exit code {returncode}."
                 )
             try:
                 value = validator(output) if validator is not None else None
             except Exception as error:
-                return AIInvocationResult(
+                return AIResult(
                     invocation, 0, output, 0.1, "Test",
                     validation_error=str(error), attempts=invocation.retries + 1
                 )
-            return AIInvocationResult(invocation, 0, output, 0.1, "Test", value=value)
+            return AIResult(invocation, 0, output, 0.1, "Test", value=value)
         with patch.object(
             context_creation,
             "invoke",
@@ -278,7 +278,7 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(request.purpose, "context_development")
         self.assertEqual(request.parent_command, "context add")
         self.assertEqual(request.retries, 1)
-        self.assertFalse(request.conversation)
+        self.assertEqual(request.output_contract, "identity/state context documents")
 
     def test_context_is_created_bound_and_loadable_before_enrichment(self):
         destination = self.project_context_root / "example"
@@ -290,7 +290,7 @@ class ContextCreationTests(unittest.TestCase):
             self.assertTrue((destination / "local" / "match.toml").is_file())
             self.assertEqual(contexts.load_context("example").name, "example")
             self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
-            return AIInvocationResult(
+            return AIResult(
                 invocation, 127, "", 0.1, "Test", validation_error="unavailable"
             )
 
@@ -310,7 +310,7 @@ class ContextCreationTests(unittest.TestCase):
         with patch.object(
             context_creation,
             "invoke",
-            side_effect=lambda invocation, validator, **_kwargs: AIInvocationResult(
+            side_effect=lambda invocation, validator, **_kwargs: AIResult(
                 invocation, 0, self.agent_output, 0.1, "Test",
                 value=validator(self.agent_output)
             )
@@ -329,7 +329,7 @@ class ContextCreationTests(unittest.TestCase):
         with patch.object(
             context_creation,
             "invoke",
-            side_effect=lambda invocation, validator, **_kwargs: AIInvocationResult(
+            side_effect=lambda invocation, validator, **_kwargs: AIResult(
                 invocation, 0, self.agent_output, 0.1, "Test",
                 value=validator(self.agent_output)
             )

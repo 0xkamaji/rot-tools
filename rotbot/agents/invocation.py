@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import hashlib
 import os
 from pathlib import Path
 from queue import Empty, Queue
@@ -10,30 +11,83 @@ from time import perf_counter
 import uuid
 
 from rotbot.agents.config import CODEX, OPENCODE
+from rotbot.contexts.prompt import (
+    build_ask_prompt,
+    build_context_refresh_prompt,
+    resolve_egress_context
+)
 
 
 PROVIDERS = {"opencode": OPENCODE, "codex": CODEX}
 
 
 @dataclass(frozen=True)
-class AIInvocation:
-    purpose: str
-    parent_command: str
-    prompt: str
-    working_directory: Path | str | None = None
-    agent_name: str | None = None
-    timeout: int | None = None
-    structured_output: str | None = None
-    retries: int = 0
-    conversation: bool = False
-    isolated: bool = False
-    display_output: bool = True
-    invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+class ConversationMessage:
+    role: str
+    content: str
+    status: str = "complete"
 
 
 @dataclass(frozen=True)
-class AIInvocationResult:
-    invocation: AIInvocation
+class AIRequest:
+    purpose: str
+    parent_command: str
+    task: str
+    working_directory: Path | str | None = None
+    agent_name: str | None = None
+    inspected_context: object | None = None
+    capability_state: object | None = None
+    persistent_context: object | None = None
+    context_material: str | None = None
+    conversation_id: str | None = None
+    conversation_messages: tuple[ConversationMessage, ...] = ()
+    provider_state: tuple[object, ...] = ()
+    previous_context_fingerprint: str | None = None
+    context_dirty: bool = False
+    authority: str | None = None
+    output_contract: str | None = None
+    retries: int = 0
+    timeout: int | None = None
+    isolated: bool = False
+    stream_output: bool = True
+    display_output: bool = True
+    persist_conversation: bool = False
+
+
+@dataclass(frozen=True)
+class AIInvocationPlan:
+    invocation_id: str
+    purpose: str
+    parent_command: str
+    provider: object | None
+    provider_name: str | None
+    model: str | None
+    working_directory: Path | str | None
+    conversation_id: str | None
+    provider_state: tuple[object, ...]
+    available_persistent_context: object | None
+    selected_persistent_context: object | None
+    available_conversation: tuple[ConversationMessage, ...]
+    selected_conversation: tuple[ConversationMessage, ...]
+    task: str
+    provider_input: str
+    output_contract: str | None
+    retries: int
+    timeout: int | None
+    isolated: bool
+    stream_output: bool
+    display_output: bool
+    persist_conversation: bool
+    authority: str | None
+    context_fingerprint: str | None = None
+    context_sent: bool = False
+    conversation_sent: bool = False
+    preparation_error: str | None = None
+
+
+@dataclass(frozen=True)
+class AIResult:
+    plan: AIInvocationPlan
     returncode: int
     output: str
     elapsed: float
@@ -63,6 +117,109 @@ def resolve_provider(agent_name=None):
     return None, "No supported AI agent is available. Install OpenCode or Codex."
 
 
+def _conversation_block(messages):
+    completed = tuple(message for message in messages if message.status == "complete")
+    if not completed:
+        return ""
+    lines = [
+        "<rot_conversation_transcript>",
+        "This is Rot's canonical transcript. Use it to restore continuity because "
+        "the current provider session does not contain these turns."
+    ]
+    lines.extend(f"{message.role}: {message.content}" for message in completed)
+    lines.append("</rot_conversation_transcript>")
+    return "\n\n".join(lines)
+
+
+def _persistent_context(request, provider_name):
+    if request.persistent_context is not None:
+        return request.persistent_context
+    if request.inspected_context is None:
+        return None
+    if request.capability_state is None:
+        return resolve_egress_context(request.inspected_context, provider_name)
+    return resolve_egress_context(
+        request.inspected_context,
+        provider_name,
+        capability_state=request.capability_state
+    )
+
+
+def prepare(request):
+    provider, provider_error = resolve_provider(request.agent_name)
+    provider_name = provider.NAME if provider is not None else None
+    available_context = _persistent_context(request, provider_name or "unavailable")
+    selected_context = available_context
+    available_conversation = tuple(request.conversation_messages)
+    selected_conversation = ()
+    context_fingerprint = (
+        hashlib.sha256(repr(available_context).encode("utf-8")).hexdigest()
+        if available_context is not None else None
+    )
+    context_sent = False
+    conversation_sent = False
+
+    if request.purpose in {"ask", "conversation"}:
+        session_available = bool(request.provider_state)
+        if request.purpose == "conversation" and session_available:
+            if (
+                request.context_dirty
+                or context_fingerprint != request.previous_context_fingerprint
+            ):
+                provider_input = build_context_refresh_prompt(
+                    selected_context, request.task
+                )
+                context_sent = True
+            else:
+                provider_input = request.task
+        else:
+            provider_input = build_ask_prompt(selected_context, request.task)
+            context_sent = True
+            if available_conversation:
+                selected_conversation = tuple(
+                    message for message in available_conversation
+                    if message.status == "complete"
+                )
+                transcript = _conversation_block(selected_conversation)
+                if transcript:
+                    provider_input = transcript + "\n\n" + provider_input
+                    conversation_sent = True
+    else:
+        provider_input = request.task
+        if request.context_material:
+            provider_input += "\n\n" + request.context_material
+
+    return AIInvocationPlan(
+        invocation_id=uuid.uuid4().hex,
+        purpose=request.purpose,
+        parent_command=request.parent_command,
+        provider=provider,
+        provider_name=provider_name,
+        model=None,
+        working_directory=request.working_directory,
+        conversation_id=request.conversation_id,
+        provider_state=tuple(request.provider_state),
+        available_persistent_context=available_context,
+        selected_persistent_context=selected_context,
+        available_conversation=available_conversation,
+        selected_conversation=selected_conversation,
+        task=request.task,
+        provider_input=provider_input,
+        output_contract=request.output_contract,
+        retries=request.retries,
+        timeout=request.timeout,
+        isolated=request.isolated,
+        stream_output=request.stream_output,
+        display_output=request.display_output,
+        persist_conversation=request.persist_conversation,
+        authority=request.authority,
+        context_fingerprint=context_fingerprint,
+        context_sent=context_sent,
+        conversation_sent=conversation_sent,
+        preparation_error=provider_error
+    )
+
+
 def start_provider_process(command, *, cwd=None, env=None, merge_stderr=False):
     return subprocess.Popen(
         command,
@@ -75,14 +232,14 @@ def start_provider_process(command, *, cwd=None, env=None, merge_stderr=False):
     )
 
 
-def _execute(invocation, provider, on_event=None, on_output=None):
+def _execute_attempt(plan, provider, on_event=None, on_output=None):
     if on_event:
         on_event("preparing")
     started = perf_counter()
     try:
         process = start_provider_process(
-            provider.build_command(invocation.prompt, isolated=invocation.isolated),
-            cwd=invocation.working_directory,
+            provider.build_command(plan.provider_input, isolated=plan.isolated),
+            cwd=plan.working_directory,
             merge_stderr=provider.MERGE_STDERR
         )
     except (FileNotFoundError, OSError) as error:
@@ -115,7 +272,7 @@ def _execute(invocation, provider, on_event=None, on_output=None):
         try:
             line = queue.get(timeout=0.1)
         except Empty:
-            if invocation.timeout is not None and perf_counter() - started >= invocation.timeout:
+            if plan.timeout is not None and perf_counter() - started >= plan.timeout:
                 process.kill()
                 timed_out = True
             continue
@@ -140,64 +297,86 @@ def _execute(invocation, provider, on_event=None, on_output=None):
     return returncode, "".join(output), elapsed, error
 
 
-def invoke(invocation, *, validator=None, on_event=None, on_output=None):
-    provider, provider_error = resolve_provider(invocation.agent_name)
-    if provider is None:
+def execute(
+    plan, *, validator=None, on_event=None, on_output=None, executor=None
+):
+    if executor is not None:
+        started = perf_counter()
+        value = executor(plan, on_output=on_output)
+        if isinstance(value, AIResult):
+            return value
+        return AIResult(
+            plan=plan,
+            returncode=0,
+            output=getattr(value, "response", ""),
+            elapsed=perf_counter() - started,
+            provider=plan.provider_name,
+            value=value
+        )
+    if plan.provider is None:
         if on_event:
             on_event("failed")
-        return AIInvocationResult(
-            invocation, 127, "", 0, None,
-            validation_error=provider_error
+        return AIResult(
+            plan, 127, "", 0, None,
+            validation_error=plan.preparation_error
         )
-    automatic = invocation.agent_name is None and not os.environ.get("ROTBOT_AGENT", "").strip()
-    validation_error = None
+    provider = plan.provider
+    automatic = plan.provider_name == OPENCODE.NAME and not os.environ.get(
+        "ROTBOT_AGENT", ""
+    ).strip()
     output = ""
     elapsed = 0
-    for attempt in range(1, invocation.retries + 2):
-        returncode, output, duration, error = _execute(
-            invocation, provider, on_event, on_output
+    for attempt in range(1, plan.retries + 2):
+        returncode, output, duration, error = _execute_attempt(
+            plan, provider, on_event, on_output
         )
         elapsed += duration
         if automatic and provider is OPENCODE and returncode == -SIGILL and which(CODEX.EXECUTABLE):
             provider = CODEX
-            returncode, output, duration, error = _execute(
-                invocation, provider, on_event, on_output
+            returncode, output, duration, error = _execute_attempt(
+                plan, provider, on_event, on_output
             )
             elapsed += duration
         if returncode != 0:
             detail = f"{provider.NAME} failed with exit code {returncode}."
             if error:
                 detail += f"\n{error}"
-            return AIInvocationResult(
-                invocation, returncode, output, elapsed, provider.NAME,
+            return AIResult(
+                plan, returncode, output, elapsed, provider.NAME,
                 validation_error=detail, attempts=attempt
             )
         if validator is None:
             if on_event:
                 on_event("completed")
-            return AIInvocationResult(
-                invocation, 0, output, elapsed, provider.NAME, attempts=attempt
-            )
+            return AIResult(plan, 0, output, elapsed, provider.NAME, attempts=attempt)
         if on_event:
             on_event("validating")
         try:
             value = validator(output)
         except Exception as error:
-            validation_error = str(error)
-            if attempt <= invocation.retries:
+            if attempt <= plan.retries:
                 if on_event:
                     on_event("retrying")
                 continue
             if on_event:
                 on_event("failed")
-            return AIInvocationResult(
-                invocation, 0, output, elapsed, provider.NAME,
-                validation_error=validation_error, attempts=attempt
+            return AIResult(
+                plan, 0, output, elapsed, provider.NAME,
+                validation_error=str(error), attempts=attempt
             )
         if on_event:
             on_event("completed")
-        return AIInvocationResult(
-            invocation, 0, output, elapsed, provider.NAME,
+        return AIResult(
+            plan, 0, output, elapsed, provider.NAME,
             value=value, attempts=attempt
         )
     raise AssertionError("unreachable")
+
+
+def invoke(request, *, validator=None, on_event=None, on_output=None):
+    return execute(
+        prepare(request),
+        validator=validator,
+        on_event=on_event,
+        on_output=on_output
+    )

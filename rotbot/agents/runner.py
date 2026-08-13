@@ -2,10 +2,9 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 
-from rotbot.agents.invocation import AIInvocation, invoke, resolve_provider
+from rotbot.agents.invocation import AIRequest, invoke
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.inspection import ContextInspectionError, inspect_current_context
-from rotbot.contexts.prompt import build_ask_prompt, resolve_egress_context
 from rotbot.session.ai import AIMessage
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.ui.ai import AIActivityPresenter
@@ -17,19 +16,10 @@ from rotbot.ui.terminal import (
 )
 
 
-resolve_prompt_context = resolve_egress_context
-
-
 def ask_agent(args):
     question = " ".join(args.question) if isinstance(args.question, list) else args.question
-    provider, provider_error = resolve_provider(getattr(args, "agent", None))
-    if provider is None:
-        rot_say(provider_error)
-        return 127
     try:
         inspected = inspect_current_context(bootstrap=False)
-        context = resolve_prompt_context(inspected, provider.NAME)
-        prompt = build_ask_prompt(context, question)
     except (
         ContextInspectionError,
         loader.ContextError,
@@ -51,19 +41,30 @@ def ask_agent(args):
         if output_started:
             rot_output_line(line.rstrip("\r\n"))
 
-    result = invoke(
-        AIInvocation(
-            purpose="ask",
-            parent_command="ask",
-            prompt=prompt,
-            working_directory=Path(inspected.cwd),
-            agent_name=getattr(args, "agent", None),
-            conversation=False,
-            display_output=True
-        ),
-        on_event=presenter,
-        on_output=output
-    )
+    try:
+        result = invoke(
+            AIRequest(
+                purpose="ask",
+                parent_command="ask",
+                task=question,
+                working_directory=Path(inspected.cwd),
+                agent_name=getattr(args, "agent", None),
+                inspected_context=inspected,
+                display_output=True,
+                persist_conversation=True
+            ),
+            on_event=presenter,
+            on_output=output
+        )
+    except (
+        ContextInspectionError,
+        loader.ContextError,
+        machines.MachineContextError,
+        people.PersonContextError,
+        entities.EntityContextError
+    ) as error:
+        rot_say(str(error))
+        return 2
     if output_started:
         rot_output_end()
     if result.validation_error:

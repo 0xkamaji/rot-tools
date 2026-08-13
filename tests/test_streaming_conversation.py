@@ -9,6 +9,7 @@ import tempfile
 from rotbot.agents.conversation import (
     BackendResult, BackendStateReference, TextDelta
 )
+from rotbot.agents import invocation
 from rotbot.contexts.inspection import IdentificationSources, InspectedContext
 from rotbot.session import ai
 from rotbot.session.conversations import ConversationStore
@@ -61,8 +62,8 @@ class NativeStreamingBackend:
 
 class StreamingConversationTests(unittest.TestCase):
     def send(self, conversation, on_text=None):
-        with patch.object(ai, "resolve_prompt_context", return_value=Mock()), patch.object(
-            ai, "build_ask_prompt", return_value="PROMPT"
+        with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "build_ask_prompt", return_value="PROMPT"
         ):
             return conversation.send(
                 "Question", inspected("/work"), Path("/work"), on_text=on_text

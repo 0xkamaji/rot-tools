@@ -1,34 +1,15 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-import hashlib
 import uuid
 
 from rotbot.agents.conversation import OpenCodeBackend, TextDelta
-from rotbot.contexts.prompt import (
-    build_ask_prompt,
-    build_context_refresh_prompt,
-    resolve_egress_context
+from rotbot.agents.invocation import (
+    AIRequest,
+    ConversationMessage,
+    execute,
+    prepare
 )
 from rotbot.session.conversations import ConversationStore
-
-
-# Compatibility name for tests/extensions; both names are the same egress gate.
-resolve_prompt_context = resolve_egress_context
-
-
-def _transcript_block(messages):
-    messages = tuple(message for message in messages if message.status == "complete")
-    if not messages:
-        return ""
-    lines = [
-        "<rot_conversation_transcript>",
-        "This is Rot's canonical transcript from the current conversation. "
-        "Use it only to restore conversational continuity after backend state "
-        "was replaced."
-    ]
-    lines.extend(f"{message.role}: {message.content}" for message in messages)
-    lines.append("</rot_conversation_transcript>")
-    return "\n\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -107,21 +88,6 @@ class AIConversation:
     def mark_context_dirty(self):
         self.context_dirty = True
 
-    def _compiled_input(self, inspected, user_message, capability_state=None):
-        context = (
-            resolve_prompt_context(
-                inspected, self.backend.name, capability_state=capability_state
-            )
-            if capability_state is not None
-            else resolve_prompt_context(inspected, self.backend.name)
-        )
-        fingerprint = hashlib.sha256(repr(context).encode("utf-8")).hexdigest()
-        if self.context_fingerprint is None:
-            return build_ask_prompt(context, user_message), fingerprint, True
-        if self.context_dirty or fingerprint != self.context_fingerprint:
-            return build_context_refresh_prompt(context, user_message), fingerprint, True
-        return user_message, fingerprint, False
-
     def _record_backend_state(self, result):
         self.model = result.model or self.model
         for reference in result.remote_state:
@@ -156,8 +122,6 @@ class AIConversation:
         self._persist_start(inspected, cwd)
         backend_replaced = self.backend.prepare(authority, cwd) is True
         prior_messages = tuple(self.messages)
-        if backend_replaced:
-            self.context_fingerprint = None
         user_turn = AIMessage(
             f"msg_{uuid.uuid4().hex}", "user", user_message,
             datetime.now().astimezone(), authority, "pending"
@@ -166,45 +130,56 @@ class AIConversation:
             self.store.append_message(self.id, user_turn)
             self.store.update_metadata(self.id, **self._metadata(inspected, cwd))
         self.messages.append(user_turn)
-        if backend_replaced and prior_messages:
-            transcript = _transcript_block(prior_messages)
-        else:
-            transcript = ""
         self.status = "thinking"
         assistant_parts = []
         try:
-            prompt, fingerprint, context_updated = self._compiled_input(
-                inspected, user_message, capability_state
-            )
-            if transcript:
-                prompt = transcript + "\n\n" + prompt
-            stream_generate = getattr(self.backend, "stream_generate", None)
-            native_stream = callable(
-                getattr(type(self.backend), "stream_generate", None)
-            )
-            if native_stream:
-                stream = stream_generate(prompt, cwd, authority=authority)
-                try:
-                    while True:
-                        try:
-                            event = next(stream)
-                        except StopIteration as completed:
-                            result = completed.value
-                            break
-                        if isinstance(event, TextDelta) and event.text:
-                            assistant_parts.append(event.text)
-                            self.status = "active"
-                            if on_text is not None:
-                                on_text(event.text)
-                finally:
-                    stream.close()
-            else:
-                result = self.backend.generate(prompt, cwd, authority=authority)
-                if result.response:
-                    assistant_parts.append(result.response)
+            known_state = getattr(self.backend, "known_remote_state", lambda: ())()
+            if not isinstance(known_state, (tuple, list)):
+                known_state = tuple(self.remote_state)
+            plan = prepare(AIRequest(
+                purpose="conversation",
+                parent_command="interactive",
+                task=user_message,
+                working_directory=cwd,
+                agent_name="opencode",
+                inspected_context=inspected,
+                capability_state=capability_state,
+                conversation_id=self.id,
+                conversation_messages=tuple(
+                    ConversationMessage(message.role, message.content, message.status)
+                    for message in prior_messages
+                ),
+                provider_state=() if backend_replaced else tuple(known_state),
+                previous_context_fingerprint=(
+                    None if backend_replaced else self.context_fingerprint
+                ),
+                context_dirty=self.context_dirty,
+                authority=authority,
+                stream_output=True,
+                display_output=True,
+                persist_conversation=True
+            ))
+
+            def receive_text(text):
+                if text:
+                    assistant_parts.append(text)
                     self.status = "active"
                     if on_text is not None:
-                        on_text(result.response)
+                        on_text(text)
+
+            execute_plan = getattr(self.backend, "execute_plan", None)
+            native_execute_plan = callable(
+                getattr(type(self.backend), "execute_plan", None)
+            )
+            if native_execute_plan:
+                execution = execute(
+                    plan, executor=execute_plan, on_output=receive_text
+                )
+            else:
+                execution = self._execute_compatible_backend(
+                    plan, cwd, authority, receive_text
+                )
+            result = execution.value
             if not assistant_parts and result.response:
                 assistant_parts.append(result.response)
                 self.status = "active"
@@ -253,8 +228,8 @@ class AIConversation:
             self.messages.append(assistant_turn)
             if self.store is not None:
                 self.store.append_message(self.id, assistant_turn)
-        self.context_fingerprint = fingerprint
-        if context_updated:
+        self.context_fingerprint = plan.context_fingerprint
+        if plan.context_sent:
             self.context_version += 1
         self.context_dirty = False
         if self.store is not None:
@@ -262,6 +237,35 @@ class AIConversation:
         if response != result.response:
             result = type(result)(response, result.remote_state, result.model)
         return result
+
+    def _execute_compatible_backend(self, plan, cwd, authority, on_text):
+        def adapter(_plan, on_output=None):
+            stream_generate = getattr(self.backend, "stream_generate", None)
+            native_stream = callable(
+                getattr(type(self.backend), "stream_generate", None)
+            )
+            if native_stream:
+                stream = stream_generate(
+                    _plan.provider_input, cwd, authority=authority
+                )
+                try:
+                    while True:
+                        try:
+                            event = next(stream)
+                        except StopIteration as completed:
+                            return completed.value
+                        if isinstance(event, TextDelta) and event.text and on_output:
+                            on_output(event.text)
+                finally:
+                    stream.close()
+            result = self.backend.generate(
+                _plan.provider_input, cwd, authority=authority
+            )
+            if result.response and on_output:
+                on_output(result.response)
+            return result
+
+        return execute(plan, executor=adapter, on_output=on_text)
 
     def abort_current(self):
         self.backend.abort_current()

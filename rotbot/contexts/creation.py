@@ -7,7 +7,7 @@ import tempfile
 import shutil
 from types import SimpleNamespace
 
-from rotbot.agents.invocation import AIInvocation, invoke
+from rotbot.agents.invocation import AIRequest, invoke
 from rotbot.commands.machine import inspect_local_machine, show_inspection
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.matching import (
@@ -801,16 +801,15 @@ def _enrich_project_context(
     presenter = AIActivityPresenter("developing context", stop_on_stream=False)
     with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
         result = invoke(
-            AIInvocation(
+            AIRequest(
                 purpose="context_development",
                 parent_command=parent_command,
-                prompt=_agent_prompt(name, synopsis),
+                task=_agent_prompt(name, synopsis),
                 working_directory=agent_directory,
                 agent_name=agent_name,
                 timeout=300,
-                structured_output="identity/state context documents",
+                output_contract="identity/state context documents",
                 retries=1,
-                conversation=False,
                 isolated=True,
                 display_output=False
             ),
