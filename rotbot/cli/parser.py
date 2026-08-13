@@ -8,7 +8,7 @@ from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
 from rotbot.commands.wtf import directory_report
 from rotbot.contexts.binding import context_bind
-from rotbot.contexts.creation import context_add
+from rotbot.contexts.creation import context_add, context_develop
 from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.inspection import context_inspect
 from rotbot.contexts.loader import context_list, context_show
@@ -396,6 +396,22 @@ def create_parser():
         help="Choose the AI agent used to draft a project context"
     )
     context_add_parser.set_defaults(func=context_add)
+
+    context_develop_parser = context_commands.add_parser(
+        "develop",
+        help="Enrich an existing project context using AI"
+    )
+    context_develop_parser.add_argument(
+        "name",
+        help="Project context name to enrich"
+    )
+    context_develop_parser.add_argument(
+        "-a",
+        "--agent",
+        choices=AGENT_CHOICES,
+        help="Choose the AI agent used for enrichment"
+    )
+    context_develop_parser.set_defaults(func=context_develop)
 
     context_mod_parser = context_commands.add_parser(
         "mod",

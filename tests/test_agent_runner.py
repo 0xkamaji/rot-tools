@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import call, Mock, patch
 
 from rotbot.agents import runner
-from rotbot.agents.config import CODEX
+from rotbot.agents.config import CODEX, OPENCODE
 from rotbot.contexts import inspection, prompt
 
 
@@ -131,6 +131,93 @@ class AskAgentTests(unittest.TestCase):
 
 
 class StreamAgentTests(unittest.TestCase):
+    def test_opencode_returns_and_displays_stdout_without_stderr_banner(self):
+        process = SimpleNamespace(
+            stdout=iter(('{"identity": "Identity", "state": "State"}\n',)),
+            stderr=iter(("\x1b[0m\n", "> build · qwen3:8b\n", "\x1b[0m\n")),
+            wait=Mock(return_value=0),
+            kill=Mock()
+        )
+        with patch.object(runner, "_select_agent", return_value=OPENCODE), patch.object(
+            runner.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(runner, "rot_status"), patch.object(
+            runner, "rot_break"
+        ), patch.object(runner, "rot_output_start"), patch.object(
+            runner, "rot_output_line"
+        ) as output_line, patch.object(runner, "rot_output_end"), patch.object(
+            runner, "rot_say"
+        ) as rot_say:
+            returncode, output, _elapsed = runner.stream_agent(
+                "compiled prompt", "Thinking...", agent_name="opencode"
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(output, '{"identity": "Identity", "state": "State"}\n')
+        self.assertIs(popen.call_args.kwargs["stderr"], runner.subprocess.PIPE)
+        output_line.assert_called_once_with(
+            '{"identity": "Identity", "state": "State"}'
+        )
+        rot_say.assert_not_called()
+
+    def test_opencode_reports_stderr_diagnostics_after_failure(self):
+        process = SimpleNamespace(
+            stdout=iter(()),
+            stderr=iter(("authentication failed\n", "provider unavailable\n")),
+            wait=Mock(return_value=7),
+            kill=Mock()
+        )
+        with patch.object(runner, "_select_agent", return_value=OPENCODE), patch.object(
+            runner.subprocess, "Popen", return_value=process
+        ), patch.object(runner, "rot_status"), patch.object(
+            runner, "rot_break"
+        ), patch.object(runner, "rot_output_start"), patch.object(
+            runner, "rot_output_line"
+        ), patch.object(runner, "rot_output_end"), patch.object(
+            runner, "rot_say"
+        ) as rot_say:
+            returncode, output, _elapsed = runner.stream_agent(
+                "compiled prompt", "Thinking...", agent_name="opencode"
+            )
+
+        self.assertEqual(returncode, 7)
+        self.assertEqual(output, "")
+        rot_say.assert_called_once_with(
+            "OpenCode failed with exit code 7.\n"
+            "authentication failed\nprovider unavailable"
+        )
+
+    def test_isolated_opencode_run_is_pure_and_not_displayed(self):
+        process = SimpleNamespace(
+            stdout=iter(('{"identity": "Identity", "state": "State"}\n',)),
+            stderr=iter(()),
+            wait=Mock(return_value=0),
+            kill=Mock()
+        )
+        with patch.object(runner, "_select_agent", return_value=OPENCODE), patch.object(
+            runner.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(runner, "rot_status"), patch.object(
+            runner, "rot_break"
+        ), patch.object(runner, "rot_output_start") as output_start, patch.object(
+            runner, "rot_output_line"
+        ) as output_line, patch.object(runner, "rot_output_end") as output_end:
+            returncode, output, _elapsed = runner.stream_agent(
+                "compiled prompt",
+                "Thinking...",
+                agent_name="opencode",
+                isolated=True,
+                display_output=False
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(output, '{"identity": "Identity", "state": "State"}\n')
+        self.assertEqual(
+            popen.call_args.args[0],
+            ["opencode", "run", "--pure", "compiled prompt"]
+        )
+        output_start.assert_not_called()
+        output_line.assert_not_called()
+        output_end.assert_not_called()
+
     def test_streams_backend_output_with_separate_display_question(self):
         process = SimpleNamespace(
             stdout=iter(("First line\n", "\n", "Second line\n")),

@@ -9,9 +9,10 @@ class ContextMenuTests(unittest.TestCase):
     def test_number_and_action_name_route_to_existing_handlers(self):
         cases = (
             ("1", "context_add", {"agent": None}),
+            ("dev", "context_develop", {"name": None, "agent": None}),
             ("list", "context_list", {}),
             ("m", "context_mod", {"name": None}),
-            ("4", "context_show", {"name": None, "vision": False}),
+            ("5", "context_show", {"name": None, "vision": False}),
             (
                 "bind",
                 "context_bind",
@@ -50,7 +51,7 @@ class ContextMenuTests(unittest.TestCase):
         self.assertIn("enter an action name", rot_say.call_args_list[1].args[0])
 
     def test_blank_exit_and_eof_close_without_calling_handlers(self):
-        for side_effect in (("",), ("7",), (EOFError(),)):
+        for side_effect in (("",), ("8",), (EOFError(),)):
             with self.subTest(side_effect=side_effect), patch(
                 "builtins.input",
                 side_effect=side_effect

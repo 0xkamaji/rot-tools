@@ -44,7 +44,12 @@ class CompletionProviderTests(unittest.TestCase):
     def test_subcommands_and_options_are_derived_from_parser(self):
         self.assertEqual(
             self.values("context "),
-            [value + " " for value in ("add", "bind", "delete", "inspect", "list", "mod", "show")]
+            [
+                value + " "
+                for value in (
+                    "add", "bind", "delete", "develop", "inspect", "list", "mod", "show"
+                )
+            ]
         )
         self.assertIn("--agent ", self.values("ask --"))
         self.assertEqual(self.values("ask --agent c"), ["codex "])

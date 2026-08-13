@@ -1,6 +1,8 @@
 from pathlib import Path, PurePosixPath
+import json
 import re
 import subprocess
+import tomllib
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
@@ -22,9 +24,11 @@ class MatchError(Exception):
 
 
 class MatchSection(NamedTuple):
+    is_git_repo: bool | None
     git_remotes: tuple
     domains: tuple
     required_paths: tuple
+    optional_paths: tuple
 
 
 class MatchDefinition(NamedTuple):
@@ -103,7 +107,7 @@ def _validate_required_path(value):
     return str(path) + ("/" if value.endswith("/") else "")
 
 
-def parse_match_document(markdown):
+def parse_legacy_match_document(markdown):
     section = None
     label = None
     seen_heading = False
@@ -167,9 +171,11 @@ def parse_match_document(markdown):
                 raise MatchError(f"Invalid Git remote in match definition: {remote}")
             normalized_remotes.append(normalized)
         source = MatchSection(
+            True,
             tuple(normalized_remotes),
             (),
-            tuple(_validate_required_path(path) for path in paths)
+            tuple(_validate_required_path(path) for path in paths),
+            ()
         )
 
     production = None
@@ -179,12 +185,113 @@ def parse_match_document(markdown):
         if not domains or not paths:
             raise MatchError("Production match requires Domains and Required paths.")
         production = MatchSection(
+            None,
             (),
             tuple(_normalize_domain(domain) for domain in domains),
-            tuple(_validate_required_path(path) for path in paths)
+            tuple(_validate_required_path(path) for path in paths),
+            ()
         )
 
     return MatchDefinition(source, production)
+
+
+def _string_list(table, key):
+    values = table.get(key, [])
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise MatchError(f"Match field must be an array of strings: {key}")
+    return tuple(values)
+
+
+def parse_match_toml(content):
+    try:
+        document = tomllib.loads(content)
+    except tomllib.TOMLDecodeError as error:
+        raise MatchError(f"Invalid match TOML: {error}") from None
+    if not document or set(document) - {"source", "production"}:
+        raise MatchError("Match TOML must define only source or production tables.")
+
+    source = None
+    if "source" in document:
+        table = document["source"]
+        allowed = {"is_git_repo", "git_remotes", "required_paths", "optional_paths"}
+        if not isinstance(table, dict) or set(table) - allowed:
+            raise MatchError("Source match contains unsupported fields.")
+        is_git_repo = table.get("is_git_repo")
+        if not isinstance(is_git_repo, bool):
+            raise MatchError("Source match requires a boolean is_git_repo field.")
+        required = _string_list(table, "required_paths")
+        optional = _string_list(table, "optional_paths")
+        remotes = _string_list(table, "git_remotes")
+        if not required:
+            raise MatchError("Source match requires at least one required path.")
+        if remotes and not is_git_repo:
+            raise MatchError("A non-Git source match cannot declare Git remotes.")
+        normalized_remotes = []
+        for remote in remotes:
+            normalized = normalize_git_remote(remote)
+            if normalized is None:
+                raise MatchError(f"Invalid Git remote in match definition: {remote}")
+            normalized_remotes.append(normalized)
+        source = MatchSection(
+            is_git_repo,
+            tuple(normalized_remotes),
+            (),
+            tuple(_validate_required_path(path) for path in required),
+            tuple(_validate_required_path(path) for path in optional)
+        )
+
+    production = None
+    if "production" in document:
+        table = document["production"]
+        allowed = {"domains", "required_paths", "optional_paths"}
+        if not isinstance(table, dict) or set(table) - allowed:
+            raise MatchError("Production match contains unsupported fields.")
+        domains = _string_list(table, "domains")
+        required = _string_list(table, "required_paths")
+        optional = _string_list(table, "optional_paths")
+        if not domains or not required:
+            raise MatchError("Production match requires domains and required paths.")
+        production = MatchSection(
+            None,
+            (),
+            tuple(_normalize_domain(domain) for domain in domains),
+            tuple(_validate_required_path(path) for path in required),
+            tuple(_validate_required_path(path) for path in optional)
+        )
+    return MatchDefinition(source, production)
+
+
+def _toml_array(values):
+    return "[\n" + "".join(f"    {json.dumps(value)},\n" for value in values) + "]"
+
+
+def render_match_toml(definition):
+    sections = []
+    if definition.source is not None:
+        source = definition.source
+        lines = [
+            "[source]",
+            f"is_git_repo = {'true' if source.is_git_repo else 'false'}",
+            f"required_paths = {_toml_array(source.required_paths)}"
+        ]
+        if source.optional_paths:
+            lines.append(f"optional_paths = {_toml_array(source.optional_paths)}")
+        if source.git_remotes:
+            lines.append(f"git_remotes = {_toml_array(source.git_remotes)}")
+        sections.append("\n".join(lines))
+    if definition.production is not None:
+        production = definition.production
+        lines = [
+            "[production]",
+            f"domains = {_toml_array(production.domains)}",
+            f"required_paths = {_toml_array(production.required_paths)}"
+        ]
+        if production.optional_paths:
+            lines.append(f"optional_paths = {_toml_array(production.optional_paths)}")
+        sections.append("\n".join(lines))
+    content = "\n\n".join(sections) + "\n"
+    parse_match_toml(content)
+    return content
 
 
 def load_match_definition(name):
@@ -193,13 +300,16 @@ def load_match_definition(name):
         directory = identity_path.parent
         if directory.name in {"local", "shareable"}:
             directory = directory.parent
-        match_path = loader._existing_project_document(directory, "match.md")
+        match_path = loader._existing_project_document(directory, "match.toml")
+        legacy_path = loader._existing_project_document(directory, "match.md")
     except loader.ContextError as error:
         raise MatchError(str(error)) from None
-    if match_path.is_symlink():
+    if match_path.is_symlink() or legacy_path.is_symlink():
         raise MatchError(f"Invalid match document for context: {name}")
     if not match_path.exists():
-        return None
+        match_path = legacy_path
+        if not match_path.exists():
+            return None
     if not match_path.is_file():
         raise MatchError(f"Invalid match document for context: {name}")
     try:
@@ -207,7 +317,11 @@ def load_match_definition(name):
     except (OSError, UnicodeError) as error:
         raise MatchError(f"Could not load match document for '{name}': {error}") from None
     try:
-        return parse_match_document(content)
+        return (
+            parse_match_toml(content)
+            if match_path.name == "match.toml"
+            else parse_legacy_match_document(content)
+        )
     except MatchError as error:
         raise MatchError(f"Invalid match document for '{name}': {error}") from None
 
@@ -245,6 +359,10 @@ def _required_path_evidence(root, required_paths):
         all_found = all_found and found
         evidence.append(Evidence(found, f"Found {relative}" if found else f"Missing {relative}"))
     return all_found, tuple(evidence)
+
+
+def _optional_path_evidence(root, optional_paths):
+    return _required_path_evidence(root, optional_paths)[1]
 
 
 def _git_details(candidate):
@@ -291,59 +409,61 @@ def _git_details(candidate):
 def _source_candidate(name, definition, candidate, git_details):
     git_root, remotes, git_error = git_details
     evidence = []
-    if git_error:
-        evidence.append(Evidence(False, git_error))
-        path_root = candidate
+    is_git_repo = git_root == candidate
+    git_matches = is_git_repo == definition.is_git_repo
+    if definition.is_git_repo:
+        evidence.append(Evidence(git_matches, (
+            f"Git root resolves to {git_root}"
+            if is_git_repo else git_error or "Candidate is not a Git repository root."
+        )))
     else:
-        root_matches = git_root == candidate
-        evidence.append(Evidence(root_matches, f"Git root resolves to {git_root}"))
-        path_root = git_root
+        evidence.append(Evidence(
+            git_matches,
+            "Candidate is not a Git repository."
+            if git_matches else f"Candidate is a Git repository rooted at {git_root}."
+        ))
 
-    configured = set(definition.git_remotes)
-    matching = [remote for remote in remotes if remote[2] in configured]
-    if matching:
-        for remote_name, _url, normalized in matching:
-            evidence.append(Evidence(True, f"Git remote {remote_name} matches {normalized}"))
-    else:
-        evidence.append(Evidence(False, "No configured Git remote matches."))
+    remote_matches = True
+    if definition.git_remotes:
+        configured = set(definition.git_remotes)
+        matching = [remote for remote in remotes if remote[2] in configured]
+        remote_matches = bool(matching)
+        if matching:
+            for remote_name, _url, normalized in matching:
+                evidence.append(Evidence(True, f"Git remote {remote_name} matches {normalized}"))
+        else:
+            evidence.append(Evidence(False, "No configured Git remote matches."))
 
-    paths_ok, path_evidence = _required_path_evidence(path_root, definition.required_paths)
+    paths_ok, path_evidence = _required_path_evidence(candidate, definition.required_paths)
     evidence.extend(path_evidence)
-    strong = git_root == candidate and bool(matching) and paths_ok
+    evidence.extend(_optional_path_evidence(candidate, definition.optional_paths))
+    strong = git_matches and remote_matches and paths_ok
     return MatchCandidate(name, "source", candidate, strong, tuple(evidence))
 
 
-def inspect_source_repository(path):
+def inspect_source_project(path):
     candidate = Path(path).expanduser()
     if not candidate.exists() or not candidate.is_dir():
         raise MatchError(f"Source path is not a directory:\n{candidate}")
     candidate = candidate.resolve()
-    git_root, remotes, git_error = _git_details(candidate)
-    if git_error:
-        raise MatchError(git_error)
-    if git_root != candidate:
-        raise MatchError(f"Source path is not the Git repository root:\n{candidate}")
-    normalized = tuple(sorted({remote[2] for remote in remotes}))
-    if not normalized:
-        raise MatchError(
-            "The Git repository has no supported configured remote. "
-            "A reliable source match cannot be generated."
-        )
-    return candidate, normalized
+    git_root, remotes, _git_error = _git_details(candidate)
+    is_git_repo = git_root == candidate
+    normalized = tuple(sorted({remote[2] for remote in remotes})) if is_git_repo else ()
+    return candidate, is_git_repo, normalized
 
 
-def build_source_match_document(git_remotes, required_paths):
-    document = (
-        "# Match\n\n"
-        "## Source\n\n"
-        "Git remotes:\n\n"
-        + "\n".join(f"- {remote}" for remote in git_remotes)
-        + "\n\nRequired paths:\n\n"
-        + "\n".join(f"- {path}" for path in required_paths)
-        + "\n"
+def build_source_match_toml(is_git_repo, required_paths, optional_paths=(), git_remotes=()):
+    definition = MatchDefinition(
+        MatchSection(
+            bool(is_git_repo),
+            tuple(git_remotes),
+            (),
+            tuple(required_paths),
+            tuple(optional_paths)
+        ),
+        None
     )
-    parse_match_document(document)
-    return document
+    return render_match_toml(definition)
 
 
 def match_source_definition(path, name, definition):
@@ -440,6 +560,7 @@ def _production_candidate(name, definition, candidate, caddy_details):
 
     paths_ok, path_evidence = _required_path_evidence(candidate, definition.required_paths)
     evidence.extend(path_evidence)
+    evidence.extend(_optional_path_evidence(candidate, definition.optional_paths))
     strong = bool(root_matches) and paths_ok
     return MatchCandidate(name, "production", candidate, strong, tuple(evidence))
 
@@ -454,7 +575,7 @@ def match_contexts(path, name=None, binding_type=None, caddy_paths=None):
 
     definitions = discover_match_definitions((name,)) if name else discover_match_definitions()
     if name and not definitions:
-        raise MatchError(f"Context '{name}' does not have a match.md definition.")
+        raise MatchError(f"Context '{name}' does not have a match.toml definition.")
     if name and binding_type:
         definition = definitions[0][1]
         if getattr(definition, binding_type) is None:

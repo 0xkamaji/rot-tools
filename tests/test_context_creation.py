@@ -4,9 +4,12 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, Mock, patch
 
+from rotbot.agents import runner
+from rotbot.agents.config import OPENCODE
 from rotbot.commands.machine import MachineInspection
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
@@ -128,7 +131,7 @@ class ContextCreationTests(unittest.TestCase):
         (self.project / "private.key").write_text("private", encoding="utf-8")
         (self.project / "image.png").write_bytes(b"\x89PNG\0secret")
 
-        synopsis, required = context_creation._inspect_project(
+        synopsis, required, optional = context_creation._inspect_project(
             self.project,
             ("github.com/example/project",)
         )
@@ -141,12 +144,13 @@ class ContextCreationTests(unittest.TestCase):
         self.assertNotIn("image.png", synopsis)
         self.assertLessEqual(len(synopsis.encode("utf-8")), 64_000)
         self.assertEqual(required[:2], ("main.py", "src/"))
+        self.assertNotIn(str(self.project), required + optional)
 
     def test_bounded_inspection_skips_secrets_inside_approved_files(self):
         secret = "client_secret = super-sensitive-value"
         (self.project / "main.py").write_text(secret, encoding="utf-8")
 
-        synopsis, _required = context_creation._inspect_project(
+        synopsis, _required, _optional = context_creation._inspect_project(
             self.project,
             ("github.com/example/project",)
         )
@@ -163,19 +167,20 @@ class ContextCreationTests(unittest.TestCase):
         result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="n")
 
         self.assertEqual(result, 0)
-        prompt = stream_agent.call_args.args[0]
+        stream_agent.assert_not_called()
+        synopsis, _required, _optional = context_creation._inspect_project(
+            self.project, ("github.com/example/project",)
+        )
+        prompt = context_creation._agent_prompt("example", synopsis)
         self.assertIn("github.com/example/project", prompt)
         self.assertIn("main.py", prompt)
         self.assertIn("exactly two string keys", prompt)
-        self.assertIn("do not draft match.md or vision.md", prompt)
+        self.assertIn("do not draft match.toml or vision.md", prompt)
         self.assertNotIn(str(self.project), prompt)
         self.assertNotIn(str(secret_config), prompt)
         self.assertNotIn("do-not-send", prompt)
-        self.assertEqual(stream_agent.call_args.kwargs["agent_name"], None)
-        self.assertEqual(stream_agent.call_args.kwargs["timeout"], 300)
-        self.assertNotEqual(Path(stream_agent.call_args.args[2]), self.project)
 
-    def test_agent_failure_or_invalid_output_creates_nothing(self):
+    def test_agent_failure_or_invalid_output_preserves_usable_context(self):
         cases = (
             (7, "failure"),
             (0, ""),
@@ -187,16 +192,58 @@ class ContextCreationTests(unittest.TestCase):
                 "match": "# Match"
             }))
         )
-        for returncode, output in cases:
+        for index, (returncode, output) in enumerate(cases):
             with self.subTest(returncode=returncode, output=output):
+                name = f"example-{index}"
                 result, _agent, _rot_say, _rot_continue = self.run_add(
                     answer="yes",
                     output=output,
-                    returncode=returncode
+                    returncode=returncode,
+                    args=self.args(name=name)
                 )
-                self.assertNotEqual(result, 0)
-                self.assertFalse((self.project_context_root / "example").exists())
-                self.assertFalse(config_path().exists())
+                self.assertEqual(result, 0)
+                destination = self.project_context_root / name
+                self.assertTrue(destination.exists())
+                self.assertEqual(
+                    (destination / "local" / "identity.md").read_text(encoding="utf-8"),
+                    context_creation._placeholder_documents(
+                        name, context_matching.load_match_definition(name)
+                    )["identity"]
+                )
+                self.assertEqual(
+                    get_context_binding(name)["source_path"], str(self.project)
+                )
+
+    def test_context_add_parses_stdout_after_opencode_stderr_is_separated(self):
+        process = SimpleNamespace(
+            stdout=iter((self.agent_output + "\n",)),
+            stderr=iter(("\x1b[0m\n", "> build · qwen3:8b\n", "\x1b[0m\n")),
+            wait=Mock(return_value=0),
+            kill=Mock()
+        )
+
+        def stream_agent(*args, **kwargs):
+            with patch.object(runner.subprocess, "Popen", return_value=process):
+                return runner.stream_agent(*args, **kwargs)
+
+        with patch.object(
+            context_creation, "stream_agent", side_effect=stream_agent
+        ), patch.object(
+            runner, "_select_agent", return_value=OPENCODE
+        ), patch.object(runner, "rot_status"), patch.object(
+            runner, "rot_break"
+        ), patch.object(runner, "rot_output_start"), patch.object(
+            runner, "rot_output_line"
+        ) as output_line, patch.object(runner, "rot_output_end"), patch.object(
+            runner, "rot_say"
+        ), patch("builtins.input", return_value="no"), patch.object(
+            context_creation, "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation._add_project_context(self.args(agent="opencode"))
+
+        self.assertEqual(result, 0)
+        output_line.assert_not_called()
+        self.assertFalse((self.project_context_root / "example").exists())
 
     def test_agent_output_rejects_control_characters_and_absolute_paths(self):
         outputs = (
@@ -215,14 +262,156 @@ class ContextCreationTests(unittest.TestCase):
                 "state": "# State\n\nStored at /home/someone/project/main.py."
             })
         )
-        for output in outputs:
+        for index, output in enumerate(outputs):
             with self.subTest(output=output):
+                name = f"unsafe-{index}"
                 result, _agent, _rot_say, _rot_continue = self.run_add(
                     answer="yes",
-                    output=output
+                    output=output,
+                    args=self.args(name=name)
                 )
-                self.assertEqual(result, 1)
-                self.assertFalse((self.project_context_root / "example").exists())
+                self.assertEqual(result, 0)
+                identity = (
+                    self.project_context_root / name / "local" / "identity.md"
+                ).read_text(encoding="utf-8")
+                self.assertIn(context_creation.PLACEHOLDER_POINT, identity)
+
+    def test_identity_does_not_require_literal_maintenance_wording(self):
+        output = json.dumps({
+            "identity": "# Identity\n\nA stable description of the project.",
+            "state": "# State\n\nThe project currently has an entry point."
+        })
+
+        result, _agent, _rot_say, _rot_continue = self.run_add(
+            answer="no", output=output
+        )
+
+        self.assertEqual(result, 0)
+
+    def test_invalid_first_draft_is_retried_once(self):
+        with patch.object(
+            context_creation,
+            "stream_agent",
+            side_effect=((0, "not json", 0.1), (0, self.agent_output, 0.1))
+        ) as stream_agent, patch("builtins.input", return_value="yes"), patch.object(
+            context_creation, "rot_say"
+        ), patch.object(context_creation, "rot_continue"), patch.object(
+            context_creation, "rot_status"
+        ) as rot_status:
+            result = context_creation._add_project_context(self.args())
+
+        self.assertEqual(result, 0)
+        self.assertEqual(stream_agent.call_count, 2)
+        rot_status.assert_called_once_with(
+            "The AI response was not a valid context draft. Retrying once..."
+        )
+
+    def test_context_is_created_bound_and_loadable_before_enrichment(self):
+        destination = self.project_context_root / "example"
+
+        def verify_created(*_args, **_kwargs):
+            self.assertTrue((destination / "local" / "identity.md").is_file())
+            self.assertTrue((destination / "local" / "state.md").is_file())
+            self.assertTrue((destination / "local" / "vision.md").is_file())
+            self.assertTrue((destination / "local" / "match.toml").is_file())
+            self.assertEqual(contexts.load_context("example").name, "example")
+            self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
+            return 127, "", 0.1
+
+        with patch.object(
+            context_creation, "stream_agent", side_effect=verify_created
+        ) as stream_agent, patch("builtins.input", return_value="yes"), patch.object(
+            context_creation, "rot_say"
+        ), patch.object(context_creation, "rot_continue"):
+            result = context_creation._add_project_context(self.args())
+
+        self.assertEqual(result, 0)
+        stream_agent.assert_called_once()
+
+    def test_context_develop_replaces_only_placeholders(self):
+        self.run_add(answer="yes", output="not json")
+
+        with patch.object(
+            context_creation,
+            "stream_agent",
+            return_value=(0, self.agent_output, 0.1)
+        ):
+            result = context_creation.context_develop(
+                argparse.Namespace(name="example", agent=None)
+            )
+
+        self.assertEqual(result, 0)
+        loaded = contexts.load_context("example")
+        self.assertIn("Example is a small test project", loaded.identity)
+        self.assertNotIn(context_creation.PLACEHOLDER_POINT, loaded.identity)
+
+        identity = self.project_context_root / "example" / "local" / "identity.md"
+        identity.write_text("# Manual\n\n- Keep this.\n", encoding="utf-8")
+        with patch.object(
+            context_creation,
+            "stream_agent",
+            return_value=(0, self.agent_output, 0.1)
+        ):
+            result = context_creation.context_develop(
+                argparse.Namespace(name="example", agent=None)
+            )
+        self.assertEqual(result, 1)
+        self.assertEqual(identity.read_text(encoding="utf-8"), "# Manual\n\n- Keep this.\n")
+
+    def test_generated_identity_and_state_use_notes_and_bullet_points(self):
+        output = json.dumps({
+            "identity": "# Identity\n\nStable purpose.\n\n- Intended audience.",
+            "state": "# State\n\nCurrent capability.\nContinued detail."
+        })
+
+        documents = context_creation._parse_agent_draft(output, self.project)
+
+        self.assertEqual(
+            documents["identity"],
+            "# Identity\n\n"
+            f"<!-- {context_creation.DOCUMENT_NOTES['identity']} -->\n\n"
+            "- Stable purpose.\n- Intended audience.\n"
+        )
+        self.assertEqual(
+            documents["state"],
+            "# State\n\n"
+            f"<!-- {context_creation.DOCUMENT_NOTES['state']} -->\n\n"
+            "- Current capability. Continued detail.\n"
+        )
+
+    def test_enrichment_flattens_sections_and_discards_model_comments(self):
+        output = json.dumps({
+            "identity": (
+                "# Dotfiles\n\n<!-- model note -->\n\nPurpose:\n"
+                "- Portable configuration.\n"
+            ),
+            "state": (
+                "# Dotfiles State\n\nCurrent Capabilities:\n"
+                "- Provides terminal configuration\n"
+                "- Defines window manager layout\n\n"
+                "## Limitations\n\n- No installer\n"
+            )
+        })
+
+        documents = context_creation._parse_agent_draft(output, self.project)
+
+        self.assertEqual(
+            documents["identity"],
+            "# Dotfiles\n\n"
+            f"<!-- {context_creation.DOCUMENT_NOTES['identity']} -->\n\n"
+            "- Purpose: Portable configuration.\n"
+        )
+        self.assertEqual(
+            documents["state"],
+            "# Dotfiles State\n\n"
+            f"<!-- {context_creation.DOCUMENT_NOTES['state']} -->\n\n"
+            "- Current Capabilities: Provides terminal configuration\n"
+            "- Current Capabilities: Defines window manager layout\n"
+            "- Limitations: No installer\n"
+        )
+        for document in documents.values():
+            body = document.split("-->\n\n", 1)[1]
+            self.assertTrue(all(line.startswith("- ") for line in body.splitlines()))
 
     def test_decline_happens_after_full_preview_and_writes_nothing(self):
         preview_seen = []
@@ -247,11 +436,12 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertTrue(any("PROPOSED identity.md" in item for item in preview_seen))
         self.assertTrue(any("PROPOSED state.md" in item for item in preview_seen))
-        self.assertTrue(any("PROPOSED match.md" in item for item in preview_seen))
+        self.assertTrue(any("PROPOSED vision.md" in item for item in preview_seen))
+        self.assertTrue(any("PROPOSED match.toml" in item for item in preview_seen))
         self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
 
-    def test_approved_creation_writes_three_files_and_registers_source(self):
+    def test_approved_creation_writes_project_files_and_registers_source(self):
         existing_config = config_path()
         existing_config.parent.mkdir(parents=True)
         existing_config.write_text('theme = "keep"\n', encoding="utf-8")
@@ -264,7 +454,13 @@ class ContextCreationTests(unittest.TestCase):
             {path.name for path in destination.iterdir()},
             {"metadata.toml", "local", "shareable"}
         )
-        self.assertFalse((destination / "vision.md").exists())
+        vision = destination / "local" / "vision.md"
+        self.assertEqual(
+            vision.read_text(encoding="utf-8"),
+            context_creation.INITIAL_VISION
+        )
+        self.assertIn("<!--", context_creation.INITIAL_VISION)
+        self.assertIn("future ideas and vision", context_creation.INITIAL_VISION.lower())
         self.assertTrue(any(
             "projects/example/local/identity.md" in item.args[0]
             for item in rot_continue.call_args_list
@@ -272,11 +468,13 @@ class ContextCreationTests(unittest.TestCase):
         loaded = contexts.load_context("example")
         self.assertIn("Example is a small test project", loaded.identity)
         self.assertIn("Python entry point", loaded.state)
-        match_text = (destination / "local" / "match.md").read_text(encoding="utf-8")
-        self.assertIn("- github.com/example/project", match_text)
-        self.assertIn("- main.py", match_text)
-        self.assertIn("- src/", match_text)
-        self.assertNotIn("## Production", match_text)
+        match_text = (destination / "local" / "match.toml").read_text(encoding="utf-8")
+        definition = context_matching.parse_match_toml(match_text)
+        self.assertTrue(definition.source.is_git_repo)
+        self.assertIn("github.com/example/project", definition.source.git_remotes)
+        self.assertIn("main.py", definition.source.required_paths)
+        self.assertIn("src/", definition.source.required_paths)
+        self.assertIsNone(definition.production)
         self.assertNotIn(str(self.project), match_text)
         prompt = contexts.build_context_prompt("example")
         self.assertNotIn("github.com/example/project", prompt)
@@ -392,7 +590,7 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         stream_agent.assert_not_called()
 
-    def test_repository_without_remote_cannot_generate_match(self):
+    def test_git_project_without_remote_can_generate_path_match(self):
         subprocess.run(
             ["git", "remote", "remove", "upstream"],
             cwd=self.project,
@@ -401,9 +599,27 @@ class ContextCreationTests(unittest.TestCase):
 
         result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
 
-        self.assertEqual(result, 1)
-        stream_agent.assert_not_called()
-        self.assertFalse((self.project_context_root / "example").exists())
+        self.assertEqual(result, 0)
+        stream_agent.assert_called_once()
+
+    def test_non_git_project_can_generate_portable_match_and_binding(self):
+        non_git = self.root / "plain-project"
+        non_git.mkdir()
+        (non_git / "project.toml").write_text("name = 'plain'\n", encoding="utf-8")
+        (non_git / "src").mkdir()
+
+        result, _agent, _rot_say, _rot_continue = self.run_add(
+            answer="yes", args=self.args(name="plain", path=non_git)
+        )
+
+        self.assertEqual(result, 0)
+        match_path = self.project_context_root / "plain" / "local" / "match.toml"
+        content = match_path.read_text(encoding="utf-8")
+        definition = context_matching.parse_match_toml(content)
+        self.assertFalse(definition.source.is_git_repo)
+        self.assertIn("project.toml", definition.source.required_paths)
+        self.assertNotIn(str(non_git), content)
+        self.assertEqual(get_context_binding("plain")["source_path"], str(non_git))
 
     def test_invalid_xdg_config_home_is_reported_before_agent(self):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "relative"}, clear=True):

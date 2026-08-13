@@ -124,7 +124,7 @@ def _project_content(directory, filename, view):
     try:
         paths = documents.semantic_files(
             directory, view,
-            {"identity.md", "state.md", "vision.md", "match.md"},
+            {"identity.md", "state.md", "vision.md", "match.md", "match.toml"},
             include_legacy_local=view == "full"
         )
     except documents.ContextDocumentError as error:

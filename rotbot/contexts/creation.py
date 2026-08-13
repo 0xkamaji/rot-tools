@@ -12,10 +12,11 @@ from rotbot.commands.machine import inspect_local_machine, show_inspection
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.matching import (
     MatchError,
-    build_source_match_document,
-    inspect_source_repository,
+    build_source_match_toml,
+    inspect_source_project,
+    load_match_definition,
     match_source_definition,
-    parse_match_document
+    parse_match_toml
 )
 from rotbot.contexts.identifiers import new_context_id
 from rotbot.contexts.config import (
@@ -23,9 +24,10 @@ from rotbot.contexts.config import (
     config_path,
     get_context_binding,
     load_config,
+    remove_context_bindings,
     set_context_binding
 )
-from rotbot.ui.terminal import rot_continue, rot_say
+from rotbot.ui.terminal import rot_continue, rot_say, rot_status
 
 
 IGNORED_NAMES = {
@@ -59,6 +61,22 @@ MAX_EXCERPT_BYTES = 12_000
 MAX_SYNOPSIS_BYTES = 64_000
 MAX_AGENT_OUTPUT_BYTES = 250_000
 MAX_REMOTES = 32
+INITIAL_VISION = (
+    "# Vision\n\n"
+    "<!-- Future ideas and vision for the growth of this project belong here. "
+    "Add each idea as a bullet point beginning with '-'. -->\n"
+)
+DOCUMENT_NOTES = {
+    "identity": (
+        "Stable facts about what this project is, its purpose, audience, and "
+        "architecture. Add each fact as a bullet point beginning with '-'."
+    ),
+    "state": (
+        "Current facts about what exists in this project. Add each fact as a "
+        "bullet point beginning with '-'."
+    )
+}
+PLACEHOLDER_POINT = "Context created by RotBot. AI enrichment has not yet been completed."
 SENSITIVE_CONTENT_PATTERN = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|"
     r"private[_-]?key|client[_-]?secret)\s*[:=]|"
@@ -112,7 +130,7 @@ def _safe_entries(project):
     return tuple(safe)
 
 
-def _required_paths(entries):
+def _match_paths(entries):
     labels = [label for _entry, label in entries]
     priority = {name: index for index, name in enumerate(PATH_PRIORITY)}
     selected = sorted(
@@ -123,7 +141,8 @@ def _required_paths(entries):
         raise ContextCreationError(
             "No stable top-level project paths were available for deterministic matching."
         )
-    return tuple(selected)
+    optional = tuple(label for label in labels if label not in selected)[:5]
+    return tuple(selected), optional
 
 
 def _read_excerpt(path):
@@ -160,7 +179,7 @@ def _inspect_project(project, remotes):
     if len(remotes) > MAX_REMOTES:
         raise ContextCreationError("Project has too many configured Git remotes.")
     entries = _safe_entries(project)
-    required_paths = _required_paths(entries)
+    required_paths, optional_paths = _match_paths(entries)
     excerpts = []
     total_size = 0
     for entry, label in entries:
@@ -179,9 +198,9 @@ def _inspect_project(project, remotes):
         total_size += encoded_size
 
     synopsis = (
-        f"Repository name: {project.name}\n"
+        f"Project directory name: {project.name}\n"
         "Normalized Git remotes:\n"
-        + "\n".join(f"- {remote}" for remote in remotes)
+        + ("\n".join(f"- {remote}" for remote in remotes) or "- none")
         + "\n\nTop-level tree:\n"
         + "\n".join(f"- {label}" for _entry, label in entries)
         + "\n\nStable identifying paths:\n"
@@ -197,7 +216,7 @@ def _inspect_project(project, remotes):
                 break
             synopsis += addition
             heading = "\n\n"
-    return synopsis, required_paths
+    return synopsis, required_paths, optional_paths
 
 
 def _agent_prompt(name, synopsis):
@@ -206,21 +225,42 @@ def _agent_prompt(name, synopsis):
         "bounded synopsis below. Do not inspect or modify any files. Return only "
         "a JSON object with exactly two string keys: `identity` and `state`. "
         "Do not use a code fence or add commentary.\n\n"
+        "Each document must contain exactly one level-one heading followed by "
+        "bullet points beginning with `- `. Do not include section headings, "
+        "labels on separate lines, or Markdown comments; RotBot adds its own "
+        "document guidance comment.\n\n"
         "The identity Markdown must begin with a level-one heading and describe "
         "stable facts: what the project is, its core purpose, intended role or "
         "audience, stable architecture, and repository identity when useful. "
         "Avoid marketing, invented history, temporary status, speculative plans, "
-        "future vision, secrets, credentials, and machine-local absolute paths. "
-        "State that identity is human-maintained and must not be rewritten "
-        "automatically.\n\n"
+        "future vision, secrets, credentials, and machine-local absolute paths.\n\n"
         "The state Markdown must begin with a level-one heading and describe only "
         "what currently exists: major capabilities, structure, entry points, "
         "implemented integrations, commands, and directly evident limitations. "
         "Avoid roadmaps, speculation, secrets, credentials, and machine-local "
         "absolute paths. Draft only identity.md and state.md; do not draft "
-        "match.md or vision.md.\n\n"
+        "match.toml or vision.md.\n\n"
         f"PROJECT SYNOPSIS\n----------------\n{synopsis}"
     )
+
+
+def _placeholder_documents(name, definition):
+    source = definition.source
+    git_state = "Git-backed" if source.is_git_repo else "not Git-backed"
+    paths = ", ".join(f"`{path}`" for path in source.required_paths)
+    return {
+        "identity": (
+            f"# {name}\n\n<!-- {DOCUMENT_NOTES['identity']} -->\n\n"
+            f"- {PLACEHOLDER_POINT}\n"
+            f"- This is the `{name}` project context.\n"
+        ),
+        "state": (
+            f"# {name} State\n\n<!-- {DOCUMENT_NOTES['state']} -->\n\n"
+            f"- {PLACEHOLDER_POINT}\n"
+            f"- The project is {git_state}.\n"
+            f"- Portable recognition currently requires: {paths}.\n"
+        )
+    }
 
 
 def _parse_agent_draft(output, project):
@@ -255,13 +295,55 @@ def _parse_agent_draft(output, project):
             )
         ):
             raise ContextCreationError(f"Generated {name}.md is empty or invalid.")
-        documents[name] = content + "\n"
-    if (
-        "human-maintained" not in documents["identity"].lower()
-        or "not be rewritten automatically" not in documents["identity"].lower()
-    ):
-        raise ContextCreationError(
-            "Generated identity.md must preserve the human-maintained identity boundary."
+        lines = content.splitlines()
+        heading = lines[0]
+        points = []
+        paragraph = []
+        section = None
+        in_comment = False
+
+        def add_point(point):
+            point = point.strip()
+            if point:
+                points.append(f"{section}: {point}" if section else point)
+
+        def finish_paragraph():
+            if paragraph:
+                add_point(" ".join(paragraph))
+                paragraph.clear()
+
+        for line in lines[1:]:
+            stripped = line.strip()
+            if in_comment:
+                if "-->" in stripped:
+                    in_comment = False
+                continue
+            if stripped.startswith("<!--"):
+                in_comment = "-->" not in stripped
+                continue
+            if not stripped:
+                finish_paragraph()
+                continue
+            if stripped.startswith("#"):
+                finish_paragraph()
+                section = stripped.lstrip("#").strip().rstrip(":") or None
+                continue
+            if stripped.endswith(":") and not stripped.startswith("-"):
+                finish_paragraph()
+                section = stripped[:-1].strip() or None
+                continue
+            if stripped.startswith("- "):
+                finish_paragraph()
+                add_point(stripped[2:])
+            else:
+                paragraph.append(stripped)
+        finish_paragraph()
+        if not points:
+            raise ContextCreationError(f"Generated {name}.md contains no context facts.")
+        documents[name] = (
+            f"{heading}\n\n<!-- {DOCUMENT_NOTES[name]} -->\n\n"
+            + "\n".join(f"- {point}" for point in points)
+            + "\n"
         )
     return documents
 
@@ -657,6 +739,88 @@ def _write_document(path, content):
         os.chmod(path, 0o600)
 
 
+def _atomic_replace_documents(destination, expected, documents):
+    originals = {}
+    replacements = {}
+    try:
+        for name in ("identity", "state"):
+            path = destination / "local" / f"{name}.md"
+            if path.is_symlink() or not path.is_file():
+                raise ContextCreationError(f"Invalid project context document: {path.name}")
+            original = path.read_text(encoding="utf-8")
+            if original != expected[name]:
+                raise ContextCreationError(
+                    f"Generated enrichment was not applied because {path.name} "
+                    "is no longer an unenriched placeholder."
+                )
+            originals[path] = original
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False
+            ) as temporary:
+                replacement = Path(temporary.name)
+                temporary.write(documents[name])
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            if os.name != "nt":
+                os.chmod(replacement, stat.S_IMODE(path.stat().st_mode))
+            replacements[path] = replacement
+        replaced = []
+        try:
+            for path, replacement in replacements.items():
+                os.replace(replacement, path)
+                replaced.append(path)
+                replacements[path] = None
+        except OSError:
+            for path in replaced:
+                path.write_text(originals[path], encoding="utf-8")
+            raise
+    except ContextCreationError:
+        raise
+    except (OSError, UnicodeError) as error:
+        raise ContextCreationError(f"Could not apply AI enrichment: {error}") from None
+    finally:
+        for replacement in replacements.values():
+            if replacement is not None:
+                try:
+                    replacement.unlink()
+                except OSError:
+                    pass
+
+
+def _enrich_project_context(name, project, synopsis, destination, agent_name=None):
+    try:
+        expected = _placeholder_documents(name, load_match_definition(name))
+    except (MatchError, loader.ContextError, ContextCreationError) as error:
+        return f"AI enrichment could not start: {error}"
+    prompt = _agent_prompt(name, synopsis)
+    draft_error = None
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
+            returncode, output, _elapsed = stream_agent(
+                prompt,
+                "Rotbot is still enriching context documents...",
+                agent_directory,
+                agent_name=agent_name,
+                timeout=300,
+                isolated=True,
+                display_output=False
+            )
+        if returncode != 0:
+            return f"AI enrichment failed with exit code {returncode}."
+        try:
+            if not output.strip():
+                raise ContextCreationError("The AI agent returned no context documents.")
+            documents = _parse_agent_draft(output, project)
+            _atomic_replace_documents(destination, expected, documents)
+            return None
+        except ContextCreationError as error:
+            draft_error = error
+            if attempt == 0:
+                rot_status("The AI response was not a valid context draft. Retrying once...")
+    return str(draft_error)
+
+
 def _create_and_bind(
     name,
     context_id,
@@ -664,9 +828,11 @@ def _create_and_bind(
     project,
     documents,
     match_document,
-    target_config
+    target_config,
+    definition
 ):
     created = False
+    binding_created = False
     try:
         destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         destination.mkdir(mode=0o700)
@@ -680,7 +846,8 @@ def _create_and_bind(
         files = {
             "identity.md": documents["identity"],
             "state.md": documents["state"],
-            "match.md": match_document
+            "vision.md": INITIAL_VISION,
+            "match.toml": match_document
         }
         for filename, content in files.items():
             _write_document(local / filename, content)
@@ -690,7 +857,25 @@ def _create_and_bind(
         if current_source and Path(current_source).resolve() != project:
             raise ConfigError("The source binding changed during context creation.")
         set_context_binding(name, "source_path", str(project), target_config)
+        binding_created = current_source is None
+        loaded = loader.load_context(name)
+        loaded_match = load_match_definition(name)
+        matched = match_source_definition(project, name, loaded_match)
+        saved_binding = get_context_binding(name, target_config).get("source_path")
+        if (
+            not loaded.identity.strip()
+            or not loaded.state.strip()
+            or loaded_match != definition
+            or not matched.strong
+            or saved_binding != str(project)
+        ):
+            raise ContextCreationError("The new project context did not validate after creation.")
     except BaseException as error:
+        if binding_created:
+            try:
+                remove_context_bindings(name, target_config)
+            except ConfigError:
+                pass
         rollback_errors = _rollback_context(destination) if created else ()
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
@@ -752,10 +937,15 @@ def _add_project_context(args):
         return 1
 
     try:
-        project, remotes = inspect_source_repository(project)
-        synopsis, required_paths = _inspect_project(project, remotes)
-        match_document = build_source_match_document(remotes, required_paths)
-        definition = parse_match_document(match_document)
+        project, is_git_repo, remotes = inspect_source_project(project)
+        synopsis, required_paths, optional_paths = _inspect_project(project, remotes)
+        match_document = build_source_match_toml(
+            is_git_repo,
+            required_paths,
+            optional_paths,
+            remotes
+        )
+        definition = parse_match_toml(match_document)
         proposed_match = match_source_definition(project, name, definition)
     except (MatchError, ContextCreationError) as error:
         rot_say(str(error))
@@ -767,42 +957,24 @@ def _add_project_context(args):
             rot_continue(f"[{marker}] {evidence.message}")
         return 1
 
-    prompt = _agent_prompt(name, synopsis)
-    with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
-        returncode, output, _elapsed = stream_agent(
-            prompt,
-            "Rotbot is still drafting context documents...",
-            agent_directory,
-            agent_name=getattr(args, "agent", None),
-            timeout=300
-        )
-    if returncode != 0:
-        rot_say(f"Context drafting failed with exit code {returncode}.")
-        return returncode
-    if not output.strip():
-        rot_say("The AI agent returned no context documents.")
-        return 1
-    try:
-        documents = _parse_agent_draft(output, project)
-    except ContextCreationError as error:
-        rot_say(str(error))
-        return 1
-
     context_id = new_context_id()
+    documents = _placeholder_documents(name, definition)
     rot_say(f"Create context '{name}' from:\n\n  {project}")
     rot_continue(
         "Proposed files:\n\n"
         f"  {destination / 'metadata.toml'}\n"
         f"  {destination / 'local' / 'identity.md'}\n"
         f"  {destination / 'local' / 'state.md'}\n"
-        f"  {destination / 'local' / 'match.md'}\n\n"
+        f"  {destination / 'local' / 'vision.md'}\n"
+        f"  {destination / 'local' / 'match.toml'}\n\n"
         "Local registration:\n\n"
         f"  {name}.source_path = {project}"
     )
     for filename, content in (
         ("identity.md", documents["identity"]),
         ("state.md", documents["state"]),
-        ("match.md", match_document)
+        ("vision.md", INITIAL_VISION),
+        ("match.toml", match_document)
     ):
         rot_say(f"PROPOSED {filename}")
         rot_continue(content.rstrip())
@@ -820,7 +992,7 @@ def _add_project_context(args):
         rot_say(f"Project matching changed before creation:\n{error}")
         return 1
     if not proposed_match.strong:
-        rot_say("Project no longer strongly matches the proposed match.md.")
+        rot_say("Project no longer strongly matches the proposed match.toml.")
         return 1
     try:
         binding = get_context_binding(name, target_config)
@@ -840,15 +1012,69 @@ def _add_project_context(args):
             project,
             documents,
             match_document,
-            target_config
+            target_config,
+            definition
         )
     except ContextCreationError as error:
         rot_say(str(error))
         return 1
 
     rot_say(
-        f"Context '{name}' created and its source path registered.\n\n"
-        "Optional next step:\n"
-        f"  Create {destination / 'local' / 'vision.md'} manually."
+        f"Context '{name}' created, validated, and its source path registered.\n"
+        "Attempting optional AI enrichment..."
     )
+    enrichment_error = _enrich_project_context(
+        name,
+        project,
+        synopsis,
+        destination,
+        getattr(args, "agent", None)
+    )
+    if enrichment_error is not None:
+        rot_say(
+            f"AI enrichment warning:\n{enrichment_error}\n\n"
+            "The context remains usable. Retry with:\n"
+            f"  rot context develop {name}"
+        )
+    else:
+        rot_say(f"Project context '{name}' enriched successfully.")
+    return 0
+
+
+def context_develop(args):
+    name = getattr(args, "name", None)
+    if not name:
+        rot_say("A project context name is required.")
+        return 1
+    try:
+        loader.load_context(name)
+        definition = load_match_definition(name)
+        binding = get_context_binding(name)
+        source = binding.get("source_path")
+        if source is None:
+            raise ContextCreationError(
+                f"Project context '{name}' does not have a local source binding."
+            )
+        project, _is_git_repo, remotes = inspect_source_project(source)
+        matched = match_source_definition(project, name, definition)
+        if not matched.strong:
+            raise ContextCreationError(
+                f"The bound source no longer strongly matches project context '{name}'."
+            )
+        synopsis, _required, _optional = _inspect_project(project, remotes)
+        destination = loader.project_context_directory(name)
+        enrichment_error = _enrich_project_context(
+            name,
+            project,
+            synopsis,
+            destination,
+            getattr(args, "agent", None)
+        )
+    except (loader.ContextError, MatchError, ConfigError, ContextCreationError) as error:
+        rot_say(str(error))
+        return 1
+    if enrichment_error is not None:
+        rot_say(f"AI enrichment failed:\n{enrichment_error}\n\nThe context was not changed.")
+        return 1
+    rot_say(f"Project context '{name}' enriched successfully.")
     return 0

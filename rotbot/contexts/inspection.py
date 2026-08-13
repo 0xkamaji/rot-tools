@@ -1,6 +1,5 @@
 from pathlib import Path
 import os
-import subprocess
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -232,43 +231,29 @@ def _binding_match(cwd, bindings, binding_type, project_names):
     return name, f"{binding_type} binding", ()
 
 
-def _repository_root(cwd):
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False
-        )
-    except FileNotFoundError:
-        raise ContextInspectionError("Git is not installed or is not available in PATH.") from None
-    except OSError as error:
-        raise ContextInspectionError(f"Could not inspect the current Git repository: {error}") from None
-    if result.returncode != 0:
-        return None
-    try:
-        return Path(result.stdout.strip()).resolve(strict=True)
-    except OSError as error:
-        raise ContextInspectionError(f"Could not resolve the current Git repository: {error}") from None
-
-
 def _safe_project_match(cwd):
-    repository = _repository_root(cwd)
-    if repository is None:
-        return None, "no matching project context", ()
     try:
-        candidates = matching.match_contexts(
-            repository,
-            binding_type="source",
-            caddy_paths=()
-        )
+        strong = []
+        for directory in (cwd, *cwd.parents):
+            strong.extend(
+                candidate
+                for candidate in matching.match_contexts(
+                    directory,
+                    binding_type="source",
+                    caddy_paths=()
+                )
+                if candidate.strong
+            )
     except (matching.MatchError, loader.ContextError) as error:
         raise ContextInspectionError(str(error)) from None
-    strong = tuple(candidate for candidate in candidates if candidate.strong)
     if not strong:
         return None, "no matching project context", ()
-    names = tuple(sorted({candidate.name for candidate in strong}))
+    closest = max(len(candidate.path.parts) for candidate in strong)
+    names = tuple(sorted({
+        candidate.name
+        for candidate in strong
+        if len(candidate.path.parts) == closest
+    }))
     if len(names) > 1:
         return None, "ambiguous project match", (
             f"Safe project matching is ambiguous: {', '.join(names)}.",

@@ -85,10 +85,11 @@ class PackageImportTests(unittest.TestCase):
             )
             (local / "identity.md").write_text("identity", encoding="utf-8")
             (local / "state.md").write_text("state", encoding="utf-8")
-            (local / "match.md").write_text(
-                "# Match\n\n## Source\n\nGit remotes:\n\n"
-                "- github.com/0xkamaji/rotbot\n\nRequired paths:\n\n"
-                "- rotbot/\n- tests/\n",
+            (local / "match.toml").write_text(
+                "[source]\n"
+                "is_git_repo = true\n"
+                'git_remotes = ["github.com/0xkamaji/rotbot"]\n'
+                'required_paths = ["rotbot/", "tests/"]\n',
                 encoding="utf-8"
             )
             with patch.object(loader, "CONTEXT_ROOT", root):

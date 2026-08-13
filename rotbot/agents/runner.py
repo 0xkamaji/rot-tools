@@ -62,7 +62,9 @@ def stream_agent(
     working_directory=None,
     display_question=None,
     agent_name=None,
-    timeout=None
+    timeout=None,
+    isolated=False,
+    display_output=True
 ):
     automatic_selection = (
         agent_name is None
@@ -76,7 +78,7 @@ def stream_agent(
 
     try:
         process = subprocess.Popen(
-            agent.build_command(prompt),
+            agent.build_command(prompt, isolated=isolated),
             stdout=subprocess.PIPE,
             stderr=(
                 subprocess.STDOUT
@@ -136,6 +138,8 @@ def stream_agent(
             break
 
         output_lines.append(line)
+        if not display_output:
+            continue
         if line.strip():
             if not output_started:
                 rot_output_start(display_question)
@@ -162,7 +166,9 @@ def stream_agent(
             working_directory,
             display_question,
             agent_name="codex",
-            timeout=timeout
+            timeout=timeout,
+            isolated=isolated,
+            display_output=display_output
         )
 
     if timed_out:

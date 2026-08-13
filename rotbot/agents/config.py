@@ -5,21 +5,23 @@ class AgentConfig:
         self.MERGE_STDERR = merge_stderr
         self._command_builder = command_builder
 
-    def build_command(self, prompt):
-        return self._command_builder(prompt)
+    def build_command(self, prompt, isolated=False):
+        return self._command_builder(prompt, isolated)
 
 
 OPENCODE = AgentConfig(
     "OpenCode",
     "opencode",
-    True,
-    lambda prompt: ["opencode", "run", prompt]
+    False,
+    lambda prompt, isolated: [
+        "opencode", "run", *(("--pure",) if isolated else ()), prompt
+    ]
 )
 CODEX = AgentConfig(
     "Codex",
     "codex",
     False,
-    lambda prompt: [
+    lambda prompt, _isolated: [
         "codex",
         "exec",
         "--color",

@@ -192,14 +192,12 @@ class ContextInspectionTests(unittest.TestCase):
 
     def test_safe_repository_matching_is_used_after_bindings(self):
         match_document = (
-            "# Match\n\n"
-            "## Source\n\n"
-            "Git remotes:\n"
-            "- github.com/example/project\n\n"
-            "Required paths:\n"
-            "- README.md\n"
+            "[source]\n"
+            "is_git_repo = true\n"
+            'git_remotes = ["github.com/example/project"]\n'
+            'required_paths = ["README.md"]\n'
         )
-        (self.projects / "project" / "match.md").write_text(
+        (self.projects / "project" / "match.toml").write_text(
             match_document,
             encoding="utf-8"
         )
@@ -216,6 +214,24 @@ class ContextInspectionTests(unittest.TestCase):
             check=True
         )
         (repository / "README.md").write_text("project\n", encoding="utf-8")
+        self.write_config()
+
+        result = inspection.inspect_current_context(nested)
+
+        self.assertEqual(result.project, "project")
+        self.assertEqual(result.identification_sources.project, "project match")
+
+    def test_non_git_project_matching_is_used_from_nested_directory(self):
+        (self.projects / "project" / "match.toml").write_text(
+            "[source]\n"
+            "is_git_repo = false\n"
+            'required_paths = ["project.toml", "src/"]\n',
+            encoding="utf-8"
+        )
+        project = self.root / "plain-project"
+        nested = project / "src" / "nested"
+        nested.mkdir(parents=True)
+        (project / "project.toml").write_text("name = 'plain'\n", encoding="utf-8")
         self.write_config()
 
         result = inspection.inspect_current_context(nested)
