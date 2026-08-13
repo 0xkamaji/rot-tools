@@ -823,6 +823,7 @@ class InteractiveUiTests(unittest.TestCase):
         session.ai = Mock()
         session.ai.remote_state = [Mock()]
         session.ai.backend.name = "OpenCode"
+        session.ai.backend.agent_name = "opencode"
 
         header = interactive_ui.render_session_header(session, width=72)
         status = interactive_ui.render_session_status(session)

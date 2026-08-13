@@ -37,6 +37,7 @@ class ConversationStoreTests(unittest.TestCase):
         self.store = ConversationStore(self.root / "data" / "rotbot" / "conversations")
         self.backend = Mock()
         self.backend.name = "OpenCode"
+        self.backend.agent_name = "opencode"
         self.backend.prepare.return_value = False
         self.backend.generate.side_effect = (
             BackendResult(

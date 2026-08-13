@@ -26,6 +26,7 @@ def inspected(cwd):
 
 class NativeStreamingBackend:
     name = "TestBackend"
+    agent_name = "opencode"
 
     def __init__(self, events, error=None):
         self.events = events
@@ -93,6 +94,7 @@ class StreamingConversationTests(unittest.TestCase):
     def test_non_streaming_backend_emits_one_complete_chunk_without_fake_replay(self):
         backend = Mock()
         backend.name = "Batch"
+        backend.agent_name = "opencode"
         backend.prepare.return_value = False
         backend.generate.return_value = BackendResult("whole response", (), None)
         conversation = ai.AIConversation.create(backend)

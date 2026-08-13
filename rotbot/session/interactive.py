@@ -70,7 +70,7 @@ Shell commands may be entered directly:
   rg "pattern" .
   python --version
 
-Natural language continues one OpenCode conversation for this Rot session.
+Natural language continues one AI conversation for this Rot session.
 
 Rot commands run directly. Shell-shaped installed commands run locally.
 Natural language goes to Rot.

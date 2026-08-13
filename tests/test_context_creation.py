@@ -184,7 +184,10 @@ class ContextCreationTests(unittest.TestCase):
         synopsis, _required, _optional = context_creation._inspect_project(
             self.project, ("github.com/example/project",)
         )
-        prompt = context_creation._agent_prompt("example", synopsis)
+        task = context_creation._context_development_task("example")
+        evidence = context_creation._project_evidence(synopsis)
+        contract = context_creation.CONTEXT_DEVELOPMENT_OUTPUT_CONTRACT
+        prompt = "\n\n".join((task, evidence, contract))
         self.assertIn("github.com/example/project", prompt)
         self.assertIn("main.py", prompt)
         self.assertIn("exactly two string keys", prompt)
@@ -278,7 +281,10 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(request.purpose, "context_development")
         self.assertEqual(request.parent_command, "context add")
         self.assertEqual(request.retries, 1)
-        self.assertEqual(request.output_contract, "identity/state context documents")
+        self.assertIn("Draft identity and state context", request.task)
+        self.assertNotIn("Project directory name", request.task)
+        self.assertIn("Project directory name", request.context_material)
+        self.assertIn("exactly two string keys", request.output_contract)
 
     def test_context_is_created_bound_and_loadable_before_enrichment(self):
         destination = self.project_context_root / "example"

@@ -35,7 +35,7 @@ class RemoteStateReference:
 class AIConversation:
     id: str
     created_at: datetime
-    backend: OpenCodeBackend
+    backend: object
     messages: list[AIMessage] = field(default_factory=list)
     remote_state: list[RemoteStateReference] = field(default_factory=list)
     model: str | None = None
@@ -141,7 +141,7 @@ class AIConversation:
                 parent_command="interactive",
                 task=user_message,
                 working_directory=cwd,
-                agent_name="opencode",
+                agent_name=self.backend.agent_name,
                 inspected_context=inspected,
                 capability_state=capability_state,
                 conversation_id=self.id,
@@ -154,10 +154,7 @@ class AIConversation:
                     None if backend_replaced else self.context_fingerprint
                 ),
                 context_dirty=self.context_dirty,
-                authority=authority,
-                stream_output=True,
-                display_output=True,
-                persist_conversation=True
+                authority=authority
             ))
 
             def receive_text(text):

@@ -23,6 +23,13 @@ class AIInvocationTests(unittest.TestCase):
             wait=Mock(return_value=returncode), kill=Mock()
         )
 
+    def test_request_and_plan_exclude_ui_and_persistence_flags(self):
+        removed = {"persist_conversation", "display_output", "stream_output"}
+        self.assertTrue(removed.isdisjoint(invocation.AIRequest.__dataclass_fields__))
+        self.assertTrue(
+            removed.isdisjoint(invocation.AIInvocationPlan.__dataclass_fields__)
+        )
+
     def test_freeform_returns_stdout_and_emits_lifecycle(self):
         events = []
         lines = []
@@ -63,6 +70,8 @@ class AIInvocationTests(unittest.TestCase):
         self.assertEqual(result.attempts, 2)
         self.assertEqual(start.call_count, 2)
         self.assertIn("retrying", events)
+        command = start.call_args_list[0].args[0]
+        self.assertIn("OUTPUT CONTRACT\ninteger", command[-1])
 
     def test_retry_exhaustion_and_provider_failure_are_structured(self):
         request = self.request("context_development", retries=1)
@@ -136,6 +145,43 @@ class AIInvocationTests(unittest.TestCase):
         self.assertFalse(plan.context_sent)
         self.assertFalse(plan.conversation_sent)
         self.assertEqual(plan.selected_conversation, ())
+
+    def test_prepare_assembles_task_evidence_and_contract_into_exact_input(self):
+        request = invocation.AIRequest(
+            "context_development", "context develop", "Draft project context.",
+            agent_name="opencode",
+            context_material="BOUNDED PROJECT EVIDENCE",
+            output_contract="Return exact JSON.",
+            retries=1
+        )
+        with patch.object(
+            invocation, "resolve_provider", return_value=(OPENCODE, None)
+        ), patch.object(invocation, "start_provider_process") as start:
+            plan = invocation.prepare(request)
+
+        start.assert_not_called()
+        self.assertEqual(plan.task, "Draft project context.")
+        self.assertEqual(plan.context_material, "BOUNDED PROJECT EVIDENCE")
+        self.assertEqual(plan.output_contract, "Return exact JSON.")
+        self.assertEqual(
+            plan.provider_input,
+            "Draft project context.\n\nBOUNDED PROJECT EVIDENCE\n\n"
+            "OUTPUT CONTRACT\nReturn exact JSON."
+        )
+
+    def test_execute_uses_exact_plan_input_without_rebuilding(self):
+        request = self.request("context_development", context_material="evidence")
+        process = self.process(("answer",))
+        with patch.object(
+            invocation, "resolve_provider", return_value=(OPENCODE, None)
+        ):
+            plan = invocation.prepare(request)
+        with patch.object(
+            invocation, "start_provider_process", return_value=process
+        ) as start:
+            invocation.execute(plan)
+
+        self.assertEqual(start.call_args.args[0][-1], plan.provider_input)
 
     def test_common_presenter_drives_freeform_and_structured_spinner_lifecycles(self):
         freeform = AIActivityPresenter("thinking")

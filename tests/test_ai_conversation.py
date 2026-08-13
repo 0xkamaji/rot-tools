@@ -16,6 +16,7 @@ class AIConversationTests(unittest.TestCase):
     def backend(self):
         backend = Mock()
         backend.name = "OpenCode"
+        backend.agent_name = "opencode"
         backend.prepare.return_value = False
         return backend
 
@@ -63,6 +64,51 @@ class AIConversationTests(unittest.TestCase):
             ["ses_one", "ses_two"]
         )
         self.assertEqual(conversation.model, "openai/test-model")
+
+    def test_provider_identity_comes_from_backend_boundary(self):
+        backend = self.backend()
+        backend.name = "Alternate"
+        backend.agent_name = "codex"
+        backend.generate.return_value = self.result("answer")
+        conversation = ai.AIConversation.create(backend)
+        requests = []
+
+        def prepare(request):
+            requests.append(request)
+            return invocation.AIInvocationPlan(
+                invocation_id="invocation",
+                purpose="conversation",
+                parent_command="interactive",
+                provider=None,
+                provider_name="Codex",
+                model=None,
+                working_directory=Path("/work"),
+                conversation_id=conversation.id,
+                provider_state=(),
+                available_persistent_context=Mock(),
+                selected_persistent_context=Mock(),
+                available_conversation=(),
+                selected_conversation=(),
+                task=request.task,
+                context_material=None,
+                provider_input="prepared input",
+                output_contract=None,
+                retries=0,
+                timeout=None,
+                isolated=False,
+                authority="TALK"
+            )
+
+        with patch.object(ai, "prepare", side_effect=prepare):
+            conversation.send("question", Mock(), Path("/work"))
+
+        self.assertEqual(requests[0].agent_name, "codex")
+        self.assertNotEqual(requests[0].agent_name, "opencode")
+
+    def test_default_interactive_backend_is_opencode(self):
+        conversation = ai.AIConversation.create()
+        self.assertIsInstance(conversation.backend, ai.OpenCodeBackend)
+        self.assertEqual(conversation.backend.agent_name, "opencode")
 
     def test_backend_failure_preserves_rot_user_turn_and_prior_transcript(self):
         backend = self.backend()

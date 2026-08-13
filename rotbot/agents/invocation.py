@@ -49,9 +49,6 @@ class AIRequest:
     retries: int = 0
     timeout: int | None = None
     isolated: bool = False
-    stream_output: bool = True
-    display_output: bool = True
-    persist_conversation: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,14 +67,12 @@ class AIInvocationPlan:
     available_conversation: tuple[ConversationMessage, ...]
     selected_conversation: tuple[ConversationMessage, ...]
     task: str
+    context_material: str | None
     provider_input: str
     output_contract: str | None
     retries: int
     timeout: int | None
     isolated: bool
-    stream_output: bool
-    display_output: bool
-    persist_conversation: bool
     authority: str | None
     context_fingerprint: str | None = None
     context_sent: bool = False
@@ -188,6 +183,8 @@ def prepare(request):
         provider_input = request.task
         if request.context_material:
             provider_input += "\n\n" + request.context_material
+        if request.output_contract:
+            provider_input += "\n\nOUTPUT CONTRACT\n" + request.output_contract
 
     return AIInvocationPlan(
         invocation_id=uuid.uuid4().hex,
@@ -204,14 +201,12 @@ def prepare(request):
         available_conversation=available_conversation,
         selected_conversation=selected_conversation,
         task=request.task,
+        context_material=request.context_material,
         provider_input=provider_input,
         output_contract=request.output_contract,
         retries=request.retries,
         timeout=request.timeout,
         isolated=request.isolated,
-        stream_output=request.stream_output,
-        display_output=request.display_output,
-        persist_conversation=request.persist_conversation,
         authority=request.authority,
         context_fingerprint=context_fingerprint,
         context_sent=context_sent,

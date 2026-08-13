@@ -35,6 +35,7 @@ class TextDelta:
 
 class OpenCodeBackend:
     name = "OpenCode"
+    agent_name = "opencode"
 
     def __init__(self):
         self.session_id = None

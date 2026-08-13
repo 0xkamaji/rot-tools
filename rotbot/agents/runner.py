@@ -49,9 +49,7 @@ def ask_agent(args):
                 task=question,
                 working_directory=Path(inspected.cwd),
                 agent_name=getattr(args, "agent", None),
-                inspected_context=inspected,
-                display_output=True,
-                persist_conversation=True
+                inspected_context=inspected
             ),
             on_event=presenter,
             on_output=output
