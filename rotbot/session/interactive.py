@@ -22,7 +22,15 @@ from rotbot.session.capabilities import (
 from rotbot.session.completion import CompletionProvider
 from rotbot.session.conversations import ConversationStore, ConversationStoreError
 from rotbot.session.history import CommandHistory, DEFAULT_DISPLAY_LIMIT, HistoryError
-from rotbot.session.last import LastResponseError, edit_text, learn_text, save_text
+from rotbot.session.last import (
+    LastResponseError,
+    build_last_ask_message,
+    edit_text,
+    learn_text,
+    save_text
+)
+from rotbot.agents.invocation import prepare
+from rotbot.ui.debug import render_ai_debug_plan
 from rotbot.session.router import route_input
 from rotbot.session.shell import run_shell
 from rotbot.ui.interactive import (
@@ -54,6 +62,7 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   last ask [MESSAGE]  Ask AI about it
   last save           Save it to Rot's local data
   last learn          Teach Rot from it
+  debug last ask [MESSAGE]   Inspect its next follow-up without sending
   Tab                 Complete commands, contexts, executables, and paths
   exit / quit         End the Rot session
 
@@ -269,15 +278,30 @@ class RotSession:
         if self.last_response is None:
             raise LastResponseError("No AI response is available in this session.")
         previous = self.last_response.text
-        message = (
-            "FOLLOW-UP INSTRUCTION\n"
-            f"{instruction}\n\n"
-            "PREVIOUS RESPONSE\n"
-            f"{previous}"
-            if instruction else
-            "PREVIOUS RESPONSE\n" + previous
-        )
+        message = build_last_ask_message(previous, instruction)
         return self.send_ai(message, header=header)
+
+    def debug_last_ask(self, instruction=None):
+        if self.last_response is None:
+            raise LastResponseError("No AI response is available in this session.")
+        if self.ai is None:
+            raise LastResponseError(
+                "No active AI conversation is available in this session."
+            )
+        state = self.capability_state
+        if not state.conversation:
+            raise LastResponseError(
+                state.denial_reason or "AI conversation is unavailable."
+            )
+        message = build_last_ask_message(self.last_response.text, instruction)
+        request = self.ai.build_request(
+            message,
+            self.context,
+            self.cwd,
+            authority=state.mode,
+            capability_state=state
+        )
+        print(render_ai_debug_plan(prepare(request)))
 
 
 def _run_rot_command(arguments, session=None):
@@ -333,6 +357,15 @@ def evaluate_input(session, line, header=None):
         return False
     if command == "help" and len(arguments) == 1:
         rot_say(INTERACTIVE_HELP)
+        return True
+    if command == "debug" and len(arguments) >= 3 and (
+        arguments[1].lower(), arguments[2].lower()
+    ) == ("last", "ask"):
+        instruction = " ".join(arguments[3:]) or None
+        try:
+            session.debug_last_ask(instruction)
+        except LastResponseError as error:
+            rot_say(str(error))
         return True
     if command == "last":
         action = arguments[1].lower() if len(arguments) > 1 else None

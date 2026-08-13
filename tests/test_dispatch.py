@@ -29,6 +29,11 @@ class ParserDispatchTests(unittest.TestCase):
                 "agent": "opencode"
             }
         ),
+        (
+            ["debug", "last", "ask", "why"],
+            "debug_last_ask",
+            {"debug_command": "last", "debug_last_command": "ask", "instruction": ["why"]}
+        ),
         (["ai", "sessions"], "ai_sessions", {"ai_command": "sessions"}),
         (
             ["ai", "session", "show", "rotconv_abc"],

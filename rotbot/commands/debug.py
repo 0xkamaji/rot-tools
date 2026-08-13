@@ -69,3 +69,8 @@ def debug_context_add(_args):
         "existing project context."
     )
     return 2
+
+
+def debug_last_ask(_args):
+    rot_say("debug last ask is available only inside an interactive Rot session.")
+    return 2

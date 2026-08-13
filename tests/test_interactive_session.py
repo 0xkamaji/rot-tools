@@ -566,6 +566,100 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(self.session.authority_mode, "WORK")
         self.assertEqual(self.session.last_response.text, "worked answer")
 
+    def test_debug_last_ask_prepares_real_conversation_request_without_mutation(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.id = "rotconv_current"
+        chat.messages = ["user A", "assistant A"]
+        chat.remote_state = ["provider state"]
+        chat.context_fingerprint = "fingerprint"
+        chat.context_version = 4
+        chat.context_dirty = True
+        chat.model = "model"
+        request = Mock()
+        chat.build_request.return_value = request
+        self.session.ai = chat
+        self.session.last_response = interactive.LastResponse("LAST response", edited=True)
+        previous_last = self.session.last_response
+        before = (
+            chat.id, list(chat.messages), list(chat.remote_state),
+            chat.context_fingerprint, chat.context_version, chat.context_dirty,
+            chat.model, self.session.authority_mode, self.session.work_project_id
+        )
+        plan = Mock()
+
+        with patch.object(interactive, "prepare", return_value=plan) as prepare, patch.object(
+            interactive, "render_ai_debug_plan", return_value="rendered plan"
+        ) as render, patch("builtins.print") as output, patch.object(
+            interactive, "AIConversation"
+        ) as conversation_type:
+            interactive.evaluate_input(
+                self.session, 'debug last ask "why is this the case?"'
+            )
+
+        message = chat.build_request.call_args.args[0]
+        self.assertEqual(
+            message,
+            interactive.build_last_ask_message(
+                "LAST response", "why is this the case?"
+            )
+        )
+        self.assertEqual(chat.build_request.call_args.args[1:3], (
+            self.session.context, self.session.cwd
+        ))
+        self.assertEqual(chat.build_request.call_args.kwargs["authority"], "TALK")
+        self.assertEqual(chat.build_request.call_args.kwargs["capability_state"].mode, "TALK")
+        prepare.assert_called_once_with(request)
+        render.assert_called_once_with(plan)
+        output.assert_called_once_with("rendered plan")
+        conversation_type.create.assert_not_called()
+        chat.send.assert_not_called()
+        self.assertIs(self.session.last_response, previous_last)
+        self.assertEqual(
+            before,
+            (
+                chat.id, list(chat.messages), list(chat.remote_state),
+                chat.context_fingerprint, chat.context_version, chat.context_dirty,
+                chat.model, self.session.authority_mode, self.session.work_project_id
+            )
+        )
+
+    def test_debug_last_ask_no_last_fails_and_work_authority_is_preserved(self):
+        with patch.object(interactive, "rot_say") as say:
+            interactive.evaluate_input(self.session, "debug last ask")
+        self.assertIn("No AI response", say.call_args.args[0])
+
+        self.session.assistant_policy = AssistantCapabilityPolicy(
+            work_enabled=True, valid=True
+        )
+        self.assertTrue(self.session.enable_work())
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.build_request.return_value = Mock()
+        self.session.ai = chat
+        self.session.last_response = interactive.LastResponse("previous")
+        with patch.object(interactive, "prepare", return_value=Mock()), patch.object(
+            interactive, "render_ai_debug_plan", return_value="plan"
+        ), patch("builtins.print"):
+            interactive.evaluate_input(self.session, "debug last ask")
+
+        self.assertEqual(chat.build_request.call_args.kwargs["authority"], "WORK")
+        self.assertEqual(chat.build_request.call_args.kwargs["capability_state"].mode, "WORK")
+        self.assertEqual(self.session.authority_mode, "WORK")
+
+    def test_real_last_ask_after_debug_still_executes_and_replaces_last(self):
+        chat = Mock(spec=session_ai.AIConversation)
+        chat.build_request.return_value = Mock()
+        chat.send.return_value = Mock(response="new real response")
+        self.session.ai = chat
+        self.session.last_response = interactive.LastResponse("previous")
+        with patch.object(interactive, "prepare", return_value=Mock()), patch.object(
+            interactive, "render_ai_debug_plan", return_value="plan"
+        ), patch("builtins.print"), patch.object(interactive, "render_rot_response"):
+            interactive.evaluate_input(self.session, 'debug last ask "why"')
+            interactive.evaluate_input(self.session, 'last ask "why"')
+
+        chat.send.assert_called_once()
+        self.assertEqual(self.session.last_response.text, "new real response")
+
     def test_shell_rot_and_debug_output_do_not_update_last(self):
         previous = interactive.LastResponse("keep")
         self.session.last_response = previous

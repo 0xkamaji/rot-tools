@@ -3,7 +3,12 @@ import argparse
 from rotbot.agents.config import AGENT_CHOICES
 from rotbot.agents.runner import ask_agent
 from rotbot.commands.ai import ai_context_preview, ai_session_show, ai_sessions
-from rotbot.commands.debug import debug_ask, debug_context_add, debug_context_develop
+from rotbot.commands.debug import (
+    debug_ask,
+    debug_context_add,
+    debug_context_develop,
+    debug_last_ask
+)
 from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
@@ -165,6 +170,21 @@ def create_parser():
     )
     _add_agent_argument(debug_ask_parser)
     debug_ask_parser.set_defaults(func=debug_ask)
+
+    debug_last_parser = debug_commands.add_parser(
+        "last",
+        help="Inspect session-local LAST operations"
+    )
+    debug_last_commands = debug_last_parser.add_subparsers(dest="debug_last_command")
+    debug_last_parser.set_defaults(
+        func=show_command_help, command_parser=debug_last_parser
+    )
+    debug_last_ask_parser = debug_last_commands.add_parser(
+        "ask",
+        help="Available only inside an interactive Rot session"
+    )
+    debug_last_ask_parser.add_argument("instruction", nargs="*")
+    debug_last_ask_parser.set_defaults(func=debug_last_ask)
 
     debug_context_parser = debug_commands.add_parser(
         "context",

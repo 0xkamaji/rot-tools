@@ -12,6 +12,17 @@ class LastResponseError(Exception):
     pass
 
 
+def build_last_ask_message(last_text, instruction=None):
+    if instruction:
+        return (
+            "FOLLOW-UP INSTRUCTION\n"
+            f"{instruction}\n\n"
+            "PREVIOUS RESPONSE\n"
+            f"{last_text}"
+        )
+    return "PREVIOUS RESPONSE\n" + last_text
+
+
 def edit_text(text, environ=None):
     environ = os.environ if environ is None else environ
     editor = environ.get("VISUAL") or environ.get("EDITOR")

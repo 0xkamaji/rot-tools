@@ -133,29 +133,11 @@ class AIConversation:
         self.status = "thinking"
         assistant_parts = []
         try:
-            known_state = getattr(self.backend, "known_remote_state", lambda: ())()
-            if not isinstance(known_state, (tuple, list)):
-                known_state = tuple(self.remote_state)
-            plan = prepare(AIRequest(
-                purpose="conversation",
-                parent_command="interactive",
-                task=user_message,
-                working_directory=cwd,
-                agent_name=self.backend.agent_name,
-                inspected_context=inspected,
-                capability_state=capability_state,
-                conversation_id=self.id,
-                conversation_messages=tuple(
-                    ConversationMessage(message.role, message.content, message.status)
-                    for message in prior_messages
-                ),
-                provider_state=() if backend_replaced else tuple(known_state),
-                previous_context_fingerprint=(
-                    None if backend_replaced else self.context_fingerprint
-                ),
-                context_dirty=self.context_dirty,
-                authority=authority
-            ))
+            request = self.build_request(
+                user_message, inspected, cwd, authority, capability_state,
+                messages=prior_messages, backend_replaced=backend_replaced
+            )
+            plan = prepare(request)
 
             def receive_text(text):
                 if text:
@@ -234,6 +216,43 @@ class AIConversation:
         if response != result.response:
             result = type(result)(response, result.remote_state, result.model)
         return result
+
+    def build_request(
+        self, user_message, inspected, cwd, authority="TALK",
+        capability_state=None, *, messages=None, backend_replaced=None
+    ):
+        if capability_state is not None:
+            authority = capability_state.mode
+        if backend_replaced is None:
+            would_replace = getattr(self.backend, "would_replace", None)
+            backend_replaced = (
+                would_replace(authority, cwd) is True
+                if callable(would_replace) else False
+            )
+        known_state = getattr(self.backend, "known_remote_state", lambda: ())()
+        if not isinstance(known_state, (tuple, list)):
+            known_state = tuple(self.remote_state)
+        source_messages = tuple(self.messages) if messages is None else tuple(messages)
+        return AIRequest(
+            purpose="conversation",
+            parent_command="interactive",
+            task=user_message,
+            working_directory=cwd,
+            agent_name=self.backend.agent_name,
+            inspected_context=inspected,
+            capability_state=capability_state,
+            conversation_id=self.id,
+            conversation_messages=tuple(
+                ConversationMessage(message.role, message.content, message.status)
+                for message in source_messages
+            ),
+            provider_state=() if backend_replaced else tuple(known_state),
+            previous_context_fingerprint=(
+                None if backend_replaced else self.context_fingerprint
+            ),
+            context_dirty=self.context_dirty,
+            authority=authority
+        )
 
     def _execute_compatible_backend(self, plan, cwd, authority, on_text):
         def adapter(_plan, on_output=None):

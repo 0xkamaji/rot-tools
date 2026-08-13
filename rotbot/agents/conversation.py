@@ -96,12 +96,19 @@ class OpenCodeBackend:
             self.directory = cwd
             self.authority = authority
             return False
-        if self.directory == cwd and self.authority == authority:
+        if not self.would_replace(authority, cwd):
             return False
         self.session_id = None
         self.directory = cwd
         self.authority = authority
         return True
+
+    def would_replace(self, authority, cwd):
+        if authority not in {"TALK", "WORK"}:
+            raise ConversationError(f"Unsupported AI authority mode: {authority}")
+        return self.directory is not None and (
+            self.directory != cwd or self.authority != authority
+        )
 
     def stream_generate(self, message, cwd, authority="TALK"):
         if which("opencode") is None:

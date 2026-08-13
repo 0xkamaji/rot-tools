@@ -208,6 +208,87 @@ class AIConversationTests(unittest.TestCase):
         self.assertIn("assistant: one", second_prompt)
         self.assertIn("CONTEXT", second_prompt)
 
+    def test_build_request_is_pure_and_send_uses_same_builder(self):
+        backend = self.backend()
+        backend.agent_name = "opencode"
+        backend.known_remote_state.return_value = (
+            BackendStateReference(
+                "backend", "opencode", "session", "ses_current", "local_persistent"
+            ),
+        )
+        backend.generate.return_value = self.result("answer")
+        conversation = ai.AIConversation.create(backend)
+        conversation.messages.extend((
+            ai.AIMessage("one", "user", "earlier", Mock(), "TALK"),
+            ai.AIMessage("two", "assistant", "response", Mock(), "TALK")
+        ))
+        conversation.context_fingerprint = "fingerprint"
+        conversation.context_version = 3
+        conversation.context_dirty = True
+        before = (
+            tuple(conversation.messages), tuple(conversation.remote_state),
+            conversation.context_fingerprint, conversation.context_version,
+            conversation.context_dirty, conversation.model
+        )
+
+        request = conversation.build_request("next", Mock(), Path("/work"), "TALK")
+
+        self.assertEqual(request.task, "next")
+        self.assertEqual(len(request.conversation_messages), 2)
+        self.assertEqual(request.provider_state[0].state_id, "ses_current")
+        self.assertEqual(
+            before,
+            (
+                tuple(conversation.messages), tuple(conversation.remote_state),
+                conversation.context_fingerprint, conversation.context_version,
+                conversation.context_dirty, conversation.model
+            )
+        )
+        backend.prepare.assert_not_called()
+
+        with patch.object(
+            conversation, "build_request", wraps=conversation.build_request
+        ) as builder, patch.object(
+            invocation, "resolve_egress_context", return_value=Mock()
+        ), patch.object(
+            invocation, "build_context_refresh_prompt", return_value="REFRESH"
+        ):
+            conversation.send("real next", Mock(), Path("/work"))
+
+        builder.assert_called_once()
+        self.assertEqual(builder.call_args.args[0], "real next")
+
+    def test_prepared_debug_style_request_includes_current_conversation_state(self):
+        backend = self.backend()
+        backend.agent_name = "opencode"
+        provider_state = BackendStateReference(
+            "backend", "opencode", "session", "ses_current", "local_persistent"
+        )
+        backend.known_remote_state.return_value = (provider_state,)
+        conversation = ai.AIConversation.create(backend)
+        conversation.messages.extend((
+            ai.AIMessage("one", "user", "earlier question", Mock(), "TALK"),
+            ai.AIMessage("two", "assistant", "earlier response", Mock(), "TALK")
+        ))
+        context = Mock()
+        fingerprint = invocation.hashlib.sha256(
+            repr(context).encode("utf-8")
+        ).hexdigest()
+        conversation.context_fingerprint = fingerprint
+
+        request = conversation.build_request("follow up", Mock(), Path("/work"))
+        with patch.object(
+            invocation, "resolve_provider", return_value=(invocation.OPENCODE, None)
+        ), patch.object(
+            invocation, "resolve_egress_context", return_value=context
+        ):
+            plan = invocation.prepare(request)
+
+        self.assertEqual(len(plan.available_conversation), 2)
+        self.assertEqual(plan.available_conversation[1].content, "earlier response")
+        self.assertEqual(plan.provider_state, (provider_state,))
+        self.assertEqual(plan.provider_input, "follow up")
+
 
 if __name__ == "__main__":
     unittest.main()
