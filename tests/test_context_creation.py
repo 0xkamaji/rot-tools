@@ -48,16 +48,14 @@ class ContextCreationTests(unittest.TestCase):
             clear=True
         )
         self.environment.start()
-        self.agent_output = json.dumps({
-            "identity": (
-                "# Example Identity\n\nExample is a small test project. Its identity "
-                "is human-maintained and must not be rewritten automatically."
-            ),
-            "state": (
-                "# Example Current State\n\nThe project currently has a Python entry point "
-                "and source directory."
-            )
-        })
+        self.identity_output = (
+            "# example\n\n- Example is a small test project.\n"
+            "- Its identity is human-maintained."
+        )
+        self.state_output = (
+            "# example State\n\n- The project has a Python entry point.\n"
+            "- A source directory is present."
+        )
 
     def tearDown(self):
         self.environment.stop()
@@ -72,22 +70,27 @@ class ContextCreationTests(unittest.TestCase):
         )
 
     def run_add(self, answer="n", output=None, returncode=0, args=None):
-        output = self.agent_output if output is None else output
+        output = None if output is None else output
         args = self.args() if args is None else args
         def invoke(invocation, validator=None, **_kwargs):
+            response = output or (
+                self.identity_output
+                if invocation.purpose == "context_identity_development"
+                else self.state_output
+            )
             if returncode != 0:
                 return AIResult(
-                    invocation, returncode, output, 0.1, "Test",
+                    invocation, returncode, response, 0.1, "Test",
                     validation_error=f"Test failed with exit code {returncode}."
                 )
             try:
-                value = validator(output) if validator is not None else None
+                value = validator(response) if validator is not None else None
             except Exception as error:
                 return AIResult(
-                    invocation, 0, output, 0.1, "Test",
+                    invocation, 0, response, 0.1, "Test",
                     validation_error=str(error), attempts=invocation.retries + 1
                 )
-            return AIResult(invocation, 0, output, 0.1, "Test", value=value)
+            return AIResult(invocation, 0, response, 0.1, "Test", value=value)
         with patch.object(
             context_creation,
             "invoke",
@@ -145,18 +148,17 @@ class ContextCreationTests(unittest.TestCase):
         (self.project / "private.key").write_text("private", encoding="utf-8")
         (self.project / "image.png").write_bytes(b"\x89PNG\0secret")
 
-        synopsis, required, optional = context_creation._inspect_project(
+        required, optional = context_creation._inspect_project(
             self.project,
             ("github.com/example/project",)
         )
 
-        self.assertNotIn("node_modules", synopsis)
-        self.assertNotIn(".cache", synopsis)
-        self.assertNotIn(".env", synopsis)
-        self.assertNotIn("do-not-send", synopsis)
-        self.assertNotIn("private.key", synopsis)
-        self.assertNotIn("image.png", synopsis)
-        self.assertLessEqual(len(synopsis.encode("utf-8")), 64_000)
+        rendered = repr((required, optional))
+        self.assertNotIn("node_modules", rendered)
+        self.assertNotIn(".cache", rendered)
+        self.assertNotIn(".env", rendered)
+        self.assertNotIn("private.key", rendered)
+        self.assertNotIn("image.png", rendered)
         self.assertEqual(required[:2], ("main.py", "src/"))
         self.assertNotIn(str(self.project), required + optional)
 
@@ -164,14 +166,13 @@ class ContextCreationTests(unittest.TestCase):
         secret = "client_secret = super-sensitive-value"
         (self.project / "main.py").write_text(secret, encoding="utf-8")
 
-        synopsis, _required, _optional = context_creation._inspect_project(
+        required, optional = context_creation._inspect_project(
             self.project,
             ("github.com/example/project",)
         )
 
-        self.assertIn("main.py", synopsis)
-        self.assertNotIn(secret, synopsis)
-        self.assertNotIn("super-sensitive-value", synopsis)
+        self.assertIn("main.py", required + optional)
+        self.assertNotIn(secret, repr((required, optional)))
 
     def test_prompt_contains_only_approved_relative_evidence(self):
         secret_config = self.root / "config-home" / "rot" / "config.toml"
@@ -182,17 +183,21 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         stream_agent.assert_not_called()
-        synopsis, _required, _optional = context_creation._inspect_project(
-            self.project, ("github.com/example/project",)
+        evidence = context_creation.inspect_project_development_evidence(
+            self.project, ("github.com/example/project",), "example"
         )
-        task = context_creation._context_development_task("example")
-        evidence = context_creation._project_evidence(synopsis)
-        contract = context_creation.CONTEXT_DEVELOPMENT_OUTPUT_CONTRACT
-        prompt = "\n\n".join((task, evidence, contract))
+        prompt = "\n\n".join((
+            context_creation._identity_development_task("example"),
+            context_creation.render_identity_evidence(evidence),
+            context_creation.IDENTITY_OUTPUT_CONTRACT,
+            context_creation._state_development_task("example"),
+            context_creation.render_state_evidence(evidence),
+            context_creation.STATE_OUTPUT_CONTRACT
+        ))
         self.assertIn("github.com/example/project", prompt)
         self.assertIn("main.py", prompt)
-        self.assertIn("exactly two string keys", prompt)
-        self.assertIn("do not draft match.toml or vision.md", prompt)
+        self.assertIn("Return only the identity Markdown", prompt)
+        self.assertIn("Return only the state Markdown", prompt)
         self.assertNotIn(str(self.project), prompt)
         self.assertNotIn(str(secret_config), prompt)
         self.assertNotIn("do-not-send", prompt)
@@ -279,13 +284,111 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         request = invocation.call_args.args[0]
-        self.assertEqual(request.purpose, "context_development")
-        self.assertEqual(request.parent_command, "context add")
-        self.assertEqual(request.retries, 1)
-        self.assertIn("Draft identity and state context", request.task)
-        self.assertNotIn("Project directory name", request.task)
-        self.assertIn("Project directory name", request.context_material)
-        self.assertIn("exactly two string keys", request.output_contract)
+        self.assertEqual(invocation.call_count, 2)
+        identity, state = (call.args[0] for call in invocation.call_args_list)
+        self.assertEqual(identity.purpose, "context_identity_development")
+        self.assertEqual(state.purpose, "context_state_development")
+        self.assertEqual(identity.parent_command, "context add")
+        self.assertEqual(state.parent_command, "context add")
+        self.assertEqual(identity.retries, 1)
+        self.assertEqual(state.retries, 1)
+        self.assertIn("stable project identity", identity.task)
+        self.assertIn("current project state", state.task)
+        self.assertNotEqual(identity.context_material, state.context_material)
+        self.assertNotIn("exactly two string keys", identity.output_contract)
+
+    def test_context_development_inspects_evidence_once_for_both_requests(self):
+        self.run_add(answer="yes", output="invalid")
+        evidence = Mock()
+        with patch.object(
+            context_creation, "inspect_project_development_evidence",
+            return_value=evidence
+        ) as inspect, patch.object(
+            context_creation, "render_identity_evidence", return_value="identity evidence"
+        ), patch.object(
+            context_creation, "render_state_evidence", return_value="state evidence"
+        ):
+            operation = context_creation.build_context_develop_request(
+                argparse.Namespace(name="example", agent=None), self.root
+            )
+
+        inspect.assert_called_once_with(
+            self.project.resolve(), ("github.com/example/project",), "example"
+        )
+        self.assertIs(operation.evidence, evidence)
+        self.assertEqual(operation.identity_request.context_material, "identity evidence")
+        self.assertEqual(operation.state_request.context_material, "state evidence")
+
+    def test_identity_success_and_state_failure_changes_no_documents(self):
+        self.run_add(answer="yes", output="invalid")
+        destination = self.project_context_root / "example" / "local"
+        before = {
+            name: (destination / f"{name}.md").read_bytes()
+            for name in ("identity", "state")
+        }
+
+        def invoke(request, validator, **_kwargs):
+            output = (
+                self.identity_output
+                if request.purpose == "context_identity_development"
+                else "# example State\n\nnot a bullet"
+            )
+            try:
+                value = validator(output)
+            except Exception as error:
+                return AIResult(
+                    request, 0, output, 0.1, "Test", validation_error=str(error),
+                    attempts=2
+                )
+            return AIResult(request, 0, output, 0.1, "Test", value=value)
+
+        with patch.object(
+            context_creation, "invoke", side_effect=invoke
+        ) as invoked, patch.object(context_creation, "rot_say") as say:
+            result = context_creation.context_develop(
+                argparse.Namespace(name="example", agent=None)
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(invoked.call_count, 2)
+        self.assertIn("state phase failed", say.call_args.args[0])
+        for name, content in before.items():
+            self.assertEqual((destination / f"{name}.md").read_bytes(), content)
+
+    def test_both_documents_are_validated_before_one_atomic_apply(self):
+        self.run_add(answer="yes", output="invalid")
+        operation = context_creation.build_context_develop_request(
+            argparse.Namespace(name="example", agent=None), self.root
+        )
+        expected_values = {
+            "identity": context_creation._parse_context_document(
+                self.identity_output, self.project, "example", "identity"
+            ),
+            "state": context_creation._parse_context_document(
+                self.state_output, self.project, "example", "state"
+            )
+        }
+
+        def invoke(request, validator, **_kwargs):
+            output = (
+                self.identity_output
+                if request.purpose == "context_identity_development"
+                else self.state_output
+            )
+            return AIResult(
+                request, 0, output, 0.1, "Test", value=validator(output)
+            )
+
+        with patch.object(
+            context_creation, "invoke", side_effect=invoke
+        ), patch.object(
+            context_creation, "_atomic_replace_documents"
+        ) as replace:
+            error = context_creation._enrich_project_context(operation)
+
+        self.assertIsNone(error)
+        replace.assert_called_once()
+        self.assertEqual(replace.call_args.args[2], expected_values)
 
     def test_debug_context_develop_real_builder_does_not_modify_context_or_binding(self):
         result, _agent, _rot_say, _rot_continue = self.run_add(
@@ -297,17 +400,19 @@ class ContextCreationTests(unittest.TestCase):
         state = (destination / "state.md").read_bytes()
         binding = dict(get_context_binding("example"))
 
-        with patch.object(
-            debug_commands, "_display_request", return_value=0
-        ) as display:
+        with patch.object(debug_commands, "prepare") as prepare, patch.object(
+            debug_commands, "render_ai_debug_plan", return_value="plan"
+        ), patch("builtins.print"):
+            prepare.side_effect = lambda request: request
             debug_result = debug_commands.debug_context_develop(
                 argparse.Namespace(name="example", agent="opencode")
             )
 
         self.assertEqual(debug_result, 0)
-        display.assert_called_once()
-        request = display.call_args.args[0]
-        self.assertIn("Project directory name: project", request.context_material)
+        self.assertEqual(prepare.call_count, 2)
+        requests = [call.args[0] for call in prepare.call_args_list]
+        self.assertIn("PROJECT IDENTITY EVIDENCE", requests[0].context_material)
+        self.assertIn("CURRENT IMPLEMENTATION EVIDENCE", requests[1].context_material)
         self.assertEqual((destination / "identity.md").read_bytes(), identity)
         self.assertEqual((destination / "state.md").read_bytes(), state)
         self.assertEqual(get_context_binding("example"), binding)
@@ -343,8 +448,12 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "invoke",
             side_effect=lambda invocation, validator, **_kwargs: AIResult(
-                invocation, 0, self.agent_output, 0.1, "Test",
-                value=validator(self.agent_output)
+                invocation, 0,
+                self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output,
+                0.1, "Test",
+                value=validator(
+                    self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output
+                )
             )
         ):
             result = context_creation.context_develop(
@@ -362,8 +471,12 @@ class ContextCreationTests(unittest.TestCase):
             context_creation,
             "invoke",
             side_effect=lambda invocation, validator, **_kwargs: AIResult(
-                invocation, 0, self.agent_output, 0.1, "Test",
-                value=validator(self.agent_output)
+                invocation, 0,
+                self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output,
+                0.1, "Test",
+                value=validator(
+                    self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output
+                )
             )
         ):
             result = context_creation.context_develop(
@@ -373,59 +486,54 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(identity.read_text(encoding="utf-8"), "# Manual\n\n- Keep this.\n")
 
     def test_generated_identity_and_state_use_notes_and_bullet_points(self):
-        output = json.dumps({
-            "identity": "# Identity\n\nStable purpose.\n\n- Intended audience.",
-            "state": "# State\n\nCurrent capability.\nContinued detail."
-        })
-
-        documents = context_creation._parse_agent_draft(output, self.project)
+        identity = context_creation._parse_context_document(
+            "# example\n\n- Stable purpose.\n- Intended audience.",
+            self.project, "example", "identity"
+        )
+        state = context_creation._parse_context_document(
+            "# example State\n\n- Current capability.\n- Continued detail.",
+            self.project, "example", "state"
+        )
 
         self.assertEqual(
-            documents["identity"],
-            "# Identity\n\n"
+            identity,
+            "# example\n\n"
             f"<!-- {context_creation.DOCUMENT_NOTES['identity']} -->\n\n"
             "- Stable purpose.\n- Intended audience.\n"
         )
         self.assertEqual(
-            documents["state"],
-            "# State\n\n"
+            state,
+            "# example State\n\n"
             f"<!-- {context_creation.DOCUMENT_NOTES['state']} -->\n\n"
-            "- Current capability. Continued detail.\n"
+            "- Current capability.\n- Continued detail.\n"
         )
 
-    def test_enrichment_flattens_sections_and_discards_model_comments(self):
-        output = json.dumps({
-            "identity": (
-                "# Dotfiles\n\n<!-- model note -->\n\nPurpose:\n"
-                "- Portable configuration.\n"
-            ),
-            "state": (
-                "# Dotfiles State\n\nCurrent Capabilities:\n"
-                "- Provides terminal configuration\n"
-                "- Defines window manager layout\n\n"
-                "## Limitations\n\n- No installer\n"
-            )
-        })
-
-        documents = context_creation._parse_agent_draft(output, self.project)
-
-        self.assertEqual(
-            documents["identity"],
-            "# Dotfiles\n\n"
-            f"<!-- {context_creation.DOCUMENT_NOTES['identity']} -->\n\n"
-            "- Purpose: Portable configuration.\n"
+    def test_context_document_validator_rejects_wrong_heading_and_malformed_state(self):
+        cases = (
+            ("identity", "# example State\n\n- Wrong artifact."),
+            ("state", "# example\n\n- Wrong artifact."),
+            ("state", "# example State\n\nCurrent capability."),
         )
-        self.assertEqual(
-            documents["state"],
-            "# Dotfiles State\n\n"
-            f"<!-- {context_creation.DOCUMENT_NOTES['state']} -->\n\n"
-            "- Current Capabilities: Provides terminal configuration\n"
-            "- Current Capabilities: Defines window manager layout\n"
-            "- Limitations: No installer\n"
+        for document_type, output in cases:
+            with self.subTest(document_type=document_type, output=output), self.assertRaises(
+                context_creation.ContextCreationError
+            ):
+                context_creation._parse_context_document(
+                    output, self.project, "example", document_type
+                )
+
+    def test_context_document_validator_rejects_comments_and_extra_sections(self):
+        invalid = (
+            "# example\n\n<!-- model note -->\n- Portable configuration.",
+            "# example State\n\n## Limitations\n- No installer"
         )
-        for document in documents.values():
-            body = document.split("-->\n\n", 1)[1]
-            self.assertTrue(all(line.startswith("- ") for line in body.splitlines()))
+        for document_type, output in zip(("identity", "state"), invalid):
+            with self.subTest(document_type=document_type), self.assertRaises(
+                context_creation.ContextCreationError
+            ):
+                context_creation._parse_context_document(
+                    output, self.project, "example", document_type
+                )
 
     def test_decline_happens_after_full_preview_and_writes_nothing(self):
         preview_seen = []
@@ -602,7 +710,7 @@ class ContextCreationTests(unittest.TestCase):
         result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        stream_agent.assert_called_once()
+        self.assertEqual(stream_agent.call_count, 2)
 
     def test_non_git_project_can_generate_portable_match_and_binding(self):
         non_git = self.root / "plain-project"

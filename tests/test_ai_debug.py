@@ -8,10 +8,24 @@ from rotbot.agents import invocation, runner
 from rotbot.agents.config import OPENCODE
 from rotbot.commands import debug
 from rotbot.contexts import creation
+from rotbot.contexts.evidence import ProjectDevelopmentEvidence
 from rotbot.ui.debug import render_ai_debug_plan
 
 
 class AIDebugTests(unittest.TestCase):
+    def development_operation(self, identity_request, state_request=None):
+        state_request = state_request or invocation.AIRequest(
+            "context_state_development", "context develop", "state",
+            context_material="state evidence", output_contract="state contract"
+        )
+        evidence = ProjectDevelopmentEvidence(
+            "example", (), "Python application", (), (), (), (), (), None
+        )
+        return creation.ContextDevelopmentOperation(
+            identity_request, state_request, "example", Path("/project"),
+            Path("/context"), evidence
+        )
+
     def plan(self):
         available = SimpleNamespace(
             assistant=object(), user=object(), machine=None, project=object()
@@ -134,9 +148,7 @@ class AIDebugTests(unittest.TestCase):
             "context_development", "context develop", "draft",
             context_material="evidence", output_contract="contract"
         )
-        operation = creation.ContextDevelopmentOperation(
-            request, "example", Path("/project"), Path("/context")
-        )
+        operation = self.development_operation(request)
         args = argparse.Namespace(name="example", agent="opencode")
 
         with patch.object(
@@ -152,7 +164,8 @@ class AIDebugTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         builder.assert_called_once_with(args, debug.tempfile.gettempdir())
-        prepare.assert_called_once_with(request)
+        self.assertEqual(prepare.call_count, 2)
+        self.assertEqual(prepare.call_args_list[0].args[0], request)
         replace.assert_not_called()
         start.assert_not_called()
 
@@ -161,9 +174,7 @@ class AIDebugTests(unittest.TestCase):
             "context_development", "context develop", "draft",
             context_material="evidence", output_contract="contract"
         )
-        operation = creation.ContextDevelopmentOperation(
-            request, "example", Path("/project"), Path("/context")
-        )
+        operation = self.development_operation(request)
         args = argparse.Namespace(name="example", agent=None)
         failed = invocation.AIResult(
             self.plan(), 127, "", 0, None, validation_error="unavailable"

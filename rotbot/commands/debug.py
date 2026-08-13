@@ -43,7 +43,20 @@ def debug_ask(args):
 def debug_context_develop(args):
     try:
         operation = build_context_develop_request(args, tempfile.gettempdir())
-        return _display_request(operation.request)
+        sections = []
+        for label, request in (
+            ("IDENTITY", operation.identity_request),
+            ("STATE", operation.state_request)
+        ):
+            sections.append(
+                "=" * 60
+                + f"\nCONTEXT DEVELOPMENT: {label}\n"
+                + "=" * 60
+                + "\n\n"
+                + render_ai_debug_plan(prepare(request))
+            )
+        print("\n\n".join(sections))
+        return 0
     except REQUEST_ERRORS as error:
         rot_say(str(error))
         return 2
