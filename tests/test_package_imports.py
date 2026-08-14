@@ -22,6 +22,7 @@ class PackageImportTests(unittest.TestCase):
         "rotbot.session.capabilities",
         "rotbot.session.completion",
         "rotbot.session.history",
+        "rotbot.session.state",
         "rotbot.session.router",
         "rotbot.session.shell",
         "rotbot.ui.interactive",

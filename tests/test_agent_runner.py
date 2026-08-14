@@ -50,6 +50,40 @@ class AskAgentTests(unittest.TestCase):
         self.assertEqual(store.append_message.call_args_list[1].args[1].content, "Answer\n")
         self.assertEqual(rot_say.call_args_list[-1].args[0], "Response received in 2.3s.")
 
+    def test_ask_uses_injected_context_without_inspecting_again(self):
+        inspected = self.inspected_context()
+        args = argparse.Namespace(
+            question=["Current", "project?"], agent=None,
+            inspected_context=inspected
+        )
+
+        with patch.object(
+            runner, "inspect_current_context"
+        ) as inspect, patch.object(
+            runner, "invoke",
+            return_value=AIResult(None, 1, "", 0, None, validation_error="unavailable")
+        ) as shared_invoke, patch.object(runner, "rot_say"):
+            result = runner.ask_agent(args)
+
+        self.assertEqual(result, 1)
+        inspect.assert_not_called()
+        request = shared_invoke.call_args.args[0]
+        self.assertIs(request.inspected_context, inspected)
+        self.assertEqual(request.working_directory, inspected.cwd)
+
+    def test_build_ask_request_inspects_for_standalone_args(self):
+        inspected = self.inspected_context()
+        args = argparse.Namespace(question="Anything?", agent=None)
+
+        with patch.object(
+            runner, "inspect_current_context", return_value=inspected
+        ) as inspect:
+            operation = runner.build_ask_request(args)
+
+        inspect.assert_called_once_with(bootstrap=False)
+        self.assertIs(operation.inspected, inspected)
+        self.assertIs(operation.request.inspected_context, inspected)
+
     def test_context_failure_does_not_invoke(self):
         args = argparse.Namespace(question="Anything?", agent=None)
         with patch.object(

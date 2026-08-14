@@ -81,11 +81,6 @@ class ParserDispatchTests(unittest.TestCase):
         (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
         (
-            ["context", "inspect"],
-            "context_inspect",
-            {"context_command": "inspect"}
-        ),
-        (
             ["context", "show", "signalrot"],
             "context_show",
             {"context_command": "show", "name": "signalrot"}
@@ -222,7 +217,7 @@ class ParserDispatchTests(unittest.TestCase):
     def test_unknown_commands_are_rejected(self):
         for argv in (
             ["unknown"], ["ai", "unknown"], ["ai", "session", "unknown"],
-            ["sr", "unknown"], ["machine", "unknown"]
+            ["sr", "unknown"], ["machine", "unknown"], ["context", "inspect"]
         ):
             with self.subTest(argv=argv):
                 self.assert_parse_error(argv)
@@ -339,7 +334,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertIn("COMMAND: rotbot git status", message)
         self.assertIn("COMMAND: rotbot ai session show", message)
         self.assertIn("COMMAND: rotbot context add", message)
-        self.assertIn("COMMAND: rotbot context inspect", message)
+        self.assertNotIn("COMMAND: rotbot context inspect", message)
         self.assertIn("COMMAND: rotbot machine inspect", message)
         self.assertIn("COMMAND: rotbot context delete", message)
         self.assertIn("COMMAND: rotbot context mod", message)

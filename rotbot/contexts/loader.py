@@ -274,52 +274,7 @@ def _available_context_entries():
     )
 
 
-def _choose_context_to_show(entries):
-    exit_number = len(entries) + 1
-    rot_say(
-        "Which context would you like to show?\n\n"
-        + "\n".join(
-            f"  {index}. {context_type}: {name}"
-            for index, (context_type, name) in enumerate(entries, 1)
-        )
-        + f"\n  {exit_number}. Exit"
-    )
-    while True:
-        try:
-            answer = input("> ").strip()
-        except EOFError:
-            return None
-        if answer.lower() in {"", "exit", "e", "quit", "q"}:
-            return None
-        if answer == str(exit_number):
-            return None
-        if answer.isdigit() and 1 <= int(answer) <= len(entries):
-            return entries[int(answer) - 1]
-        rot_say(f"Please choose a number from 1 to {exit_number}.")
-
-
-def _choose_context_scope():
-    rot_say(
-        "Which context would you like to show?\n\n"
-        "  1. Current session - identities, machine, directory, and project\n"
-        "  2. Existing contexts - choose a saved project, person, or machine\n"
-        "  3. Exit"
-    )
-    while True:
-        try:
-            answer = input("> ").strip().lower()
-        except EOFError:
-            return None
-        if answer in {"", "exit", "e", "quit", "q", "3"}:
-            return None
-        if answer in {"1", "current", "session", "current session"}:
-            return "current"
-        if answer in {"2", "existing", "saved", "other"}:
-            return "existing"
-        rot_say("Please choose 1, 2, or 3.")
-
-
-def _show_current_context():
+def _show_current_context(inspected=None):
     from rotbot.contexts.inspection import (
         ContextInspectionError,
         inspect_current_context,
@@ -327,7 +282,8 @@ def _show_current_context():
     )
 
     try:
-        inspected = inspect_current_context(bootstrap=False)
+        if inspected is None:
+            inspected = inspect_current_context(bootstrap=False)
     except ContextInspectionError as error:
         rot_say(str(error))
         return 2
@@ -454,6 +410,8 @@ def context_show(args):
     from rotbot.contexts.machines import MachineContextError
     from rotbot.contexts.people import PersonContextError
 
+    if not args.name:
+        return _show_current_context(getattr(args, "inspected_context", None))
     try:
         entries = _available_context_entries()
     except (
@@ -474,29 +432,13 @@ def context_show(args):
             rot_say(
                 f"Context name '{args.name}' is ambiguous; multiple context "
                 f"types exist: {context_types}.\n\n"
-                "Run 'rot context show' without a name to choose one."
+                "Use a unique context name."
             )
             return 1
         if not matches:
             rot_say(f"Unknown or invalid context: {args.name}")
             return 1
         context_type, name = matches[0]
-    else:
-        scope = _choose_context_scope()
-        if scope is None:
-            rot_say("Context display cancelled.")
-            return 0
-        if scope == "current":
-            return _show_current_context()
-        if not entries:
-            rot_say("No saved contexts are available to show.")
-            return 1
-        selected = _choose_context_to_show(entries)
-        if selected is None:
-            rot_say("Context display cancelled.")
-            return 0
-        context_type, name = selected
-
     if context_type in {"user", "assistant"}:
         return _show_entity_context(name, context_type)
     if context_type == "contact":

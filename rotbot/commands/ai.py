@@ -10,7 +10,9 @@ def _display_time(value):
 
 def ai_context_preview(args):
     try:
-        inspected = inspect_current_context(bootstrap=False)
+        inspected = getattr(args, "inspected_context", None)
+        if inspected is None:
+            inspected = inspect_current_context(bootstrap=False)
         context = prompt.resolve_egress_context(inspected, "preview")
         builder = getattr(prompt, "build_context_preview", None)
         preview = (

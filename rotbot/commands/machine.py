@@ -735,8 +735,8 @@ def machine_inspect(args):
                 f"  ID:   {configured_machine.id}\n"
                 "This installation is already bound to it.\n"
                 + (
-                    "The local binding still uses its legacy name. Run "
-                    "'rot context inspect' to migrate that binding to the UUID.\n"
+                    "The local binding still uses its legacy name. It will be "
+                    "migrated to the UUID when the next Rot session starts.\n"
                     if configured != configured_machine.id
                     else ""
                 )

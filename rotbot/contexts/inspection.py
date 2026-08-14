@@ -354,13 +354,3 @@ def render_inspected_context(inspected):
     if inspected.warnings:
         lines.extend(("", "Warnings:", *(f"  {warning}" for warning in inspected.warnings)))
     return "\n".join(lines)
-
-
-def context_inspect(args):
-    try:
-        inspected = inspect_current_context(bootstrap=True)
-    except ContextInspectionError as error:
-        rot_say(str(error))
-        return 2
-    rot_say(render_inspected_context(inspected))
-    return 1 if inspected.warnings else 0

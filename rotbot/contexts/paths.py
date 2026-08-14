@@ -34,6 +34,10 @@ def config_root(environ=None):
     return _xdg_root("XDG_CONFIG_HOME", ".config", environ) / "rotbot"
 
 
+def state_root(environ=None):
+    return _xdg_root("XDG_STATE_HOME", ".local/state", environ) / "rotbot"
+
+
 def repository_root():
     return Path(__file__).resolve().parents[2]
 

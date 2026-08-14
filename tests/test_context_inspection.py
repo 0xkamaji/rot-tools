@@ -1,4 +1,3 @@
-import argparse
 import os
 from pathlib import Path
 import shutil
@@ -8,7 +7,6 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from rotbot import __main__ as rotbot
 from rotbot.cli import parser as command_parser
 from rotbot.contexts import entities, inspection, loader, machines
 from rotbot.contexts.config import get_local_context_bindings
@@ -641,32 +639,6 @@ class ContextInspectionTests(unittest.TestCase):
         self.assertNotIn("project", document)
         self.assertNotIn("defaults", document)
 
-    def test_handler_exit_codes_follow_contract(self):
-        self.write_config()
-        with patch.object(inspection, "rot_say") as rot_say:
-            self.assertEqual(inspection.context_inspect(argparse.Namespace()), 0)
-        self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
-
-        self.config.write_text("[assistant]\nid = 7\n", encoding="utf-8")
-        with patch.object(inspection, "rot_say") as rot_say:
-            self.assertEqual(inspection.context_inspect(argparse.Namespace()), 2)
-        self.assertIn("Invalid local assistant context ID", rot_say.call_args.args[0])
-
-        self.write_config()
-        self.config.write_text(
-            self.config.read_text(encoding="utf-8").replace(
-                f'id = "{self.USER_ID}"',
-                'id = "missing"',
-                1
-            ),
-            encoding="utf-8"
-        )
-        with patch("builtins.input", return_value=""), patch.object(
-            inspection,
-            "rot_say"
-        ):
-            self.assertEqual(inspection.context_inspect(argparse.Namespace()), 1)
-
     def test_malformed_configured_context_is_treated_as_stale(self):
         self.write_config()
         (self.assistants / "rot" / "metadata.toml").write_text(
@@ -678,27 +650,13 @@ class ContextInspectionTests(unittest.TestCase):
             inspection,
             "rot_say"
         ):
-            self.assertEqual(inspection.context_inspect(argparse.Namespace()), 1)
+            result = inspection.inspect_current_context(
+                self.outside,
+                bootstrap=True
+            )
 
-    def test_exit_code_survives_parser_and_top_level_dispatch(self):
-        self.write_config()
-        arguments = command_parser.parse_args(["context", "inspect"])
-        inspected = inspection.inspect_current_context(self.outside)._replace(
-            warnings=("configured identity is invalid",)
-        )
-
-        with patch.object(
-            inspection,
-            "inspect_current_context",
-            return_value=inspected
-        ), patch.object(inspection, "rot_say"), patch.object(
-            rotbot,
-            "parse_args",
-            return_value=arguments
-        ):
-            result = rotbot.main()
-
-        self.assertEqual(result, 1)
+        self.assertIsNone(result.assistant)
+        self.assertIn("No local assistant was selected.", result.warnings)
 
 
 class ContextInspectParserTests(unittest.TestCase):
@@ -707,7 +665,8 @@ class ContextInspectParserTests(unittest.TestCase):
             command_parser.parse_args(argv)
         self.assertEqual(raised.exception.code, 2)
 
-    def test_positional_directory_is_rejected(self):
+    def test_public_context_inspect_command_does_not_exist(self):
+        self.assert_rejected(["context", "inspect"])
         self.assert_rejected(["context", "inspect", "/some/path"])
 
     def test_context_resolve_command_does_not_exist(self):

@@ -30,6 +30,7 @@ from rotbot.session.last import (
     edit_text,
     save_text
 )
+from rotbot.session.state import SessionState, SessionStateError, SessionStateStore
 from rotbot.agents.invocation import prepare
 from rotbot.ui.debug import render_ai_debug_plan
 from rotbot.session.router import route_input
@@ -78,9 +79,9 @@ Rot commands can also be entered directly, including:
   git status
   git pull
   git push
-  context inspect
-  context list
+  context show
   context show NAME
+  context list
   machine inspect
   ai sessions
   ai session show ROT_CONVERSATION_ID
@@ -128,12 +129,12 @@ class RotSession:
     assistant_policy: AssistantCapabilityPolicy | None = None
     last_response: LastResponse | None = None
     debug_response: DebugResponse | None = None
-    context_overrides: dict = field(default_factory=dict)
+    state_store: SessionStateStore = field(default_factory=SessionStateStore)
 
     @classmethod
-    def start(cls):
+    def start(cls, state_store=None):
         cwd = Path.cwd().resolve()
-        context = inspect_current_context(cwd=cwd, bootstrap=False)
+        context = inspect_current_context(cwd=cwd, bootstrap=True)
         history = CommandHistory()
         try:
             history.load()
@@ -144,42 +145,71 @@ class RotSession:
             load_assistant_policy(context.assistant_id)
             if context.assistant_id else safe_policy("No assistant is resolved.")
         )
-        return cls(
+        session = cls(
             datetime.now().astimezone(), cwd, context, history,
-            assistant_policy=policy
+            assistant_policy=policy,
+            state_store=state_store if state_store is not None else SessionStateStore()
         )
+        session.state_store.save(SessionState.from_inspected(context))
+        return session
 
     def refresh_context(self):
         cwd = Path.cwd().resolve()
-        context = inspect_current_context(cwd=cwd, bootstrap=False)
-        if self.context_overrides:
-            replacements = {}
-            sources = context.identification_sources
-            for context_type, (name, context_id) in self.context_overrides.items():
-                replacements[context_type] = name
-                replacements[f"{context_type}_id"] = context_id
-                sources = sources._replace(**{context_type: "session binding"})
-            replacements["identification_sources"] = sources
-            context = context._replace(**replacements)
-        policy = (
-            load_assistant_policy(context.assistant_id)
-            if context.assistant_id else safe_policy("No assistant is resolved.")
+        previous = self.context
+        observed = inspect_current_context(cwd=cwd, bootstrap=False)
+        replacements = {}
+        sources = observed.identification_sources
+        for context_type in ("assistant", "user", "machine", "project"):
+            if getattr(previous.identification_sources, context_type) != "session binding":
+                continue
+            replacements[context_type] = getattr(previous, context_type)
+            replacements[f"{context_type}_id"] = getattr(
+                previous, f"{context_type}_id"
+            )
+            sources = sources._replace(**{context_type: "session binding"})
+        context = observed._replace(
+            **replacements,
+            identification_sources=sources
         )
+        policy = self.assistant_policy
+        if context.assistant_id != previous.assistant_id:
+            policy = (
+                load_assistant_policy(context.assistant_id)
+                if context.assistant_id else safe_policy("No assistant is resolved.")
+            )
+        self.state_store.save(SessionState.from_inspected(context))
         self.cwd = cwd
         self.context = context
         self.assistant_policy = policy
+        if self.ai is not None and context != previous:
+            self.ai.mark_context_dirty()
 
     def bind_context(self, context_type, name, context_id):
-        previous = self.context_overrides.get(context_type)
-        self.context_overrides[context_type] = (name, context_id)
-        try:
-            self.refresh_context()
-        except BaseException:
-            if previous is None:
-                self.context_overrides.pop(context_type, None)
-            else:
-                self.context_overrides[context_type] = previous
-            raise
+        previous = self.context
+        sources = previous.identification_sources._replace(
+            **{context_type: "session binding"}
+        )
+        context = previous._replace(
+            **{
+                context_type: name,
+                f"{context_type}_id": context_id,
+                "identification_sources": sources
+            }
+        )
+        policy = self.assistant_policy
+        if context_type == "assistant" and context_id != previous.assistant_id:
+            policy = load_assistant_policy(context_id)
+        self.state_store.save(SessionState.from_inspected(context))
+        self.context = context
+        self.assistant_policy = policy
+        if (
+            self.authority_mode == "WORK"
+            and context_type in {"assistant", "project"}
+            and context_id != getattr(previous, f"{context_type}_id")
+        ):
+            self.enable_talk()
+        if self.ai is not None:
+            self.ai.mark_context_dirty()
 
     @property
     def capability_state(self):
@@ -210,8 +240,6 @@ class RotSession:
         except BaseException:
             os.chdir(previous)
             raise
-        if self.ai is not None:
-            self.ai.mark_context_dirty()
         return (
             self.authority_mode == "WORK"
             and previous_project_id != self.context.project_id
@@ -616,18 +644,16 @@ def evaluate_input(session, line, header=None):
             command == "context"
             and (
                 len(arguments) == 1
-                or arguments[1] in {"inspect", "bind", "add", "mod", "delete"}
+                or arguments[1] in {"bind", "add", "mod", "delete"}
             )
         )
     )
     if result == 0 and changes_context:
         try:
             session.refresh_context()
-        except ContextInspectionError as error:
+        except (ContextInspectionError, SessionStateError) as error:
             rot_say(f"Could not refresh session context.\n{error}")
         else:
-            if session.ai is not None:
-                session.ai.mark_context_dirty()
             if (
                 session.authority_mode == "WORK"
                 and (
@@ -646,7 +672,7 @@ def evaluate_input(session, line, header=None):
 def run_interactive():
     try:
         session = RotSession.start()
-    except ContextInspectionError as error:
+    except (ContextInspectionError, SessionStateError) as error:
         rot_say(str(error))
         return 2
 

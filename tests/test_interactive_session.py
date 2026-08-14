@@ -15,6 +15,7 @@ from rotbot.cli import parser as command_parser
 from rotbot.contexts import inspection
 from rotbot.session import interactive
 from rotbot.session.history import CommandHistory, HistoryError
+from rotbot.session.state import SessionState, SessionStateError, SessionStateStore
 from rotbot.ui import interactive as interactive_ui
 
 
@@ -45,10 +46,12 @@ class RotSessionTests(unittest.TestCase):
         self.first.mkdir()
         self.second.mkdir()
         os.chdir(self.first)
+        self.state_store = Mock(spec=SessionStateStore)
         self.session = interactive.RotSession(
             datetime(2026, 8, 12, 12, 20),
             self.first,
-            inspected(self.first)
+            inspected(self.first),
+            state_store=self.state_store
         )
         self.session.assistant_policy = AssistantCapabilityPolicy(
             work_enabled=True, valid=True
@@ -63,6 +66,25 @@ class RotSessionTests(unittest.TestCase):
             self.assertTrue(interactive.evaluate_input(self.session, "pwd"))
 
         rot_say.assert_called_once_with(str(self.first))
+
+    def test_start_bootstraps_context_and_saves_authoritative_state(self):
+        context = inspected(self.first)
+        store = Mock(spec=SessionStateStore)
+        policy = AssistantCapabilityPolicy(work_enabled=True, valid=True)
+        with patch.object(
+            interactive, "inspect_current_context", return_value=context
+        ) as inspect_context, patch.object(
+            CommandHistory, "load"
+        ), patch.object(
+            interactive, "load_assistant_policy", return_value=policy
+        ):
+            session = interactive.RotSession.start(state_store=store)
+
+        inspect_context.assert_called_once_with(cwd=self.first, bootstrap=True)
+        store.save.assert_called_once_with(SessionState.from_inspected(context))
+        self.assertIs(session.state_store, store)
+        self.assertIs(session.context, context)
+        self.assertIs(session.assistant_policy, policy)
 
     def test_cd_changes_process_cwd_and_refreshes_project(self):
         refreshed = inspected(self.second, project="signalrot")
@@ -80,12 +102,21 @@ class RotSessionTests(unittest.TestCase):
         inspect_context.assert_called_once_with(cwd=self.second, bootstrap=False)
         self.assertIn("Project: signalrot", rot_say.call_args.args[0])
 
-    def test_session_context_binding_survives_refresh_and_directory_change(self):
+    def test_bind_context_mutates_authoritative_context_and_saves(self):
+        self.session.bind_context("user", "Alex", "alex-id")
+
+        self.assertEqual(self.session.context.user, "Alex")
+        self.assertEqual(self.session.context.user_id, "alex-id")
+        self.assertEqual(
+            self.session.context.identification_sources.user, "session binding"
+        )
+        self.state_store.save.assert_called_once_with(
+            SessionState.from_inspected(self.session.context)
+        )
+
+    def test_explicit_user_binding_survives_refresh_and_directory_change(self):
         refreshed = inspected(self.second, project="signalrot", user="Default User")
-        with patch.object(
-            interactive, "inspect_current_context", return_value=refreshed
-        ):
-            self.session.bind_context("user", "Alex", "alex-id")
+        self.session.bind_context("user", "Alex", "alex-id")
 
         self.assertEqual(self.session.context.user, "Alex")
         self.assertEqual(self.session.context.user_id, "alex-id")
@@ -100,17 +131,36 @@ class RotSessionTests(unittest.TestCase):
 
         self.assertEqual(self.session.context.user, "Alex")
         self.assertEqual(self.session.context.project, "signalrot")
-
-    def test_failed_session_binding_restores_previous_override(self):
-        self.session.context_overrides["user"] = ("Kamaji", "user-id")
-        with patch.object(
-            self.session, "refresh_context", side_effect=inspection.ContextInspectionError("failed")
-        ), self.assertRaises(inspection.ContextInspectionError):
-            self.session.bind_context("user", "Alex", "alex-id")
-
         self.assertEqual(
-            self.session.context_overrides["user"], ("Kamaji", "user-id")
+            self.session.context.identification_sources.user, "session binding"
         )
+
+    def test_failed_state_save_rolls_back_context_and_policy(self):
+        previous_context = self.session.context
+        previous_policy = self.session.assistant_policy
+        self.state_store.save.side_effect = SessionStateError("failed")
+        replacement_policy = AssistantCapabilityPolicy(work_enabled=False, valid=True)
+
+        with patch.object(
+            interactive, "load_assistant_policy", return_value=replacement_policy
+        ), self.assertRaises(SessionStateError):
+            self.session.bind_context("assistant", "Other", "other-id")
+
+        self.assertIs(self.session.context, previous_context)
+        self.assertIs(self.session.assistant_policy, previous_policy)
+
+    def test_assistant_binding_revokes_existing_work_authority(self):
+        self.session.authority_mode = "WORK"
+        self.session.work_project_id = self.session.context.project_id
+        replacement_policy = AssistantCapabilityPolicy(work_enabled=True, valid=True)
+
+        with patch.object(
+            interactive, "load_assistant_policy", return_value=replacement_policy
+        ):
+            self.session.bind_context("assistant", "Other", "other-id")
+
+        self.assertEqual(self.session.authority_mode, "TALK")
+        self.assertIsNone(self.session.work_project_id)
 
     def test_new_session_defaults_to_talk_and_ai_idle(self):
         self.assertEqual(self.session.authority_mode, "TALK")
@@ -243,7 +293,7 @@ class RotSessionTests(unittest.TestCase):
     def test_existing_commands_use_shared_parser_and_handlers(self):
         cases = (
             ("git status", "git_status"),
-            ("context inspect", "context_inspect")
+            ("context show", "context_show")
         )
         for command, handler_name in cases:
             with self.subTest(command=command), patch.object(
@@ -747,6 +797,33 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(captured, [self.session.bind_context])
 
+    def test_context_bind_then_show_displays_authoritative_user(self):
+        user = Mock()
+        user.name = "Alex"
+        user.id = "alex-id"
+
+        with patch(
+            "rotbot.contexts.binding._load_session_context", return_value=user
+        ), patch("rotbot.contexts.binding.rot_say"), patch(
+            "rotbot.contexts.loader.rot_say"
+        ) as show, patch.object(
+            interactive, "inspect_current_context",
+            return_value=inspected(self.first, user="Configured Default")
+        ):
+            interactive.evaluate_input(self.session, "context bind user Alex")
+            interactive.evaluate_input(self.session, "context show")
+
+        self.assertIn("User:       Alex", show.call_args.args[0])
+
+    def test_rot_command_receives_current_session_context(self):
+        captured = []
+        parsed = Mock(func=lambda args: captured.append(args.inspected_context) or 0)
+        with patch.object(interactive, "parse_args", return_value=parsed):
+            result = interactive._run_rot_command(["ask", "question"], self.session)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured, [self.session.context])
+
     def test_failed_or_interrupted_cli_debug_preserves_existing_debug(self):
         previous = interactive.DebugResponse("keep", "debug-ask")
         self.session.debug_response = previous
@@ -894,18 +971,14 @@ class RotSessionTests(unittest.TestCase):
         self.assertIs(self.session.ai, chat)
         chat.mark_context_dirty.assert_called_once_with()
 
-    def test_context_change_refreshes_session_before_ai_exists(self):
-        self.assertIsNone(self.session.ai)
-        refreshed = inspected(self.first, user="Updated")
-        with patch.object(interactive, "_run_rot_command", return_value=0), patch.object(
-            self.session, "refresh_context", side_effect=lambda: setattr(
-                self.session, "context", refreshed
-            )
+    def test_public_context_inspect_no_longer_dispatches_or_refreshes(self):
+        with patch.object(command_parser, "rot_say") as parser_say, patch.object(
+            self.session, "refresh_context"
         ) as refresh:
             interactive.evaluate_input(self.session, "context inspect")
 
-        refresh.assert_called_once_with()
-        self.assertEqual(self.session.context.user, "Updated")
+        self.assertIn("invalid choice", parser_say.call_args.args[0])
+        refresh.assert_not_called()
 
     def test_exit_and_quit_end_session(self):
         self.assertFalse(interactive.evaluate_input(self.session, "exit"))
@@ -949,15 +1022,19 @@ class RotSessionTests(unittest.TestCase):
 
 class InteractiveLoopTests(unittest.TestCase):
     def test_history_load_failure_warns_but_session_starts(self):
+        state_store = Mock(spec=SessionStateStore)
         with patch.object(
             interactive, "inspect_current_context", return_value=inspected(Path.cwd())
         ), patch.object(
             CommandHistory, "load", side_effect=HistoryError("unreadable")
         ), patch.object(interactive, "rot_say") as rot_say:
-            session = interactive.RotSession.start()
+            session = interactive.RotSession.start(state_store=state_store)
 
         self.assertFalse(session.command_history.persistence_enabled)
         self.assertIn("could not be loaded", rot_say.call_args.args[0])
+        state_store.save.assert_called_once_with(
+            SessionState.from_inspected(session.context)
+        )
 
     def test_no_argument_main_enters_interactive_session(self):
         args = argparse.Namespace(command=None)

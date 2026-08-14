@@ -52,6 +52,22 @@ class ContextMenuTests(unittest.TestCase):
             self.assertIn(description, menu_text)
         self.assertIn("enter an action name", rot_say.call_args_list[1].args[0])
 
+    def test_show_forwards_inspected_context(self):
+        inspected = object()
+        with patch("builtins.input", return_value="show"), patch.object(
+            menu,
+            "context_show",
+            return_value=0
+        ) as context_show, patch.object(menu, "rot_say"):
+            result = menu.context_menu(argparse.Namespace(
+                inspected_context=inspected
+            ))
+
+        self.assertEqual(result, 0)
+        arguments = context_show.call_args.args[0]
+        self.assertIsNone(arguments.name)
+        self.assertIs(arguments.inspected_context, inspected)
+
     def test_blank_exit_and_eof_close_without_calling_handlers(self):
         for side_effect in (("",), ("8",), (EOFError(),)):
             with self.subTest(side_effect=side_effect), patch(

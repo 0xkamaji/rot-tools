@@ -13,7 +13,7 @@ ACTIONS = (
     ("develop", "Enrich an existing project context using AI"),
     ("list", "List all available project, person, and machine contexts"),
     ("mod", "Add categorized information to a person context"),
-    ("show", "Choose and display a project, person, or machine context"),
+    ("show", "Display the active session context"),
     ("bind", "Recognize and bind the current project directory"),
     ("delete", "Choose a context to archive without destroying it")
 )
@@ -59,10 +59,23 @@ def context_menu(args):
                 "develop": (context_develop, SimpleNamespace(name=None, agent=None)),
                 "list": (context_list, SimpleNamespace()),
                 "mod": (context_mod, SimpleNamespace(name=None)),
-                "show": (context_show, SimpleNamespace(name=None)),
+                "show": (
+                    context_show,
+                    SimpleNamespace(
+                        name=None,
+                        inspected_context=getattr(args, "inspected_context", None)
+                    )
+                ),
                 "bind": (
                     context_bind,
-                    SimpleNamespace(first=None, second=None, binding_type=None)
+                    SimpleNamespace(
+                        first=None,
+                        second=None,
+                        binding_type=None,
+                        bind_session_context=getattr(
+                            args, "bind_session_context", None
+                        )
+                    )
                 ),
                 "delete": (context_delete, SimpleNamespace(name=None))
             }[name]

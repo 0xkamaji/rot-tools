@@ -4,6 +4,7 @@ from rotbot.contexts import entities, loader, machines
 from rotbot.contexts.config import ConfigError, config_path, load_config, set_context_binding
 from rotbot.contexts.inspection import ContextInspectionError
 from rotbot.contexts.matching import MatchError, match_contexts
+from rotbot.session.state import SessionStateError
 from rotbot.ui.terminal import rot_continue, rot_say
 
 
@@ -90,7 +91,7 @@ def _bind_session(args, context_type, reference=None):
         return 1
     try:
         callback(context_type, context.name, context.id)
-    except ContextInspectionError as error:
+    except (ContextInspectionError, SessionStateError) as error:
         rot_say(f"Could not bind session context: {error}")
         return 1
     rot_say(f"Bound {context_type} context '{context.name}' to this session.")

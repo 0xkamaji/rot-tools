@@ -47,7 +47,7 @@ class CompletionProviderTests(unittest.TestCase):
             [
                 value + " "
                 for value in (
-                    "add", "bind", "delete", "develop", "inspect", "list", "mod", "show"
+                    "add", "bind", "delete", "develop", "list", "mod", "show"
                 )
             ]
         )

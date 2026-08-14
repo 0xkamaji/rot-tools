@@ -57,7 +57,7 @@ rot
 
 ```text
 kamaji ❯ git status
-kamaji ❯ context inspect
+kamaji ❯ context show
 kamaji ❯ cd ~/dev/signalrot
 kamaji ❯ status
 kamaji ❯ ask "What should I work on next?"
@@ -282,7 +282,7 @@ future completion-provider concern rather than Unix assumptions in the REPL.
 
 ```text
 kamaji ❯ git status
-kamaji ❯ context inspect
+kamaji ❯ context show
 kamaji ❯ history
 kamaji ❯ history 10
 ```
@@ -473,7 +473,6 @@ menu. Direct subcommands remain available for faster scripted use.
 | Command                      | Purpose                            |
 | ---------------------------- | ---------------------------------- |
 | `rot context list`           | List available contexts            |
-| `rot context inspect`        | Inspect the active identities, machine, directory, and project |
 | `rot context show [NAME]`    | Display the current session or a saved context |
 | `rot context bind`           | Choose a saved context to bind to the active session |
 | `rot context bind TYPE [NAME]` | Bind a project, user, assistant, or machine to the active session |
@@ -496,7 +495,7 @@ project also removes its local source and production bindings so the name can
 be recreated cleanly. Archiving a machine context does not modify its
 installation-specific local metadata file.
 
-Rot stores this installation's active context IDs in
+Rot stores this installation's default context IDs in
 `~/.config/rotbot/config.toml`:
 
 ```toml
@@ -510,18 +509,21 @@ id = "37afbc72-8f56-4fed-90a3-eaead836e13e"
 id = "57eab66e-7041-440a-83d8-7ff3ab39ed11"
 ```
 
-Inspect the context associated with the current working directory:
+Starting an interactive Rot session resolves these defaults and the current
+environment, bootstraps missing user, assistant, or machine configuration, and
+persists the resulting active state to:
 
 ```bash
-rot context inspect
+~/.local/state/rotbot/session.toml
 ```
 
-On first use, inspection prompts for an existing or new user and assistant, then
+On first use, startup prompts for an existing or new user and assistant, then
 inspects and registers the local machine if needed. These three selections are
-persisted locally. Projects remain directory-specific and are never saved as a
-global default. The final summary excludes private machine metadata.
-Normal `rot ask` resolution is non-interactive and does not bootstrap missing
-bindings.
+persisted as configuration defaults. Projects remain directory-specific and are
+never saved as a global default. `session.toml` contains only cwd, active names
+and IDs, and identification sources; it contains no context knowledge. Normal
+standalone `rot ask` resolution is non-interactive and does not bootstrap
+missing bindings.
 
 Inspect the current host:
 
@@ -548,16 +550,15 @@ omitted.
 
 ### Show a context
 
-Run without a name to choose between the current invocation context and a saved
-project, person, or machine context:
+Run without a name to show the authoritative active session context:
 
 ```bash
 rot context show
 ```
 
-The current-session option is read-only and does not bootstrap missing local
-bindings. It shows the same resolved identities, machine, directory, project,
-identification sources, and warnings used by context inspection.
+This read-only view uses the running `RotSession.context` directly. It does not
+independently resolve configuration or environment again. Outside an interactive
+session, the command resolves the current context as a standalone fallback.
 
 ```bash
 rot context show rotbot

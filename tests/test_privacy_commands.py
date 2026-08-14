@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 import socket
@@ -46,7 +47,7 @@ class PrivacyCommandTests(unittest.TestCase):
         for category in ("USERS", "ASSISTANTS", "MACHINES", "PROJECTS", "CONTACTS"):
             self.assertIn(category, rendered)
 
-    def test_ai_context_preview_uses_egress_context_without_backend(self):
+    def test_ai_context_preview_uses_injected_egress_context_without_backend(self):
         inspected = InspectedContext(
             "rot", "assistant-id", "kamaji", "user-id", "laptop", "machine-id",
             "rotbot", "project-id", self.root,
@@ -54,7 +55,7 @@ class PrivacyCommandTests(unittest.TestCase):
         )
         resolved = PromptContext(None, None, None, None, str(self.root), "preview")
         with patch.object(
-            ai, "inspect_current_context", return_value=inspected
+            ai, "inspect_current_context"
         ) as inspect, patch.object(
             ai.prompt, "resolve_egress_context", return_value=resolved
         ) as resolve, patch.object(
@@ -62,10 +63,12 @@ class PrivacyCommandTests(unittest.TestCase):
         ), patch.object(ai, "rot_say") as say, patch(
             "rotbot.agents.runner.ask_agent"
         ) as backend, patch.object(socket, "create_connection") as network:
-            result = ai.ai_context_preview(Mock())
+            result = ai.ai_context_preview(
+                argparse.Namespace(inspected_context=inspected)
+            )
 
         self.assertEqual(result, 0)
-        inspect.assert_called_once_with(bootstrap=False)
+        inspect.assert_not_called()
         resolve.assert_called_once_with(inspected, "preview")
         backend.assert_not_called()
         network.assert_not_called()
@@ -76,6 +79,26 @@ class PrivacyCommandTests(unittest.TestCase):
         self.assertIn("users/kamaji/private/", rendered)
         self.assertIn("machines/laptop/private/", rendered)
         self.assertIn("projects/rotbot/private/", rendered)
+
+    def test_ai_context_preview_inspects_for_standalone_args(self):
+        inspected = InspectedContext(
+            None, None, None, None, None, None, None, None, self.root,
+            IdentificationSources(
+                "not configured", "not configured", "not configured", "source"
+            ), ()
+        )
+        resolved = PromptContext(None, None, None, None, str(self.root), "preview")
+        with patch.object(
+            ai, "inspect_current_context", return_value=inspected
+        ) as inspect, patch.object(
+            ai.prompt, "resolve_egress_context", return_value=resolved
+        ), patch.object(
+            ai.prompt, "_context_blocks", return_value=[]
+        ), patch.object(ai, "rot_say"):
+            result = ai.ai_context_preview(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        inspect.assert_called_once_with(bootstrap=False)
 
     def test_parser_routes_and_scoped_help(self):
         self.assertIs(command_parser.parse_args(["ai", "context", "preview"]).func, ai.ai_context_preview)
@@ -95,7 +118,7 @@ class PrivacyCommandTests(unittest.TestCase):
         with patch.object(
             ai, "inspect_current_context", side_effect=ai.ContextInspectionError("bad context")
         ), patch.object(ai, "rot_say") as say:
-            self.assertEqual(ai.ai_context_preview(Mock()), 2)
+            self.assertEqual(ai.ai_context_preview(argparse.Namespace()), 2)
             self.assertIn("bad context", say.call_args.args[0])
         invalid = self.root / "invalid"
         invalid.write_text("not a directory", encoding="utf-8")

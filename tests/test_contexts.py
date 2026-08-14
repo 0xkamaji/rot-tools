@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rotbot.contexts import entities, machines, people
+from rotbot.contexts import entities, inspection, machines, people
 from rotbot.contexts import loader as contexts
 
 
@@ -329,26 +329,7 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertNotIn("private-host-sentinel", output)
         load_local.assert_not_called()
 
-    def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
-        self.create_context("alpha")
-        people.create_person_context("alex", "contact", "Alex")
-        with patch("builtins.input", side_effect=("2", "2")), patch.object(
-            contexts,
-            "rot_say"
-        ) as rot_say, patch.object(contexts, "rot_continue") as rot_continue:
-            result = contexts.context_show(argparse.Namespace(name=None))
-
-        self.assertEqual(result, 0)
-        self.assertTrue(any(
-            "1. project: alpha" in call.args[0]
-            and "2. contact: alex" in call.args[0]
-            for call in rot_say.call_args_list
-        ))
-        self.assertIn("Person known to the RotBot user", rot_continue.call_args.args[0])
-
-    def test_show_without_name_can_display_current_session_read_only(self):
-        from rotbot.contexts import inspection
-
+    def test_bare_show_uses_interactive_inspected_context_without_resolving(self):
         inspected = inspection.InspectedContext(
             "rot",
             "00000000-0000-4000-8000-000000000001",
@@ -367,7 +348,40 @@ class ContextLoaderTests(unittest.TestCase):
             ),
             ()
         )
-        with patch("builtins.input", return_value="1"), patch.object(
+        with patch.object(
+            inspection,
+            "inspect_current_context"
+        ) as inspect, patch.object(contexts, "rot_say") as rot_say:
+            result = contexts.context_show(argparse.Namespace(
+                name=None,
+                inspected_context=inspected
+            ))
+
+        self.assertEqual(result, 0)
+        inspect.assert_not_called()
+        self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
+        self.assertIn("Project:    rotbot", rot_say.call_args.args[0])
+
+    def test_standalone_bare_show_falls_back_to_context_resolver(self):
+        inspected = inspection.InspectedContext(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            self.root,
+            inspection.IdentificationSources(
+                "not configured",
+                "not configured",
+                "not configured",
+                "no matching project context"
+            ),
+            ()
+        )
+        with patch.object(
             inspection,
             "inspect_current_context",
             return_value=inspected
@@ -377,32 +391,6 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertEqual(result, 0)
         inspect.assert_called_once_with(bootstrap=False)
         self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
-        self.assertIn("Project:    rotbot", rot_say.call_args.args[0])
-
-    def test_show_selection_menu_can_exit_without_displaying(self):
-        self.create_context("alpha")
-        for answer in ("exit", "3", ""):
-            with self.subTest(answer=answer), patch(
-                "builtins.input",
-                return_value=answer
-            ), patch.object(contexts, "rot_say"), patch.object(
-                contexts,
-                "rot_continue"
-            ) as rot_continue:
-                result = contexts.context_show(argparse.Namespace(name=None))
-
-            self.assertEqual(result, 0)
-            rot_continue.assert_not_called()
-
-    def test_existing_scope_reports_when_no_saved_contexts_exist(self):
-        with patch("builtins.input", return_value="2"), patch.object(
-            contexts,
-            "rot_say"
-        ) as rot_say:
-            result = contexts.context_show(argparse.Namespace(name=None))
-
-        self.assertEqual(result, 1)
-        self.assertIn("No saved contexts", rot_say.call_args.args[0])
 
     def test_show_rejects_ambiguous_name(self):
         self.create_context("shared")

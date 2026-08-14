@@ -118,6 +118,39 @@ class AIDebugTests(unittest.TestCase):
         invoke.assert_not_called()
         start.assert_not_called()
 
+    def test_debug_ask_uses_injected_context_without_inspecting_again(self):
+        inspected = SimpleNamespace(cwd=Path("/interactive"))
+        args = argparse.Namespace(
+            question=["question"], agent=None, inspected_context=inspected
+        )
+
+        with patch.object(
+            runner, "inspect_current_context"
+        ) as inspect, patch.object(
+            debug, "prepare", return_value=self.plan()
+        ) as prepare, patch("builtins.print"):
+            result = debug.debug_ask(args)
+
+        self.assertEqual(result, 0)
+        inspect.assert_not_called()
+        request = prepare.call_args.args[0]
+        self.assertIs(request.inspected_context, inspected)
+        self.assertEqual(request.working_directory, inspected.cwd)
+
+    def test_debug_ask_inspects_for_standalone_args(self):
+        inspected = SimpleNamespace(cwd=Path("/standalone"))
+        args = argparse.Namespace(question=["question"], agent=None)
+
+        with patch.object(
+            runner, "inspect_current_context", return_value=inspected
+        ) as inspect, patch.object(
+            debug, "prepare", return_value=self.plan()
+        ), patch("builtins.print"):
+            result = debug.debug_ask(args)
+
+        self.assertEqual(result, 0)
+        inspect.assert_called_once_with(bootstrap=False)
+
     def test_debug_ask_prints_and_sinks_the_same_rendered_text(self):
         request = invocation.AIRequest("ask", "ask", "question")
         operation = runner.AskOperation(request, object(), "question")

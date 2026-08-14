@@ -27,7 +27,9 @@ class AskOperation:
 
 def build_ask_request(args):
     question = " ".join(args.question) if isinstance(args.question, list) else args.question
-    inspected = inspect_current_context(bootstrap=False)
+    inspected = getattr(args, "inspected_context", None)
+    if inspected is None:
+        inspected = inspect_current_context(bootstrap=False)
     return AskOperation(
         request=AIRequest(
             purpose="ask",

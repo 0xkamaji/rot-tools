@@ -16,7 +16,6 @@ from rotbot.commands.privacy import privacy_inspect
 from rotbot.contexts.binding import context_bind
 from rotbot.contexts.creation import context_add, context_develop
 from rotbot.contexts.deletion import context_delete
-from rotbot.contexts.inspection import context_inspect
 from rotbot.contexts.loader import context_list, context_show
 from rotbot.contexts.learning import learn_command
 from rotbot.contexts.menu import context_menu
@@ -443,7 +442,7 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="Inspect, list, show, add, modify, bind, or archive contexts"
+        help="List, show, add, modify, bind, or archive contexts"
     )
     context_commands = context_parser.add_subparsers(
         dest="context_command"
@@ -456,12 +455,6 @@ def create_parser():
     )
     context_list_parser.set_defaults(func=context_list)
 
-    context_inspect_parser = context_commands.add_parser(
-        "inspect",
-        help="Resolve the current RotBot context and bootstrap missing local bindings"
-    )
-    context_inspect_parser.set_defaults(func=context_inspect)
-
     context_show_parser = context_commands.add_parser(
         "show",
         help="Show the current session context or a saved context"
@@ -469,7 +462,7 @@ def create_parser():
     context_show_parser.add_argument(
         "name",
         nargs="?",
-        help="Optional saved context name; omit to choose current or saved context"
+        help="Optional saved context name; omit to show the active context"
     )
     context_show_parser.set_defaults(func=context_show)
 
