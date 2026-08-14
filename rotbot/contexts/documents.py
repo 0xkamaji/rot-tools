@@ -327,7 +327,9 @@ def migrate_legacy_layout(directory, context_type=None):
             if os.name != "nt":
                 os.chmod(stage / path.name, 0o600)
 
-        _write_private(stage / "identity.md", render_identity(name, inferred, display_name))
+        identity = render_identity(name, inferred, display_name)
+        if inferred != "user":
+            _write_private(stage / "identity.md", identity)
         _write_private(
             stage / "relationships.toml",
             render_relationships(metadata.get("related_projects", ()))
@@ -347,6 +349,11 @@ def migrate_legacy_layout(directory, context_type=None):
                 os.chmod(stage / "metadata.toml", 0o600)
         _copy_knowledge(directory / "shareable", stage, "general")
         _copy_knowledge(directory / "local", stage, "private")
+        if inferred == "user":
+            for namespace in KNOWLEDGE_NAMESPACES:
+                path = stage / namespace / "identity.md"
+                if not path.exists():
+                    _write_private(path, identity)
 
         for filename in ("match.toml", "match.md"):
             candidates = (
@@ -390,7 +397,17 @@ def ensure_structure(directory, context_type=None):
     migrate_legacy_layout(directory, context_type)
     if directory.is_symlink() or not directory.is_dir():
         raise ContextDocumentError(f"Invalid context directory: {directory}")
-    for filename in ("identity.md", "relationships.toml"):
+    inferred = context_type.value if hasattr(context_type, "value") else context_type
+    if inferred is None:
+        inferred = _legacy_metadata(directory).get("type")
+    required = ("relationships.toml",) if inferred == "user" else (
+        "identity.md", "relationships.toml"
+    )
+    if inferred == "user" and os.path.lexists(directory / "identity.md"):
+        raise ContextDocumentError(
+            f"User identity must be namespaced: {directory / 'identity.md'}"
+        )
+    for filename in required:
         path = directory / filename
         if path.is_symlink() or not path.is_file():
             raise ContextDocumentError(f"Invalid context structural document: {path}")
@@ -398,6 +415,12 @@ def ensure_structure(directory, context_type=None):
         root = directory / namespace
         if root.is_symlink() or not root.is_dir():
             raise ContextDocumentError(f"Invalid knowledge namespace: {root}")
+        if inferred == "user":
+            identity = root / "identity.md"
+            if identity.is_symlink() or not identity.is_file():
+                raise ContextDocumentError(
+                    f"Invalid user identity document: {identity}"
+                )
     return directory
 
 
@@ -423,7 +446,7 @@ def semantic_files(directory, view):
         namespaces = KNOWLEDGE_NAMESPACES
     else:
         raise ContextDocumentError(f"Unknown context view: {view}")
-    files = [root / "identity.md"]
+    files = [root / "identity.md"] if (root / "identity.md").is_file() else []
     for namespace in namespaces:
         files.extend(namespace_files(root, namespace))
     return tuple(files)

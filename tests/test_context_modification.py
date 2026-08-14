@@ -115,7 +115,9 @@ class PersonModificationTests(unittest.TestCase):
         assistant = entities.load_assistant_context("rot", root=self.context_root)
 
         self.assertEqual(modification.available_documents(contact), ("notes.md",))
-        self.assertEqual(modification.available_documents(user), ("experience.md",))
+        self.assertEqual(
+            modification.available_documents(user), ("experience.md", "identity.md")
+        )
         self.assertEqual(modification.available_documents(assistant), ("journal.md",))
 
     def test_invalid_input_duplicate_categories_and_symlinks_are_rejected(self):

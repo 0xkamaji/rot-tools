@@ -239,7 +239,7 @@ class TrustPreparationTests(unittest.TestCase):
         (destination / "private" / "learned.md").write_text(
             "# Learned\n\n- LOCAL SECRET TEST FACT 12345\n", encoding="utf-8"
         )
-        (destination / "identity.md").write_text(
+        (destination / "general" / "identity.md").write_text(
             "# Identity\n\n## Public\n\nGENERAL IDENTITY FACT 67890\n", encoding="utf-8"
         )
         self.inspected = inspection.InspectedContext(

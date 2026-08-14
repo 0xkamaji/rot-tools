@@ -43,7 +43,7 @@ class PersonContextTests(unittest.TestCase):
         self.assertEqual(metadata["related_projects"], [])
         self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
 
-    def test_user_creation_uses_same_empty_dynamic_namespaces(self):
+    def test_user_creation_seeds_namespaced_identity_documents(self):
         destination = people.create_person_context(
             "kamaji", "user", people_root=self.root
         )
@@ -52,7 +52,6 @@ class PersonContextTests(unittest.TestCase):
             {path.name for path in destination.iterdir()},
             {
                 "metadata.toml",
-                "identity.md",
                 "relationships.toml",
                 "general",
                 "private"
@@ -64,8 +63,15 @@ class PersonContextTests(unittest.TestCase):
         self.assertEqual(metadata["role"], "user")
         self.assertEqual(metadata["name"], "kamaji")
         self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
-        self.assertEqual(tuple((destination / "general").iterdir()), ())
-        self.assertEqual(tuple((destination / "private").iterdir()), ())
+        self.assertFalse((destination / "identity.md").exists())
+        self.assertEqual(
+            tuple(path.name for path in (destination / "general").iterdir()),
+            ("identity.md",)
+        )
+        self.assertEqual(
+            tuple(path.name for path in (destination / "private").iterdir()),
+            ("identity.md",)
+        )
 
     def test_assistant_creation_uses_core_layout_and_related_project(self):
         destination = people.create_person_context(

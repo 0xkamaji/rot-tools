@@ -384,18 +384,20 @@ source. It lives under `$XDG_DATA_HOME/rotbot/contexts/`, with fallback to
 
 ```text
 contexts/
-├── users/NAME/{metadata.toml,identity.md,relationships.toml,general/,private/}
+├── users/NAME/{metadata.toml,relationships.toml,general/identity.md,private/identity.md}
 ├── assistants/NAME/{metadata.toml,identity.md,relationships.toml,capabilities.toml,general/,private/}
 ├── contacts/NAME/{metadata.toml,identity.md,relationships.toml,general/,private/}
 ├── machines/NAME/{metadata.toml,identity.md,relationships.toml,machine.toml,general/,private/}
 └── projects/NAME/{metadata.toml,identity.md,relationships.toml,match.toml,general/,private/}
 ```
 
-Every entity uses this universal root structure. `metadata.toml` stores stable
-identity, `identity.md` describes the entity, and `relationships.toml` records
-typed links to other contexts. The knowledge namespaces contain arbitrary
-Markdown category files rather than a fixed list of documents, so categories
-can be added as the context evolves.
+Every entity uses the same metadata, relationship, and knowledge namespaces.
+Users keep separate identity documents in `general/` and `private/` so public
+and private identity details can evolve independently; other entity types keep
+their structural `identity.md` at the root. `relationships.toml` records typed
+links to other contexts. The knowledge namespaces contain arbitrary Markdown
+category files rather than a fixed list, so categories can be added as the
+context evolves.
 
 Both `general/` and `private/` remain local Rot data and stay outside Git.
 `general/` does not mean public, publishable, or safe for source control; its

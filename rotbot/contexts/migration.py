@@ -150,11 +150,11 @@ def _source_manifest(source, category=None):
     }.get(category, metadata_document.get("role", "contact"))
     name = metadata_document.get("name", source.name)
     display_name = metadata_document.get("display_name", name)
-    _add_content(
-        files,
-        Path("identity.md"),
-        documents.render_identity(name, context_type, display_name).encode("utf-8")
-    )
+    identity_content = documents.render_identity(
+        name, context_type, display_name
+    ).encode("utf-8")
+    if category != "users":
+        _add_content(files, Path("identity.md"), identity_content)
     _add_content(
         files,
         Path("relationships.toml"),
@@ -208,6 +208,9 @@ def _source_manifest(source, category=None):
         else:
             filename, content = _knowledge_content(path)
             _add_content(files, Path("private") / filename, content)
+    if category == "users":
+        for namespace in ("general", "private"):
+            files.setdefault(Path(namespace) / "identity.md", identity_content)
     return files, directories
 
 

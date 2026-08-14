@@ -57,8 +57,12 @@ class ContextMigrationTests(unittest.TestCase):
             else:
                 self.assertEqual((target / "metadata.toml").read_bytes(), metadata[name])
             self.assertEqual((target / "private" / filename).read_bytes(), b"semantic\x00content\n")
-            self.assertEqual(list((target / "general").iterdir()), [])
-            self.assertTrue((target / "identity.md").is_file())
+            if category == "users":
+                self.assertFalse((target / "identity.md").exists())
+                self.assertTrue((target / "general" / "identity.md").is_file())
+            else:
+                self.assertEqual(list((target / "general").iterdir()), [])
+                self.assertTrue((target / "identity.md").is_file())
             self.assertTrue((target / "relationships.toml").is_file())
 
     def test_nested_privacy_namespaces_fail_closed(self):

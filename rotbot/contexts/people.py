@@ -322,6 +322,8 @@ def load_person_context(name, *, people_root=None):
     if person.role != directory_role:
         raise PersonContextError(f"Person role directory does not match metadata: {name}")
     for filename in render_person_files(person):
+        if person.role == "user" and filename == "identity.md":
+            continue
         document = directory / filename
         if document.is_symlink() or not document.is_file():
             raise PersonContextError(f"Invalid person document: {name}/{filename}")
@@ -445,12 +447,17 @@ def create_person_context(
         destination.mkdir()
         created = True
         _write_document(destination / "metadata.toml", files.pop("metadata.toml"))
-        _write_document(destination / "identity.md", files.pop("identity.md"))
+        identity = files.pop("identity.md")
         _write_document(
             destination / "relationships.toml", files.pop("relationships.toml")
         )
         (destination / "general").mkdir(mode=0o700)
         (destination / "private").mkdir(mode=0o700)
+        if person.role == "user":
+            _write_document(destination / "general" / "identity.md", identity)
+            _write_document(destination / "private" / "identity.md", identity)
+        else:
+            _write_document(destination / "identity.md", identity)
     except BaseException as error:
         rollback_errors = ()
         if created:

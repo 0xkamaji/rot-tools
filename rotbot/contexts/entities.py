@@ -164,15 +164,19 @@ def render_metadata(entity):
 def render_entity_files(entity):
     if not isinstance(entity, (UserContext, AssistantContext)):
         raise EntityContextError(f"Unsupported entity context: {entity!r}")
+    identity = documents.render_identity(
+        entity.name, entity.context_type.value, entity.display_name
+    )
     files = {
         "metadata.toml": render_metadata(entity),
-        "identity.md": documents.render_identity(
-            entity.name, entity.context_type.value, entity.display_name
-        ),
         "relationships.toml": documents.render_relationships(entity.related_projects)
     }
     if isinstance(entity, AssistantContext):
+        files["identity.md"] = identity
         files["capabilities.toml"] = SAFE_CAPABILITIES
+    else:
+        files["general/identity.md"] = identity
+        files["private/identity.md"] = identity
     return files
 
 
@@ -395,12 +399,13 @@ def create_entity_context(entity, *, root=None):
         capabilities = files.pop("capabilities.toml", None)
         if capabilities is not None:
             people._write_document(destination / "capabilities.toml", capabilities)
-        people._write_document(destination / "identity.md", files.pop("identity.md"))
         people._write_document(
             destination / "relationships.toml", files.pop("relationships.toml")
         )
         (destination / "general").mkdir(mode=0o700)
         (destination / "private").mkdir(mode=0o700)
+        for relative, content in files.items():
+            people._write_document(destination / relative, content)
     except BaseException as error:
         shutil.rmtree(destination, ignore_errors=True)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):

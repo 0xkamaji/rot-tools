@@ -29,20 +29,26 @@ class EntityContextTests(unittest.TestCase):
         self.assertIsInstance(entities.load_assistant_context(assistant.id, root=self.root), entities.AssistantContext)
         self.assertEqual(tomllib.loads((user_path / "metadata.toml").read_text())["type"], "user")
         self.assertEqual(tomllib.loads((assistant_path / "metadata.toml").read_text())["type"], "assistant")
-        structural = {
-            "metadata.toml", "identity.md", "relationships.toml", "general", "private"
-        }
+        structural = {"metadata.toml", "relationships.toml", "general", "private"}
         self.assertEqual({path.name for path in user_path.iterdir()}, structural)
         self.assertEqual(
             {path.name for path in assistant_path.iterdir()},
-            structural | {"capabilities.toml"}
+            structural | {"identity.md", "capabilities.toml"}
         )
-        self.assertTrue((user_path / "identity.md").is_file())
+        self.assertFalse((user_path / "identity.md").exists())
+        self.assertTrue((user_path / "general" / "identity.md").is_file())
+        self.assertTrue((user_path / "private" / "identity.md").is_file())
         self.assertTrue((assistant_path / "identity.md").is_file())
         self.assertTrue((user_path / "relationships.toml").is_file())
         self.assertTrue((assistant_path / "relationships.toml").is_file())
-        self.assertEqual(tuple((user_path / "general").iterdir()), ())
-        self.assertEqual(tuple((user_path / "private").iterdir()), ())
+        self.assertEqual(
+            tuple(path.name for path in user_path.joinpath("general").iterdir()),
+            ("identity.md",)
+        )
+        self.assertEqual(
+            tuple(path.name for path in user_path.joinpath("private").iterdir()),
+            ("identity.md",)
+        )
         self.assertEqual(tuple((assistant_path / "general").iterdir()), ())
         self.assertEqual(tuple((assistant_path / "private").iterdir()), ())
         self.assertTrue((assistant_path / "capabilities.toml").is_file())
@@ -70,8 +76,11 @@ class EntityContextTests(unittest.TestCase):
             "alex", context_id="00000000-0000-4000-8000-000000000005"
         )
         destination = entities.create_entity_context(user, root=self.root)
-        (destination / "identity.md").write_text(
-            "# Identity\n\n## Stable\n\nCanonical identity.\n", encoding="utf-8"
+        (destination / "general" / "identity.md").write_text(
+            "# Identity\n\n## Stable\n\nGeneral identity.\n", encoding="utf-8"
+        )
+        (destination / "private" / "identity.md").write_text(
+            "# Identity\n\n## Private\n\nPrivate identity.\n", encoding="utf-8"
         )
         (destination / "general" / "experience.md").write_text(
             "# Experience\n\n## General\n\nGeneral experience.\n", encoding="utf-8"
@@ -83,7 +92,8 @@ class EntityContextTests(unittest.TestCase):
         _user, documents = entities.load_user_documents(user.id, root=self.root)
 
         rendered = repr(documents)
-        self.assertIn("Canonical identity", rendered)
+        self.assertIn("General identity", rendered)
+        self.assertIn("Private identity", rendered)
         self.assertIn("General experience", rendered)
         self.assertIn("Private note", rendered)
 
