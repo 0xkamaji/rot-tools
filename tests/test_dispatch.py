@@ -106,6 +106,11 @@ class ParserDispatchTests(unittest.TestCase):
             {"first": ".", "second": None}
         ),
         (
+            ["context", "bind", "user", "kamaji"],
+            "context_bind",
+            {"first": "user", "second": "kamaji", "binding_type": None}
+        ),
+        (
             ["context", "bind", "signalrot", "/srv/site", "--as", "source"],
             "context_bind",
             {"first": "signalrot", "second": "/srv/site", "binding_type": "source"}

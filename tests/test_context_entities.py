@@ -71,6 +71,31 @@ class EntityContextTests(unittest.TestCase):
             ["alpha", "zeta"]
         )
 
+    def test_transitional_root_user_identity_moves_into_both_namespaces(self):
+        user = entities.build_user_context(
+            "legacy-user", context_id="00000000-0000-4000-8000-000000000009"
+        )
+        destination = entities.create_entity_context(user, root=self.root)
+        (destination / "general" / "identity.md").unlink()
+        (destination / "private" / "identity.md").write_text(
+            "# Private Identity\n", encoding="utf-8"
+        )
+        (destination / "identity.md").write_text(
+            "# Transitional Identity\n", encoding="utf-8"
+        )
+
+        self.assertEqual(entities.load_user_context(user.id, root=self.root), user)
+
+        self.assertFalse((destination / "identity.md").exists())
+        self.assertEqual(
+            (destination / "general" / "identity.md").read_text(encoding="utf-8"),
+            "# Transitional Identity\n"
+        )
+        self.assertEqual(
+            (destination / "private" / "identity.md").read_text(encoding="utf-8"),
+            "# Private Identity\n"
+        )
+
     def test_entity_documents_union_identity_general_and_private_semantics(self):
         user = entities.build_user_context(
             "alex", context_id="00000000-0000-4000-8000-000000000005"

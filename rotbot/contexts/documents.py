@@ -403,10 +403,6 @@ def ensure_structure(directory, context_type=None):
     required = ("relationships.toml",) if inferred == "user" else (
         "identity.md", "relationships.toml"
     )
-    if inferred == "user" and os.path.lexists(directory / "identity.md"):
-        raise ContextDocumentError(
-            f"User identity must be namespaced: {directory / 'identity.md'}"
-        )
     for filename in required:
         path = directory / filename
         if path.is_symlink() or not path.is_file():
@@ -415,6 +411,23 @@ def ensure_structure(directory, context_type=None):
         root = directory / namespace
         if root.is_symlink() or not root.is_dir():
             raise ContextDocumentError(f"Invalid knowledge namespace: {root}")
+    if inferred == "user" and os.path.lexists(directory / "identity.md"):
+        legacy_identity = directory / "identity.md"
+        content = _read_regular(legacy_identity, "transitional user identity")
+        for namespace in KNOWLEDGE_NAMESPACES:
+            target = directory / namespace / "identity.md"
+            if not os.path.lexists(target):
+                _write_private(target, content)
+            elif target.is_symlink() or not target.is_file():
+                raise ContextDocumentError(f"Invalid user identity document: {target}")
+        try:
+            legacy_identity.unlink()
+        except OSError as error:
+            raise ContextDocumentError(
+                f"Could not remove transitional user identity: {error}"
+            ) from None
+    for namespace in KNOWLEDGE_NAMESPACES:
+        root = directory / namespace
         if inferred == "user":
             identity = root / "identity.md"
             if identity.is_symlink() or not identity.is_file():

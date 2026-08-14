@@ -80,6 +80,38 @@ class RotSessionTests(unittest.TestCase):
         inspect_context.assert_called_once_with(cwd=self.second, bootstrap=False)
         self.assertIn("Project: signalrot", rot_say.call_args.args[0])
 
+    def test_session_context_binding_survives_refresh_and_directory_change(self):
+        refreshed = inspected(self.second, project="signalrot", user="Default User")
+        with patch.object(
+            interactive, "inspect_current_context", return_value=refreshed
+        ):
+            self.session.bind_context("user", "Alex", "alex-id")
+
+        self.assertEqual(self.session.context.user, "Alex")
+        self.assertEqual(self.session.context.user_id, "alex-id")
+        self.assertEqual(
+            self.session.context.identification_sources.user, "session binding"
+        )
+
+        with patch.object(
+            interactive, "inspect_current_context", return_value=refreshed
+        ):
+            self.session.change_directory(self.second)
+
+        self.assertEqual(self.session.context.user, "Alex")
+        self.assertEqual(self.session.context.project, "signalrot")
+
+    def test_failed_session_binding_restores_previous_override(self):
+        self.session.context_overrides["user"] = ("Kamaji", "user-id")
+        with patch.object(
+            self.session, "refresh_context", side_effect=inspection.ContextInspectionError("failed")
+        ), self.assertRaises(inspection.ContextInspectionError):
+            self.session.bind_context("user", "Alex", "alex-id")
+
+        self.assertEqual(
+            self.session.context_overrides["user"], ("Kamaji", "user-id")
+        )
+
     def test_new_session_defaults_to_talk_and_ai_idle(self):
         self.assertEqual(self.session.authority_mode, "TALK")
         self.assertEqual(self.session.ai_status, "idle")
@@ -705,6 +737,15 @@ class RotSessionTests(unittest.TestCase):
         self.assertEqual(self.session.debug_response.text, "new exact rendering")
         self.assertFalse(self.session.debug_response.edited)
         self.assertIs(self.session.last_response, previous_last)
+
+    def test_rot_command_receives_session_binding_callback(self):
+        captured = []
+        parsed = Mock(func=lambda args: captured.append(args.bind_session_context) or 0)
+        with patch.object(interactive, "parse_args", return_value=parsed):
+            result = interactive._run_rot_command(["context", "bind"], self.session)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured, [self.session.bind_context])
 
     def test_failed_or_interrupted_cli_debug_preserves_existing_debug(self):
         previous = interactive.DebugResponse("keep", "debug-ask")

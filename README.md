@@ -475,8 +475,10 @@ menu. Direct subcommands remain available for faster scripted use.
 | `rot context list`           | List available contexts            |
 | `rot context inspect`        | Inspect the active identities, machine, directory, and project |
 | `rot context show [NAME]`    | Display the current session or a saved context |
+| `rot context bind`           | Choose a saved context to bind to the active session |
+| `rot context bind TYPE [NAME]` | Bind a project, user, assistant, or machine to the active session |
 | `rot context bind PATH`      | Detect and bind a local project    |
-| `rot context bind NAME PATH` | Bind a specific context            |
+| `rot context bind NAME PATH` | Bind a specific project path       |
 | `rot context add`            | Interactively create a project, user, assistant, contact, or machine context |
 | `rot context develop NAME`   | Enrich a newly created project context through the shared AI runtime |
 | `rot context add user [NAME]` | Create a first-class user context |
@@ -565,9 +567,24 @@ rot context show signalrot
 Saved context output includes all populated knowledge categories from both
 `general/` and `private/` because this is a local inspection command.
 
-### Bind a project
+### Bind contexts
 
-Bind the current directory by matching it against known contexts:
+Inside an interactive Rot session, bind any saved project, user, assistant, or
+machine. Omitting the type opens type and context selection menus:
+
+```bash
+context bind
+context bind user Kamaji
+context bind assistant rot
+context bind machine cachyos-x8664
+context bind project rotbot
+```
+
+These typed bindings last only for the active Rot session and survive context
+refreshes and directory changes.
+
+Project path recognition remains available. Bind the current directory by
+matching it against known project contexts:
 
 ```bash
 rot context bind .

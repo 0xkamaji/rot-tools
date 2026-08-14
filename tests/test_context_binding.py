@@ -2,7 +2,8 @@ import argparse
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from rotbot.contexts import binding as context_binding
 from rotbot.contexts import config as rotbot_config
@@ -36,12 +37,50 @@ class ContextBindingTests(unittest.TestCase):
             (Evidence(strong, "matching evidence"),)
         )
 
-    def args(self, first=None, second=None, binding_type=None):
+    def args(self, first=None, second=None, binding_type=None, callback=None):
         return argparse.Namespace(
             first=first,
             second=second,
-            binding_type=binding_type
+            binding_type=binding_type,
+            bind_session_context=callback
         )
+
+    def test_typed_bindings_resolve_saved_contexts_into_session(self):
+        for context_type in context_binding.SESSION_CONTEXT_TYPES:
+            callback = Mock()
+            context = SimpleNamespace(name=f"saved-{context_type}", id=f"{context_type}-id")
+            with self.subTest(context_type=context_type), patch.object(
+                context_binding, "_load_session_context", return_value=context
+            ) as load, patch.object(context_binding, "rot_say"):
+                result = context_binding.context_bind(
+                    self.args(context_type, context.name, callback=callback)
+                )
+
+            self.assertEqual(result, 0)
+            load.assert_called_once_with(context_type, context.name)
+            callback.assert_called_once_with(context_type, context.name, context.id)
+
+    def test_bare_bind_prompts_for_type_then_existing_context(self):
+        callback = Mock()
+        context = SimpleNamespace(name="kamaji", id="user-id")
+        with patch.object(
+            context_binding, "_available", return_value=((context.name, context),)
+        ), patch("builtins.input", side_effect=("2", "1")), patch.object(
+            context_binding, "rot_say"
+        ):
+            result = context_binding.context_bind(self.args(callback=callback))
+
+        self.assertEqual(result, 0)
+        callback.assert_called_once_with("user", context.name, context.id)
+
+    def test_typed_binding_requires_interactive_session(self):
+        with patch.object(context_binding, "_load_session_context") as load, patch.object(
+            context_binding, "rot_say"
+        ):
+            result = context_binding.context_bind(self.args("user", "kamaji"))
+
+        self.assertEqual(result, 1)
+        load.assert_not_called()
 
     def test_declined_confirmation_does_not_create_configuration(self):
         with patch.object(

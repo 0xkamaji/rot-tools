@@ -128,6 +128,7 @@ class RotSession:
     assistant_policy: AssistantCapabilityPolicy | None = None
     last_response: LastResponse | None = None
     debug_response: DebugResponse | None = None
+    context_overrides: dict = field(default_factory=dict)
 
     @classmethod
     def start(cls):
@@ -151,12 +152,34 @@ class RotSession:
     def refresh_context(self):
         cwd = Path.cwd().resolve()
         context = inspect_current_context(cwd=cwd, bootstrap=False)
-        self.cwd = cwd
-        self.context = context
-        self.assistant_policy = (
+        if self.context_overrides:
+            replacements = {}
+            sources = context.identification_sources
+            for context_type, (name, context_id) in self.context_overrides.items():
+                replacements[context_type] = name
+                replacements[f"{context_type}_id"] = context_id
+                sources = sources._replace(**{context_type: "session binding"})
+            replacements["identification_sources"] = sources
+            context = context._replace(**replacements)
+        policy = (
             load_assistant_policy(context.assistant_id)
             if context.assistant_id else safe_policy("No assistant is resolved.")
         )
+        self.cwd = cwd
+        self.context = context
+        self.assistant_policy = policy
+
+    def bind_context(self, context_type, name, context_id):
+        previous = self.context_overrides.get(context_type)
+        self.context_overrides[context_type] = (name, context_id)
+        try:
+            self.refresh_context()
+        except BaseException:
+            if previous is None:
+                self.context_overrides.pop(context_type, None)
+            else:
+                self.context_overrides[context_type] = previous
+            raise
 
     @property
     def capability_state(self):
@@ -347,6 +370,7 @@ def _run_rot_command(arguments, session=None):
     if session is not None:
         parsed.debug_sink = session.store_debug
         parsed.inspected_context = session.context
+        parsed.bind_session_context = session.bind_context
     result = parsed.func(parsed)
     if result is PUSH_CANCELLED:
         return 0
@@ -581,6 +605,7 @@ def evaluate_input(session, line, header=None):
 
     try:
         previous_project_id = session.context.project_id
+        previous_assistant_id = session.context.assistant_id
         result = _run_rot_command(arguments, session)
     except KeyboardInterrupt:
         rot_say("Command interrupted.")
@@ -605,12 +630,15 @@ def evaluate_input(session, line, header=None):
                 session.ai.mark_context_dirty()
             if (
                 session.authority_mode == "WORK"
-                and previous_project_id != session.context.project_id
+                and (
+                    previous_project_id != session.context.project_id
+                    or previous_assistant_id != session.context.assistant_id
+                )
             ):
                 session.enable_talk()
                 render_rot_response(
                     session,
-                    "Work mode ended because the active project changed."
+                    "Work mode ended because the active project or assistant changed."
                 )
     return True
 

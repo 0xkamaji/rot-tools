@@ -475,19 +475,19 @@ def create_parser():
 
     context_bind_parser = context_commands.add_parser(
         "bind",
-        help="Recognize and bind a local context path"
+        help="Bind a saved context to the session or recognize a project path"
     )
     context_bind_parser.add_argument(
         "first",
         nargs="?",
-        metavar="PATH|NAME",
-        help="Path to infer, or context name when followed by PATH"
+        metavar="TYPE|PATH|NAME",
+        help="Context type for a session binding, or a project path/name"
     )
     context_bind_parser.add_argument(
         "second",
         nargs="?",
-        metavar="PATH",
-        help="Path for an explicitly named context"
+        metavar="NAME|PATH",
+        help="Saved context name, or path for an explicitly named project"
     )
     context_bind_parser.add_argument(
         "--as",
