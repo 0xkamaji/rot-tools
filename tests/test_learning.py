@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import stat
 import tempfile
 from types import SimpleNamespace
@@ -51,54 +52,90 @@ class LearningTests(unittest.TestCase):
         self.loader_patch.stop()
         self.temporary.cleanup()
 
-    def target_path(self, target):
+    def target_directory(self, target):
         return {
             "user": self.root / "users" / "user",
             "assistant": self.root / "assistants" / "assistant",
             "project": self.project_path,
             "machine": self.machine_path,
             "contact": self.contact_path
-        }[target] / "private" / "learned.md"
+        }[target]
 
-    def test_all_targets_append_exact_private_entries_without_general_writes(self):
+    def knowledge_path(self, target, namespace="private", category="learned"):
+        return self.target_directory(target) / namespace / f"{category}.md"
+
+    def category_choice(self, target, namespace, category):
+        files = sorted(
+            (self.target_directory(target) / namespace).glob("*.md"),
+            key=lambda path: path.name
+        )
+        return str([path.stem for path in files].index(category) + 1)
+
+    def args(self, action, target="project", text=None):
+        return SimpleNamespace(
+            learn_action=action, learn_target=target,
+            inspected_context=self.inspected, text=[] if text is None else text
+        )
+
+    def test_all_five_targets_learn_to_general_and_private(self):
         for target in learning.TARGETS:
-            path = self.target_path(target)
-            path.unlink(missing_ok=True)
             reference = "plop" if target == "contact" else None
-            learning.learn_text(
-                target, "First line\nsecond line", inspected=self.inspected,
-                reference=reference
-            )
-            learning.learn_text(
-                target, "Exact wording.", inspected=self.inspected,
-                reference=reference
-            )
-            self.assertEqual(
-                path.read_text(encoding="utf-8"),
-                "# Learned\n\n- First line\n  second line\n\n- Exact wording.\n"
-            )
-            self.assertFalse((path.parent.parent / "general" / "learned.md").exists())
-            if os.name != "nt":
-                self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
-                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            for namespace in learning.DISCLOSURES:
+                path = self.knowledge_path(target, namespace, "observations")
+                if os.name != "nt":
+                    os.chmod(path.parent, 0o755)
+                learning.learn_text(
+                    target, f"{target} {namespace}\nsecond line",
+                    inspected=self.inspected, reference=reference,
+                    namespace=namespace, category="observations"
+                )
+                learning.learn_text(
+                    target, "Exact wording.", inspected=self.inspected,
+                    reference=reference, namespace=namespace,
+                    category="observations"
+                )
+                self.assertEqual(
+                    path.read_text(encoding="utf-8"),
+                    f"# Observations\n\n- {target} {namespace}\n"
+                    "  second line\n\n- Exact wording.\n"
+                )
+                if os.name != "nt":
+                    self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
-        self.assertIn("Exact wording.", repr(
-            entities.load_user_documents(self.user.id, root=self.root, view="full")[1]
-        ))
-        self.assertIn("Exact wording.", repr(
-            entities.load_assistant_documents(
-                self.assistant.id, root=self.root, view="full"
-            )[1]
-        ))
-        self.assertIn("Exact wording.", loader.load_context("project", view="full").learned)
-        self.assertIn("Exact wording.", repr(
-            machines.load_machine_files("machine", view="full")[1]
-        ))
-        self.assertIn("Exact wording.", repr(
-            people.load_person_documents("plop", view="full")[1]
-        ))
+    def test_cli_new_category_uses_selected_disclosure_path_and_heading(self):
+        new_choice = str(len(tuple((self.project_path / "general").glob("*.md"))) + 1)
+        with patch(
+            "builtins.input", side_effect=["1", new_choice, "release_notes"]
+        ), patch.object(learning, "rot_say"):
+            result = learning.learn_command(
+                self.args("append", text=["A", "new", "fact"])
+            )
+        path = self.knowledge_path("project", "general", "release_notes")
+        self.assertEqual(result, 0)
+        self.assertEqual(path.read_text(encoding="utf-8"), "# Release Notes\n\n- A new fact\n")
+        self.assertFalse(self.knowledge_path("project", "private", "release_notes").exists())
 
-    def test_invalid_entries_and_symlinks_are_rejected(self):
+    def test_cli_append_existing_never_confuses_namespaces(self):
+        general = self.knowledge_path("project", "general", "notes")
+        private = self.knowledge_path("project", "private", "notes")
+        general.write_text("# Notes\n\n- public prior\n", encoding="utf-8")
+        private.write_text("# Notes\n\n- private prior\n", encoding="utf-8")
+        with patch(
+            "builtins.input",
+            side_effect=["2", self.category_choice("project", "private", "notes")]
+        ), patch.object(learning, "rot_say"):
+            result = learning.learn_command(
+                self.args("append", text=["private", "addition"])
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(general.read_text(encoding="utf-8"), "# Notes\n\n- public prior\n")
+        self.assertEqual(
+            private.read_text(encoding="utf-8"),
+            "# Notes\n\n- private prior\n\n- private addition\n"
+        )
+
+    def test_invalid_entries_are_rejected(self):
         for text in ("", "\0", "bad\x01control", "bad\x7fcontrol"):
             with self.assertRaises(learning.LearningError):
                 learning.learn_text("project", text, inspected=self.inspected)
@@ -107,14 +144,44 @@ class LearningTests(unittest.TestCase):
                 "project", "x" * (learning.MAX_LEARNED_ENTRY_BYTES + 1),
                 inspected=self.inspected
             )
-        path = self.target_path("project")
+
+    def test_invalid_namespaces_categories_and_cli_traversal_are_rejected(self):
+        with self.assertRaises(learning.LearningError):
+            learning.learn_text(
+                "project", "safe", inspected=self.inspected, namespace="local"
+            )
+        categories = (
+            "", "..", "../escape", "nested/name", "nested\\name", ".hidden",
+            "bad\x7f"
+        )
+        for category in categories:
+            with self.subTest(category=category), self.assertRaises(learning.LearningError):
+                learning.learn_text(
+                    "project", "safe", inspected=self.inspected,
+                    namespace="general", category=category
+                )
+        outside = self.project_path / "escape.md"
+        new_choice = str(len(tuple((self.project_path / "general").glob("*.md"))) + 1)
+        with patch(
+            "builtins.input", side_effect=["1", new_choice, "../escape"]
+        ), patch.object(learning, "rot_say"):
+            self.assertEqual(
+                learning.learn_command(self.args("append", text=["unsafe"])), 2
+            )
+        self.assertFalse(outside.exists())
+
+    def test_symlink_protection_does_not_touch_target(self):
+        path = self.knowledge_path("project")
         path.unlink(missing_ok=True)
-        path.symlink_to(self.project_path / "metadata.toml")
+        target = self.project_path / "metadata.toml"
+        before = target.read_text(encoding="utf-8")
+        path.symlink_to(target)
         with self.assertRaises(learning.LearningError):
             learning.learn_text("project", "safe", inspected=self.inspected)
+        self.assertEqual(target.read_text(encoding="utf-8"), before)
 
     def test_atomic_failure_preserves_existing_document(self):
-        path = self.target_path("project")
+        path = self.knowledge_path("project")
         path.write_text("# Learned\n\n- prior\n", encoding="utf-8")
         with patch.object(learning.os, "replace", side_effect=OSError("failed")):
             with self.assertRaises(learning.LearningError):
@@ -122,99 +189,132 @@ class LearningTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), "# Learned\n\n- prior\n")
         self.assertEqual(tuple(path.parent.glob(".learned-*.tmp")), ())
 
-    def test_edit_uses_shared_editor_and_validates_heading(self):
-        path = self.target_path("project")
-        path.write_text("# Learned\n\n- old\n", encoding="utf-8")
+    def test_cli_edit_menu_uses_editor_for_selected_category(self):
+        path = self.knowledge_path("project", "general", "notes")
+        path.write_text("# Notes\n\n- old\n", encoding="utf-8")
         with patch.object(
-            learning, "edit_text", return_value="# Learned\n\n- edited\n"
-        ) as editor:
-            learning.edit_learned("project", inspected=self.inspected)
-        editor.assert_called_once_with("# Learned\n\n- old\n")
-        self.assertEqual(path.read_text(encoding="utf-8"), "# Learned\n\n- edited\n")
+            learning, "edit_text", return_value="# Notes\n\n- edited\n"
+        ) as editor, patch(
+            "builtins.input",
+            side_effect=["1", self.category_choice("project", "general", "notes")]
+        ), patch.object(learning, "rot_say"):
+            result = learning.learn_command(self.args("edit"))
+        self.assertEqual(result, 0)
+        editor.assert_called_once_with("# Notes\n\n- old\n")
+        self.assertEqual(path.read_text(encoding="utf-8"), "# Notes\n\n- edited\n")
 
-        with patch.object(learning, "edit_text", return_value="# Wrong\n"):
-            with self.assertRaises(learning.LearningError):
-                learning.edit_learned("project", inspected=self.inspected)
-        self.assertEqual(path.read_text(encoding="utf-8"), "# Learned\n\n- edited\n")
-
-        with patch.object(learning, "edit_text", side_effect=RuntimeError("editor failed")):
-            with self.assertRaises(RuntimeError):
-                learning.edit_learned("project", inspected=self.inspected)
-        self.assertEqual(path.read_text(encoding="utf-8"), "# Learned\n\n- edited\n")
-
-    def test_show_prints_exact_document_without_modifying_it(self):
-        path = self.target_path("user")
-        expected = "# Learned\n\n- exact shown text\n"
+    def test_cli_show_menu_has_no_mutation(self):
+        path = self.knowledge_path("user", "general", "profile")
+        expected = "# Profile\n\n- exact shown text\n"
         path.write_text(expected, encoding="utf-8")
         before = path.stat()
-        args = SimpleNamespace(
-            learn_action="show", learn_target="user",
-            inspected_context=self.inspected
-        )
-
-        with patch("builtins.print") as output:
-            result = learning.learn_command(args)
-
+        with patch(
+            "builtins.input",
+            side_effect=["1", self.category_choice("user", "general", "profile")]
+        ), patch("builtins.print") as output, patch.object(learning, "rot_say"):
+            result = learning.learn_command(self.args("show", "user"))
         self.assertEqual(result, 0)
         output.assert_called_once_with(expected, end="")
         self.assertEqual(path.read_text(encoding="utf-8"), expected)
         self.assertEqual(path.stat().st_mtime_ns, before.st_mtime_ns)
 
-    def test_show_missing_document_fails_without_creating_it(self):
-        path = self.target_path("project")
-        path.unlink(missing_ok=True)
-        args = SimpleNamespace(
-            learn_action="show", learn_target="project",
-            inspected_context=self.inspected
-        )
+    def test_back_one_level_does_not_resolve_target_again(self):
+        path = self.knowledge_path("project", "private", "notes")
+        path.write_text("# Notes\n\n- private\n", encoding="utf-8")
+        general_back = str(len(tuple((self.project_path / "general").glob("*.md"))) + 1)
+        with patch.object(
+            learning, "_resolve", wraps=learning._resolve
+        ) as resolve, patch(
+            "builtins.input", side_effect=[
+                "1", general_back, "2",
+                self.category_choice("project", "private", "notes")
+            ]
+        ), patch("builtins.print"), patch.object(learning, "rot_say"):
+            result = learning.learn_command(self.args("show"))
+        self.assertEqual(result, 0)
+        self.assertEqual(resolve.call_count, 1)
 
-        with patch.object(learning, "rot_say") as say:
-            result = learning.learn_command(args)
+    def test_exit_from_disclosure_or_category_changes_nothing(self):
+        path = self.knowledge_path("project", "general", "notes")
+        path.write_text("# Notes\n\n- unchanged\n", encoding="utf-8")
+        before = {
+            item.relative_to(self.project_path): item.read_bytes()
+            for item in self.project_path.rglob("*") if item.is_file()
+        }
+        category_exit = str(len(tuple((self.project_path / "general").glob("*.md"))) + 3)
+        for responses in (["3"], ["1", category_exit]):
+            with patch("builtins.input", side_effect=responses), patch.object(
+                learning, "rot_say"
+            ):
+                self.assertEqual(
+                    learning.learn_command(self.args("append", text=["not", "stored"])), 0
+                )
+            after = {
+                item.relative_to(self.project_path): item.read_bytes()
+                for item in self.project_path.rglob("*") if item.is_file()
+            }
+            self.assertEqual(after, before)
 
-        self.assertEqual(result, 2)
-        self.assertIn("No learned knowledge", say.call_args.args[0])
-        self.assertFalse(path.exists())
+    def test_exit_does_not_materialize_builtin_assistant(self):
+        local = self.root / "assistants" / "assistant"
+        builtin_root = Path(self.temporary.name) / "builtin" / "assistants"
+        builtin_root.mkdir(parents=True)
+        shutil.copytree(local, builtin_root / "assistant")
+        shutil.rmtree(local)
+
+        with patch.object(
+            entities, "builtin_assistants_root", return_value=builtin_root
+        ), patch("builtins.input", return_value="3"), patch.object(
+            learning, "rot_say"
+        ):
+            result = learning.learn_command(self.args("append", "assistant", ["unused"]))
+
+        self.assertEqual(result, 0)
+        self.assertFalse(local.exists())
 
     def test_unresolved_target_offers_existing_context(self):
         unresolved = self.inspected._replace(project=None, project_id=None)
         with patch("builtins.input", return_value="1"), patch.object(learning, "rot_say"):
             context, path = learning.learn_text("project", "selected", inspected=unresolved)
         self.assertEqual(context.name, "project")
-        self.assertEqual(path, self.target_path("project"))
+        self.assertEqual(path, self.knowledge_path("project"))
 
-    def test_omitted_text_prompts_after_confirming_resolved_target(self):
-        args = SimpleNamespace(
-            learn_action="append", learn_target="user", text=[],
-            inspected_context=self.inspected
-        )
-        with patch("builtins.input", return_value="Prompted exact wording") as prompt, patch.object(
-            learning, "rot_say"
-        ) as say:
-            result = learning.learn_command(args)
-
-        self.assertEqual(result, 0)
-        prompt.assert_called_once_with("> ")
-        self.assertIn("Learning target: user 'user'", say.call_args_list[0].args[0])
-        self.assertIn(
-            "- Prompted exact wording",
-            self.target_path("user").read_text(encoding="utf-8")
-        )
-
-    def test_omitted_text_eof_or_empty_input_does_not_modify_context(self):
-        path = self.target_path("assistant")
+    def test_omitted_text_eof_or_empty_does_not_modify_context(self):
+        path = self.knowledge_path("assistant")
         path.write_text("# Learned\n\n- existing\n", encoding="utf-8")
         before = path.read_text(encoding="utf-8")
-        args = SimpleNamespace(
-            learn_action="append", learn_target="assistant", text=[],
-            inspected_context=self.inspected
-        )
         for response in (EOFError(), ""):
-            effect = response if isinstance(response, BaseException) else None
-            with patch(
-                "builtins.input", side_effect=effect, return_value=response
-            ), patch.object(learning, "rot_say"):
-                self.assertEqual(learning.learn_command(args), 2)
+            responses = [
+                "2", self.category_choice("assistant", "private", "learned"), response
+            ]
+            with patch("builtins.input", side_effect=responses), patch.object(
+                learning, "rot_say"
+            ):
+                self.assertEqual(
+                    learning.learn_command(self.args("append", "assistant")), 2
+                )
             self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_private_learned_legacy_helpers_still_work(self):
+        path = self.knowledge_path("project")
+        path.unlink(missing_ok=True)
+        context, learned_path = learning.learn_text(
+            "project", "legacy", inspected=self.inspected
+        )
+        shown_context, shown_path, content = learning.show_learned(
+            "project", inspected=self.inspected
+        )
+        edited_context, edited_path = learning.edit_learned(
+            "project", inspected=self.inspected,
+            editor=lambda original: original.replace("legacy", "edited legacy")
+        )
+        self.assertEqual(
+            (context.name, shown_context.name, edited_context.name),
+            ("project", "project", "project")
+        )
+        self.assertEqual((learned_path, shown_path, edited_path), (path, path, path))
+        self.assertIn("- legacy", content)
+        self.assertIn("- edited legacy", path.read_text(encoding="utf-8"))
 
     def test_learning_has_no_provider_dependency(self):
         with patch.object(invocation, "invoke") as invoke, patch.object(
@@ -241,6 +341,15 @@ class TrustPreparationTests(unittest.TestCase):
         )
         (destination / "general" / "identity.md").write_text(
             "# Identity\n\n## Public\n\nGENERAL IDENTITY FACT 67890\n", encoding="utf-8"
+        )
+        learning.learn_text(
+            "user", "GENERAL LEARNED FACT 24680", inspected=inspection.InspectedContext(
+                None, None, self.user.name, self.user.id, None, None, None, None,
+                Path("/work"),
+                inspection.IdentificationSources(
+                    "not configured", "local config", "not configured", "none"
+                ), ()
+            ), namespace="general", category="preferences"
         )
         self.inspected = inspection.InspectedContext(
             None, None, self.user.name, self.user.id, None, None, None, None,
@@ -283,6 +392,7 @@ class TrustPreparationTests(unittest.TestCase):
         self.assertEqual((external.trust_level, external.context_view), ("external", "egress"))
         self.assertNotIn("LOCAL SECRET TEST FACT 12345", external.provider_input)
         self.assertIn("GENERAL IDENTITY FACT 67890", external.provider_input)
+        self.assertIn("GENERAL LEARNED FACT 24680", external.provider_input)
         self.assertNotEqual(private.context_fingerprint, external.context_fingerprint)
 
     def test_unconfigured_opencode_and_qwen_named_request_fail_closed(self):

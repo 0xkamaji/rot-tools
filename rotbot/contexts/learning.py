@@ -1,16 +1,20 @@
 import os
 from pathlib import Path
+import re
 import tempfile
 
-from rotbot.contexts import entities, loader, machines, people
+from rotbot.contexts import documents, entities, loader, machines, people
 from rotbot.contexts.inspection import inspect_current_context
 from rotbot.session.last import LastResponseError, edit_text
 from rotbot.ui.terminal import rot_say
 
 
-LEARNED_TEMPLATE = "# Learned\n"
 MAX_LEARNED_ENTRY_BYTES = 64 * 1024
 TARGETS = ("user", "assistant", "project", "machine", "contact")
+DISCLOSURES = ("general", "private")
+CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+BACK = object()
+EXIT = object()
 
 
 class LearningError(Exception):
@@ -57,7 +61,7 @@ def _choose(target):
         rot_say(f"Choose a number from 1 to {len(contexts)}, or exit.")
 
 
-def _resolve(target, inspected=None, reference=None):
+def _resolve(target, inspected=None, reference=None, *, writable=False):
     if target not in TARGETS:
         raise LearningError(f"Unsupported learning target: {target}")
     if target == "contact":
@@ -86,7 +90,14 @@ def _resolve(target, inspected=None, reference=None):
             context = _choose(target)
         if target in {"user", "assistant"}:
             if target == "assistant" and not entities.entity_directory(context).exists():
-                context, directory = entities.materialize_builtin_assistant(context.id)
+                if writable:
+                    context, directory = entities.materialize_builtin_assistant(context.id)
+                    return context, directory
+                directory = entities._builtin_directory(
+                    context.id, entities.ContextType.ASSISTANT
+                )
+                if directory is None:
+                    raise LearningError(f"Unknown assistant context: {context.name}")
                 return context, directory
             return context, entities.entity_directory(context)
         if target == "project":
@@ -113,46 +124,63 @@ def _validate_entry(text):
     return "- " + lines[0] + "".join(f"\n  {line}" for line in lines[1:]) + "\n"
 
 
-def _validate_document(content):
-    first = next((line.strip() for line in content.splitlines() if line.strip()), None)
-    if first != "# Learned":
-        raise LearningError("learned.md must begin with '# Learned'.")
+def _validate_document(content, filename):
     if "\0" in content:
-        raise LearningError("learned.md contains a NUL byte.")
+        raise LearningError(f"{filename} contains a NUL byte.")
     return content
 
 
-def _private_document(directory):
+def _namespace_directory(directory, namespace):
+    if namespace not in DISCLOSURES:
+        raise LearningError(f"Unsupported knowledge disclosure: {namespace}")
     directory = Path(directory)
-    if directory.is_symlink() or not directory.is_dir():
-        raise LearningError(f"Invalid context directory: {directory}")
-    private = directory / "private"
     try:
-        if not os.path.lexists(private):
-            private.mkdir(mode=0o700)
-        if private.is_symlink() or not private.is_dir():
-            raise LearningError(f"Invalid private context directory: {private}")
-        if os.name != "nt":
-            os.chmod(private, 0o700)
-    except LearningError:
-        raise
-    except OSError as error:
-        raise LearningError(f"Could not prepare private context: {error}") from None
-    return private / "learned.md"
+        documents.ensure_structure(directory)
+    except documents.ContextDocumentError as error:
+        raise LearningError(str(error)) from None
+    return directory / namespace
+
+
+def _category_filename(category):
+    if (
+        not isinstance(category, str)
+        or not CATEGORY_PATTERN.fullmatch(category)
+        or ".." in category
+        or "/" in category
+        or "\\" in category
+        or any(ord(character) < 32 or ord(character) == 127 for character in category)
+    ):
+        raise LearningError(f"Invalid learning category: {category}")
+    return f"{category}.md"
+
+
+def _category_heading(category):
+    return category.replace("-", " ").replace("_", " ").title()
+
+
+def _category_path(directory, namespace, category):
+    return _namespace_directory(directory, namespace) / _category_filename(category)
+
+
+def _category_files(directory, namespace):
+    try:
+        return documents.namespace_files(directory, namespace)
+    except documents.ContextDocumentError as error:
+        raise LearningError(str(error)) from None
 
 
 def _read(path):
     if path.is_symlink():
-        raise LearningError(f"learned.md must not be a symlink: {path}")
+        raise LearningError(f"Knowledge document must not be a symlink: {path}")
     if not path.exists():
         return None, None
     if not path.is_file():
-        raise LearningError(f"Invalid learned.md: {path}")
+        raise LearningError(f"Invalid knowledge document: {path}")
     try:
         before = path.stat()
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
-        raise LearningError(f"Could not read learned.md: {error}") from None
+        raise LearningError(f"Could not read knowledge document: {error}") from None
     return content, before
 
 
@@ -160,7 +188,9 @@ def _atomic_write(path, content, before):
     descriptor = None
     temporary = None
     try:
-        descriptor, name = tempfile.mkstemp(prefix=".learned-", suffix=".tmp", dir=path.parent)
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent
+        )
         temporary = Path(name)
         if os.name != "nt":
             os.chmod(temporary, 0o600)
@@ -170,16 +200,16 @@ def _atomic_write(path, content, before):
             destination.flush()
             os.fsync(destination.fileno())
         if path.is_symlink():
-            raise LearningError("learned.md changed unexpectedly during update.")
+            raise LearningError(f"{path.name} changed unexpectedly during update.")
         if before is None:
             if os.path.lexists(path):
-                raise LearningError("learned.md changed unexpectedly during creation.")
+                raise LearningError(f"{path.name} changed unexpectedly during creation.")
         else:
             current = path.stat()
             expected = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
             observed = (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
             if observed != expected:
-                raise LearningError("learned.md changed unexpectedly during update.")
+                raise LearningError(f"{path.name} changed unexpectedly during update.")
         if before is None:
             os.link(temporary, path)
             temporary.unlink()
@@ -192,7 +222,7 @@ def _atomic_write(path, content, before):
     except LearningError:
         raise
     except OSError as error:
-        raise LearningError(f"Could not update learned.md: {error}") from None
+        raise LearningError(f"Could not update knowledge document: {error}") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -203,43 +233,158 @@ def _atomic_write(path, content, before):
                 pass
 
 
-def learn_text(target, text, *, inspected=None, reference=None):
-    context, directory = _resolve(target, inspected, reference)
-    path = _append_learned(directory, text)
+def learn_text(
+    target, text, *, inspected=None, reference=None,
+    namespace="private", category="learned"
+):
+    context, directory = _resolve(target, inspected, reference, writable=True)
+    path = _append_knowledge(directory, namespace, category, text)
     return context, path
 
 
-def _append_learned(directory, text):
-    path = _private_document(directory)
+def _append_knowledge(directory, namespace, category, text):
+    path = _category_path(directory, namespace, category)
+    return _append_document(path, text)
+
+
+def _append_document(path, text):
+    try:
+        if path.parent.is_symlink() or not path.parent.is_dir():
+            raise LearningError(f"Invalid knowledge directory: {path.parent}")
+        if os.name != "nt":
+            os.chmod(path.parent, 0o700)
+    except LearningError:
+        raise
+    except OSError as error:
+        raise LearningError(f"Could not prepare knowledge directory: {error}") from None
     content, before = _read(path)
-    base = LEARNED_TEMPLATE if content is None else _validate_document(content)
+    base = (
+        f"# {_category_heading(path.stem)}\n"
+        if content is None else _validate_document(content, path.name)
+    )
+    if not base.strip():
+        base = f"# {_category_heading(path.stem)}\n"
     updated = base.rstrip() + "\n\n" + _validate_entry(text)
     _atomic_write(path, updated, before)
     return path
 
 
 def edit_learned(target, *, inspected=None, reference=None, editor=None):
-    context, directory = _resolve(target, inspected, reference)
-    path = _private_document(directory)
+    context, directory = _resolve(target, inspected, reference, writable=True)
+    path = _category_path(directory, "private", "learned")
+    _edit_document(path, editor)
+    return context, path
+
+
+def _edit_document(path, editor=None):
     content, before = _read(path)
-    original = LEARNED_TEMPLATE if content is None else _validate_document(content)
+    if content is None:
+        raise LearningError(f"Knowledge document does not exist: {path.name}")
+    original = _validate_document(content, path.name)
     try:
-        edited = _validate_document((editor or edit_text)(original))
+        edited = _validate_document((editor or edit_text)(original), path.name)
     except LastResponseError as error:
         raise LearningError(str(error)) from None
     _atomic_write(path, edited, before)
-    return context, path
+    return path
 
 
 def show_learned(target, *, inspected=None, reference=None):
     context, directory = _resolve(target, inspected, reference)
-    path = _private_document(directory)
+    path = _category_path(directory, "private", "learned")
+    content = _show_document(path)
+    return context, path, content
+
+
+def _show_document(path):
     content, _before = _read(path)
     if content is None:
-        raise LearningError(
-            f"No learned knowledge is available for {target} '{context.name}'."
+        raise LearningError(f"Knowledge document does not exist: {path.name}")
+    return _validate_document(content, path.name)
+
+
+def _choose_disclosure():
+    rot_say(
+        "Knowledge space:\n\n"
+        "  1. General\n"
+        "  2. Private\n"
+        "  3. Exit"
+    )
+    while True:
+        try:
+            answer = input("> ").strip().lower()
+        except EOFError:
+            return EXIT
+        if answer in {"", "exit", "quit", "q", "3"}:
+            return EXIT
+        if answer in {"1", "general"}:
+            return "general"
+        if answer in {"2", "private"}:
+            return "private"
+        rot_say("Choose 1, 2, or 3.")
+
+
+def _choose_category(directory, namespace, *, allow_new):
+    files = _category_files(directory, namespace)
+    options = [path.stem for path in files]
+    if allow_new:
+        options.append("New category")
+    back_number = len(options) + 1
+    exit_number = back_number + 1
+    rot_say(
+        f"{namespace.title()} categories:\n\n"
+        + "\n".join(
+            f"  {index}. {label}" for index, label in enumerate(options, 1)
         )
-    return context, path, _validate_document(content)
+        + ("\n" if options else "")
+        + f"  {back_number}. Back\n"
+        + f"  {exit_number}. Exit"
+    )
+    while True:
+        try:
+            answer = input("> ").strip().lower()
+        except EOFError:
+            return EXIT
+        if answer in {"exit", "quit", "q", str(exit_number)}:
+            return EXIT
+        if answer in {"", "back", "b", str(back_number)}:
+            return BACK
+        if answer.isdigit() and 1 <= int(answer) <= len(files):
+            return files[int(answer) - 1]
+        if allow_new and answer == str(len(files) + 1):
+            rot_say("Enter a new category name:")
+            try:
+                category = input("> ").strip()
+            except EOFError:
+                return BACK
+            filename = _category_filename(category)
+            path = _namespace_directory(directory, namespace) / filename
+            if os.path.lexists(path):
+                raise LearningError(f"Learning category already exists: {category}")
+            return path
+        rot_say(f"Choose a number from 1 to {exit_number}.")
+
+
+def _select_document(directory, *, allow_new):
+    while True:
+        namespace = _choose_disclosure()
+        if namespace is EXIT:
+            return EXIT
+        selected = _choose_category(directory, namespace, allow_new=allow_new)
+        if selected is BACK:
+            continue
+        return selected
+
+
+def _writable_selection(target, context, directory, path):
+    if target != "assistant" or entities.entity_directory(context).exists():
+        return context, path
+    relative = path.relative_to(directory)
+    try:
+        context, writable = entities.materialize_builtin_assistant(context.id)
+    except entities.EntityContextError as error:
+        raise LearningError(str(error)) from None
+    return context, writable / relative
 
 
 def learn_command(args):
@@ -248,31 +393,37 @@ def learn_command(args):
     target = args.learn_target
     reference = getattr(args, "name", None) if target == "contact" else None
     try:
+        context, directory = _resolve(target, inspected, reference)
+        path = _select_document(directory, allow_new=action == "append")
+        if path is EXIT:
+            rot_say("Learning cancelled. No files were changed.")
+            return 0
         if action == "show":
-            _context, _path, content = show_learned(
-                target, inspected=inspected, reference=reference
-            )
+            content = _show_document(path)
             print(content, end="" if content.endswith("\n") else "\n")
             return 0
         if action == "edit":
-            context, path = edit_learned(
-                target, inspected=inspected, reference=reference
+            context, path = _writable_selection(
+                target, context, directory, path
             )
-            rot_say(f"Updated learned knowledge for {target} '{context.name}':\n{path}")
+            _edit_document(path)
+            rot_say(f"Updated knowledge for {target} '{context.name}':\n{path}")
             return 0
-        context, directory = _resolve(target, inspected, reference)
         if args.text:
             text = " ".join(args.text)
         else:
             rot_say(
                 f"Learning target: {target} '{context.name}'\n"
-                "Enter the exact text to append to private/learned.md:"
+                f"Category: {path.parent.name}/{path.name}\n"
+                "Enter the exact text to learn:"
             )
             try:
                 text = input("> ")
             except EOFError:
                 raise LearningError("Learning cancelled.") from None
-        path = _append_learned(directory, text)
+        _validate_entry(text)
+        context, path = _writable_selection(target, context, directory, path)
+        path = _append_document(path, text)
         rot_say(f"Learned for {target} '{context.name}':\n{path}")
         return 0
     except LearningError as error:

@@ -188,7 +188,7 @@ def create_parser():
 
     learn_show_parser = learn_commands.add_parser(
         "show",
-        help="Show an entire private learned.md document"
+        help="Choose and show a general or private knowledge category"
     )
     learn_show_commands = learn_show_parser.add_subparsers(
         dest="learn_show_target",
@@ -217,7 +217,7 @@ def create_parser():
 
     learn_edit_parser = learn_commands.add_parser(
         "edit",
-        help="Edit an entire private learned.md document"
+        help="Choose and edit a general or private knowledge category"
     )
     learn_edit_commands = learn_edit_parser.add_subparsers(
         dest="learn_edit_target",
