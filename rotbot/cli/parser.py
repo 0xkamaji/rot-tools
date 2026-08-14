@@ -5,8 +5,6 @@ from rotbot.agents.runner import ask_agent
 from rotbot.commands.ai import ai_context_preview, ai_session_show, ai_sessions
 from rotbot.commands.debug import (
     debug_ask,
-    debug_context_add,
-    debug_context_develop,
     debug_last_ask,
     debug_session_register
 )
@@ -14,12 +12,11 @@ from rotbot.commands.git import git_pull, git_push, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
 from rotbot.contexts.binding import context_bind
-from rotbot.contexts.creation import context_add, context_develop
+from rotbot.contexts.creation import context_add
 from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.loader import context_list, context_show
 from rotbot.contexts.learning import learn_command
 from rotbot.contexts.menu import context_menu
-from rotbot.contexts.modification import context_mod
 from rotbot.integrations.signalrot.commands import (
     sr_context,
     sr_diff,
@@ -153,97 +150,6 @@ def create_parser():
     _add_agent_argument(ask_parser)
     ask_parser.set_defaults(func=ask_agent)
 
-    learn_parser = commands.add_parser(
-        "learn",
-        help="Store explicit knowledge in the selected local context"
-    )
-    learn_commands = learn_parser.add_subparsers(
-        dest="learn_command",
-        metavar="TARGET"
-    )
-    learn_parser.set_defaults(func=show_command_help, command_parser=learn_parser)
-    for target in ("user", "assistant", "project", "machine"):
-        target_parser = learn_commands.add_parser(
-            target,
-            help=f"Teach Rot about the current {target} context"
-        )
-        target_parser.add_argument(
-            "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
-        )
-        target_parser.set_defaults(
-            func=learn_command, learn_action="append", learn_target=target
-        )
-
-    learn_contact_parser = learn_commands.add_parser(
-        "contact",
-        help="Teach Rot about a named contact"
-    )
-    learn_contact_parser.add_argument("name", help="Contact name")
-    learn_contact_parser.add_argument(
-        "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
-    )
-    learn_contact_parser.set_defaults(
-        func=learn_command, learn_action="append", learn_target="contact"
-    )
-
-    learn_show_parser = learn_commands.add_parser(
-        "show",
-        help="Choose and show a general or private knowledge category"
-    )
-    learn_show_commands = learn_show_parser.add_subparsers(
-        dest="learn_show_target",
-        metavar="TARGET"
-    )
-    learn_show_parser.set_defaults(
-        func=show_command_help, command_parser=learn_show_parser
-    )
-    for target in ("user", "assistant", "project", "machine"):
-        show_target_parser = learn_show_commands.add_parser(
-            target,
-            help=f"Show learned knowledge for the current {target} context"
-        )
-        show_target_parser.set_defaults(
-            func=learn_command, learn_action="show", learn_target=target
-        )
-
-    learn_show_contact_parser = learn_show_commands.add_parser(
-        "contact",
-        help="Show learned knowledge for a named contact"
-    )
-    learn_show_contact_parser.add_argument("name", help="Contact name")
-    learn_show_contact_parser.set_defaults(
-        func=learn_command, learn_action="show", learn_target="contact"
-    )
-
-    learn_edit_parser = learn_commands.add_parser(
-        "edit",
-        help="Choose and edit a general or private knowledge category"
-    )
-    learn_edit_commands = learn_edit_parser.add_subparsers(
-        dest="learn_edit_target",
-        metavar="TARGET"
-    )
-    learn_edit_parser.set_defaults(
-        func=show_command_help, command_parser=learn_edit_parser
-    )
-    for target in ("user", "assistant", "project", "machine"):
-        edit_target_parser = learn_edit_commands.add_parser(
-            target,
-            help=f"Edit learned knowledge for the current {target} context"
-        )
-        edit_target_parser.set_defaults(
-            func=learn_command, learn_action="edit", learn_target=target
-        )
-
-    learn_edit_contact_parser = learn_edit_commands.add_parser(
-        "contact",
-        help="Edit learned knowledge for a named contact"
-    )
-    learn_edit_contact_parser.add_argument("name", help="Contact name")
-    learn_edit_contact_parser.set_defaults(
-        func=learn_command, learn_action="edit", learn_target="contact"
-    )
-
     debug_parser = commands.add_parser(
         "debug",
         help="Inspect an AI invocation plan without invoking a provider"
@@ -284,34 +190,6 @@ def create_parser():
     )
     debug_last_ask_parser.add_argument("instruction", nargs="*")
     debug_last_ask_parser.set_defaults(func=debug_last_ask)
-
-    debug_context_parser = debug_commands.add_parser(
-        "context",
-        help="Inspect supported context AI plans"
-    )
-    debug_context_commands = debug_context_parser.add_subparsers(
-        dest="debug_context_command"
-    )
-    debug_context_parser.set_defaults(
-        func=show_command_help, command_parser=debug_context_parser
-    )
-
-    debug_context_develop_parser = debug_context_commands.add_parser(
-        "develop",
-        help="Inspect context development without invoking or modifying"
-    )
-    debug_context_develop_parser.add_argument(
-        "name",
-        help="Existing project context name to inspect"
-    )
-    _add_agent_argument(debug_context_develop_parser)
-    debug_context_develop_parser.set_defaults(func=debug_context_develop)
-
-    debug_context_add_parser = debug_context_commands.add_parser(
-        "add",
-        help="Explain why context add cannot be safely debugged yet"
-    )
-    debug_context_add_parser.set_defaults(func=debug_context_add)
 
     ai_parser = commands.add_parser(
         "ai",
@@ -442,7 +320,7 @@ def create_parser():
 
     context_parser = commands.add_parser(
         "context",
-        help="List, show, add, modify, bind, or archive contexts"
+        help="List, show, add, bind, or archive contexts"
     )
     context_commands = context_parser.add_subparsers(
         dest="context_command"
@@ -457,12 +335,18 @@ def create_parser():
 
     context_show_parser = context_commands.add_parser(
         "show",
-        help="Show the current session context or a saved context"
+        help="Show the active session context, or a specific context's knowledge"
+    )
+    context_show_parser.add_argument(
+        "target",
+        nargs="?",
+        choices=("user", "assistant", "project", "machine", "contact"),
+        help="Optional context target: user, assistant, project, machine, or contact"
     )
     context_show_parser.add_argument(
         "name",
         nargs="?",
-        help="Optional saved context name; omit to show the active context"
+        help="Contact name (required when target is 'contact')"
     )
     context_show_parser.set_defaults(func=context_show)
 
@@ -506,44 +390,67 @@ def create_parser():
         nargs="?",
         help="Optional machine, user, or assistant context name"
     )
-    context_add_parser.add_argument(
-        "-a",
-        "--agent",
-        choices=AGENT_CHOICES,
-        help="Choose the AI agent used to draft a project context"
-    )
     context_add_parser.set_defaults(func=context_add)
 
-    context_develop_parser = context_commands.add_parser(
-        "develop",
-        help="Enrich an existing project context using AI"
+    context_learn_parser = context_commands.add_parser(
+        "learn",
+        help="Teach Rot about the current user, assistant, project, machine, or a contact"
     )
-    context_develop_parser.add_argument(
-        "name",
-        help="Project context name to enrich"
+    context_learn_commands = context_learn_parser.add_subparsers(
+        dest="context_learn_target",
+        metavar="TARGET"
     )
-    context_develop_parser.add_argument(
-        "-a",
-        "--agent",
-        choices=AGENT_CHOICES,
-        help="Choose the AI agent used for enrichment"
-    )
-    context_develop_parser.set_defaults(func=context_develop)
-
-    context_mod_parser = context_commands.add_parser(
-        "mod",
-        help="Interactively add information to a person context",
-        description=(
-            "Add information under a Markdown category in a person context. "
-            "Projects are not supported yet."
+    context_learn_parser.set_defaults(func=show_command_help, command_parser=context_learn_parser)
+    for target in ("user", "assistant", "project", "machine"):
+        target_parser = context_learn_commands.add_parser(
+            target,
+            help=f"Teach Rot about the current {target} context"
         )
+        target_parser.add_argument(
+            "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
+        )
+        target_parser.set_defaults(
+            func=learn_command, learn_action="append", learn_target=target
+        )
+
+    learn_contact_parser = context_learn_commands.add_parser(
+        "contact",
+        help="Teach Rot about a named contact"
     )
-    context_mod_parser.add_argument(
-        "name",
-        nargs="?",
-        help="Optional person context name; omit to choose from a numbered list"
+    learn_contact_parser.add_argument("name", help="Contact name")
+    learn_contact_parser.add_argument(
+        "text", nargs="*", help="Exact text to learn; omit to enter it interactively"
     )
-    context_mod_parser.set_defaults(func=context_mod)
+    learn_contact_parser.set_defaults(
+        func=learn_command, learn_action="append", learn_target="contact"
+    )
+
+    context_edit_parser = context_commands.add_parser(
+        "edit",
+        help="Choose and edit a general or private knowledge category"
+    )
+    context_edit_commands = context_edit_parser.add_subparsers(
+        dest="context_edit_target",
+        metavar="TARGET"
+    )
+    context_edit_parser.set_defaults(func=show_command_help, command_parser=context_edit_parser)
+    for target in ("user", "assistant", "project", "machine"):
+        edit_target_parser = context_edit_commands.add_parser(
+            target,
+            help=f"Edit learned knowledge for the current {target} context"
+        )
+        edit_target_parser.set_defaults(
+            func=learn_command, learn_action="edit", learn_target=target
+        )
+
+    edit_contact_parser = context_edit_commands.add_parser(
+        "contact",
+        help="Edit learned knowledge for a named contact"
+    )
+    edit_contact_parser.add_argument("name", help="Contact name")
+    edit_contact_parser.set_defaults(
+        func=learn_command, learn_action="edit", learn_target="contact"
+    )
 
     context_delete_parser = context_commands.add_parser(
         "delete",

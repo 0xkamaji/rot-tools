@@ -410,8 +410,61 @@ def context_show(args):
     from rotbot.contexts.machines import MachineContextError
     from rotbot.contexts.people import PersonContextError
 
-    if not args.name:
+    target = getattr(args, "target", None)
+    name = getattr(args, "name", None)
+
+    # Bare show renders the active session context.
+    if not target and name is None:
         return _show_current_context(getattr(args, "inspected_context", None))
+
+    # Target-specific knowledge show using learning module's resolution.
+    if target in ("user", "assistant", "project", "machine"):
+        from rotbot.contexts import learning
+        try:
+            context, directory = learning._resolve(
+                target, getattr(args, "inspected_context", None)
+            )
+        except learning.LearningError as error:
+            rot_say(str(error))
+            return 1
+
+        selected = learning._select_document(directory, allow_new=False)
+        if selected is learning.EXIT:
+            rot_say("Show cancelled. No files were changed.")
+            return 0
+        if selected is learning.BACK:
+            rot_say("Show cancelled. No files were changed.")
+            return 0
+
+        rot_say(learning._show_document(selected))
+        return 0
+
+    if target == "contact":
+        if not name:
+            rot_say("Contact name is required for 'context show contact'.")
+            return 1
+        from rotbot.contexts import learning
+        try:
+            context, directory = learning._resolve(
+                "contact", inspected=None, reference=name
+            )
+        except learning.LearningError as error:
+            rot_say(str(error))
+            return 1
+
+        selected = learning._select_document(directory, allow_new=False)
+        if selected is learning.EXIT:
+            rot_say("Show cancelled. No files were changed.")
+            return 0
+        if selected is learning.BACK:
+            rot_say("Show cancelled. No files were changed.")
+            return 0
+
+        rot_say(learning._show_document(selected))
+        return 0
+
+    # Named full-context display for an explicit saved context reference.
+    reference = target or name
     try:
         entries = _available_context_entries()
     except (
@@ -420,25 +473,24 @@ def context_show(args):
     ) as error:
         rot_say(str(error))
         return 1
-    if args.name:
-        try:
-            validate_context_name(args.name)
-        except ContextError as error:
-            rot_say(str(error))
-            return 1
-        matches = tuple(entry for entry in entries if entry[1] == args.name)
-        if len(matches) > 1:
-            context_types = ", ".join(context_type for context_type, _name in matches)
-            rot_say(
-                f"Context name '{args.name}' is ambiguous; multiple context "
-                f"types exist: {context_types}.\n\n"
-                "Use a unique context name."
-            )
-            return 1
-        if not matches:
-            rot_say(f"Unknown or invalid context: {args.name}")
-            return 1
-        context_type, name = matches[0]
+    try:
+        validate_context_name(reference)
+    except ContextError as error:
+        rot_say(str(error))
+        return 1
+    matches = tuple(entry for entry in entries if entry[1] == reference)
+    if len(matches) > 1:
+        context_types = ", ".join(context_type for context_type, _name in matches)
+        rot_say(
+            f"Context name '{reference}' is ambiguous; multiple context "
+            f"types exist: {context_types}.\n\n"
+            "Use a unique context name."
+        )
+        return 1
+    if not matches:
+        rot_say(f"Unknown or invalid context: {reference}")
+        return 1
+    context_type, name = matches[0]
     if context_type in {"user", "assistant"}:
         return _show_entity_context(name, context_type)
     if context_type == "contact":

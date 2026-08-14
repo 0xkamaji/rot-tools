@@ -1,28 +1,22 @@
 from types import SimpleNamespace
 
 from rotbot.contexts.binding import context_bind
-from rotbot.contexts.creation import context_add, context_develop
+from rotbot.contexts.creation import context_add
 from rotbot.contexts.deletion import context_delete
 from rotbot.contexts.loader import context_list, context_show
-from rotbot.contexts.modification import context_mod
 from rotbot.ui.terminal import rot_say
 
 
 ACTIONS = (
     ("add", "Create a project, person, or machine context"),
-    ("develop", "Enrich an existing project context using AI"),
     ("list", "List all available project, person, and machine contexts"),
-    ("mod", "Add categorized information to a person context"),
     ("show", "Display the active session context"),
     ("bind", "Recognize and bind the current project directory"),
     ("delete", "Choose a context to archive without destroying it")
 )
 ALIASES = {
     "a": "add",
-    "dev": "develop",
     "l": "list",
-    "m": "mod",
-    "modify": "mod",
     "s": "show",
     "b": "bind",
     "d": "delete",
@@ -55,13 +49,12 @@ def context_menu(args):
         if selected is not None:
             name, _description = selected
             handler, arguments = {
-                "add": (context_add, SimpleNamespace(agent=None)),
-                "develop": (context_develop, SimpleNamespace(name=None, agent=None)),
+                "add": (context_add, SimpleNamespace()),
                 "list": (context_list, SimpleNamespace()),
-                "mod": (context_mod, SimpleNamespace(name=None)),
                 "show": (
                     context_show,
                     SimpleNamespace(
+                        target=None,
                         name=None,
                         inspected_context=getattr(args, "inspected_context", None)
                     )

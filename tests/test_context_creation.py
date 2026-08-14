@@ -5,11 +5,9 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, patch
 
-from rotbot.agents.invocation import AIResult
 from rotbot.commands.machine import MachineInspection
-from rotbot.commands import debug as debug_commands
 from rotbot.contexts import creation as context_creation
 from rotbot.contexts import loader as contexts
 from rotbot.contexts import matching as context_matching
@@ -61,70 +59,43 @@ class ContextCreationTests(unittest.TestCase):
         self.context_patch.stop()
         self.temporary_directory.cleanup()
 
-    def args(self, name="example", path=None, agent=None):
+    def args(self, name="example", path=None):
         return argparse.Namespace(
             name=name,
-            path=str(self.project if path is None else path),
-            agent=agent
+            path=str(self.project if path is None else path)
         )
 
-    def run_add(self, answer="n", output=None, returncode=0, args=None):
-        output = None if output is None else output
+    def run_add(self, answer="n", args=None):
         args = self.args() if args is None else args
-        def invoke(invocation, validator=None, **_kwargs):
-            response = output or (
-                self.identity_output
-                if invocation.purpose == "context_identity_development"
-                else self.state_output
-            )
-            if returncode != 0:
-                return AIResult(
-                    invocation, returncode, response, 0.1, "Test",
-                    validation_error=f"Test failed with exit code {returncode}."
-                )
-            try:
-                value = validator(response) if validator is not None else None
-            except Exception as error:
-                return AIResult(
-                    invocation, 0, response, 0.1, "Test",
-                    validation_error=str(error), attempts=invocation.retries + 1
-                )
-            return AIResult(invocation, 0, response, 0.1, "Test", value=value)
-        with patch.object(
-            context_creation,
-            "invoke",
-            side_effect=invoke
-        ) as invocation, patch("builtins.input", return_value=answer), patch.object(
+        with patch("builtins.input", return_value=answer), patch.object(
             context_creation,
             "rot_say"
         ) as rot_say, patch.object(context_creation, "rot_continue") as rot_continue:
             result = context_creation._add_project_context(args)
-        return result, invocation, rot_say, rot_continue
+        return result, rot_say, rot_continue
 
-    def test_invalid_names_and_existing_context_are_rejected_before_agent(self):
+    def test_invalid_names_and_existing_context_are_rejected_before_creation(self):
         for name in ("", "../outside", "nested/name", ".hidden"):
             with self.subTest(name=name):
-                result, stream_agent, _rot_say, _rot_continue = self.run_add(
+                result, _rot_say, _rot_continue = self.run_add(
                     args=self.args(name=name)
                 )
                 self.assertEqual(result, 1)
-                stream_agent.assert_not_called()
 
         existing = self.project_context_root / "existing"
         existing.mkdir()
         (existing / "identity.md").write_text("unchanged", encoding="utf-8")
-        result, stream_agent, rot_say, _rot_continue = self.run_add(
+        result, rot_say, _rot_continue = self.run_add(
             args=self.args(name="existing")
         )
         self.assertEqual(result, 1)
-        stream_agent.assert_not_called()
         self.assertIn("already exists", rot_say.call_args.args[0])
         self.assertEqual(
             (existing / "identity.md").read_text(encoding="utf-8"),
             "unchanged"
         )
 
-    def test_invalid_project_paths_are_rejected_before_agent(self):
+    def test_invalid_project_paths_are_rejected_before_creation(self):
         ordinary_file = self.root / "file.txt"
         ordinary_file.write_text("file", encoding="utf-8")
         for path in (
@@ -134,11 +105,10 @@ class ContextCreationTests(unittest.TestCase):
             self.project_context_root
         ):
             with self.subTest(path=path):
-                result, stream_agent, _rot_say, _rot_continue = self.run_add(
+                result, _rot_say, _rot_continue = self.run_add(
                     args=self.args(path=path)
                 )
                 self.assertEqual(result, 1)
-                stream_agent.assert_not_called()
 
     def test_bounded_inspection_excludes_dependencies_secrets_and_binaries(self):
         (self.project / "node_modules").mkdir()
@@ -173,206 +143,32 @@ class ContextCreationTests(unittest.TestCase):
         self.assertIn("main.py", required + optional)
         self.assertNotIn(secret, repr((required, optional)))
 
-    def test_prompt_contains_only_approved_relative_evidence(self):
-        secret_config = self.root / "config-home" / "rot" / "config.toml"
-        secret_config.parent.mkdir(parents=True)
-        secret_config.write_text('private = "do-not-send"\n', encoding="utf-8")
-
-        result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="n")
-
-        self.assertEqual(result, 0)
-        stream_agent.assert_not_called()
-        evidence = context_creation.inspect_project_development_evidence(
-            self.project, ("github.com/example/project",), "example"
-        )
-        prompt = "\n\n".join((
-            context_creation._identity_development_task("example"),
-            context_creation.render_identity_evidence(evidence),
-            context_creation.IDENTITY_OUTPUT_CONTRACT,
-            context_creation._state_development_task("example"),
-            context_creation.render_state_evidence(evidence),
-            context_creation.STATE_OUTPUT_CONTRACT
-        ))
-        self.assertIn("github.com/example/project", prompt)
-        self.assertIn("main.py", prompt)
-        self.assertIn("Return only the identity Markdown", prompt)
-        self.assertIn("Return only the state Markdown", prompt)
-        self.assertNotIn(str(self.project), prompt)
-        self.assertNotIn(str(secret_config), prompt)
-        self.assertNotIn("do-not-send", prompt)
-
     def test_context_add_does_not_invoke_agent_and_creates_empty_namespaces(self):
-        result, agent, _rot_say, _rot_continue = self.run_add(
-            answer="yes", output="ignored", returncode=7
-        )
+        result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        agent.assert_not_called()
         destination = self.project_context_root / "example"
         self.assertEqual(tuple((destination / "general").iterdir()), ())
         self.assertEqual(tuple((destination / "private").iterdir()), ())
         self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
 
-    def test_generated_documents_reject_control_characters_and_absolute_paths(self):
-        for document_type, output in (
-            ("identity", "# example\n\n- Unsafe.\n\x1b[2J"),
-            ("state", "# example State\n\n- Stored at /home/someone/project/main.py."),
-        ):
-            with self.subTest(document_type=document_type), self.assertRaises(
-                context_creation.ContextCreationError
-            ):
-                context_creation._parse_context_document(
-                    output, self.project, "example", document_type
-                )
-
-    def test_context_develop_requests_one_runtime_retry(self):
-        self.run_add(answer="yes")
-        operation = context_creation.build_context_develop_request(
-            argparse.Namespace(name="example", agent=None), self.root
+    def test_context_placeholder_documents_have_valid_headings(self):
+        definition = SimpleNamespace(
+            source=SimpleNamespace(is_git_repo=True, required_paths=["main.py", "src/"])
         )
-        identity, state = operation.identity_request, operation.state_request
-        self.assertEqual(identity.purpose, "context_identity_development")
-        self.assertEqual(state.purpose, "context_state_development")
-        self.assertEqual(identity.parent_command, "context develop")
-        self.assertEqual(state.parent_command, "context develop")
-        self.assertEqual(identity.retries, 1)
-        self.assertEqual(state.retries, 1)
-        self.assertIn("stable project identity", identity.task)
-        self.assertIn("current project state", state.task)
-        self.assertNotEqual(identity.context_material, state.context_material)
-        self.assertNotIn("exactly two string keys", identity.output_contract)
-
-    def test_context_development_inspects_evidence_once_for_both_requests(self):
-        self.run_add(answer="yes", output="invalid")
-        evidence = Mock()
-        with patch.object(
-            context_creation, "inspect_project_development_evidence",
-            return_value=evidence
-        ) as inspect, patch.object(
-            context_creation, "render_identity_evidence", return_value="identity evidence"
-        ), patch.object(
-            context_creation, "render_state_evidence", return_value="state evidence"
-        ):
-            operation = context_creation.build_context_develop_request(
-                argparse.Namespace(name="example", agent=None), self.root
-            )
-
-        inspect.assert_called_once_with(
-            self.project.resolve(), ("github.com/example/project",), "example"
-        )
-        self.assertIs(operation.evidence, evidence)
-        self.assertEqual(operation.identity_request.context_material, "identity evidence")
-        self.assertEqual(operation.state_request.context_material, "state evidence")
-
-    def test_identity_success_and_state_failure_changes_no_documents(self):
-        self.run_add(answer="yes", output="invalid")
-        destination = self.project_context_root / "example" / "general"
-        before = {
-            name: (destination / f"{name}.md").read_bytes()
-            for name in ()
-        }
-
-        def invoke(request, validator, **_kwargs):
-            output = (
-                self.identity_output
-                if request.purpose == "context_identity_development"
-                else "# example State\n\nnot a bullet"
-            )
-            try:
-                value = validator(output)
-            except Exception as error:
-                return AIResult(
-                    request, 0, output, 0.1, "Test", validation_error=str(error),
-                    attempts=2
-                )
-            return AIResult(request, 0, output, 0.1, "Test", value=value)
-
-        with patch.object(
-            context_creation, "invoke", side_effect=invoke
-        ) as invoked, patch.object(context_creation, "rot_say") as say:
-            result = context_creation.context_develop(
-                argparse.Namespace(name="example", agent=None)
-            )
-
-        self.assertEqual(result, 1)
-        self.assertEqual(invoked.call_count, 2)
-        self.assertIn("state phase failed", say.call_args.args[0])
-        self.assertEqual(tuple(destination.iterdir()), ())
-
-    def test_both_documents_are_validated_before_one_atomic_apply(self):
-        self.run_add(answer="yes", output="invalid")
-        operation = context_creation.build_context_develop_request(
-            argparse.Namespace(name="example", agent=None), self.root
-        )
-        expected_values = {
-            "identity": context_creation._parse_context_document(
-                self.identity_output, self.project, "example", "identity"
-            ),
-            "state": context_creation._parse_context_document(
-                self.state_output, self.project, "example", "state"
-            )
-        }
-
-        def invoke(request, validator, **_kwargs):
-            output = (
-                self.identity_output
-                if request.purpose == "context_identity_development"
-                else self.state_output
-            )
-            return AIResult(
-                request, 0, output, 0.1, "Test", value=validator(output)
-            )
-
-        with patch.object(
-            context_creation, "invoke", side_effect=invoke
-        ), patch.object(
-            context_creation, "_atomic_replace_documents"
-        ) as replace:
-            error = context_creation._enrich_project_context(operation)
-
-        self.assertIsNone(error)
-        replace.assert_called_once()
-        self.assertEqual(replace.call_args.args[2], expected_values)
-
-    def test_debug_context_develop_real_builder_does_not_modify_context_or_binding(self):
-        result, _agent, _rot_say, _rot_continue = self.run_add(
-            answer="yes", output="not json"
-        )
-        self.assertEqual(result, 0)
-        destination = self.project_context_root / "example"
-        identity = (destination / "identity.md").read_bytes()
-        general_before = tuple((destination / "general").iterdir())
-        binding = dict(get_context_binding("example"))
-
-        with patch.object(debug_commands, "prepare") as prepare, patch.object(
-            debug_commands, "render_ai_debug_plan", return_value="plan"
-        ), patch("builtins.print"):
-            prepare.side_effect = lambda request: request
-            debug_result = debug_commands.debug_context_develop(
-                argparse.Namespace(name="example", agent="opencode")
-            )
-
-        self.assertEqual(debug_result, 0)
-        self.assertEqual(prepare.call_count, 2)
-        requests = [call.args[0] for call in prepare.call_args_list]
-        self.assertIn("PROJECT IDENTITY EVIDENCE", requests[0].context_material)
-        self.assertIn("CURRENT IMPLEMENTATION EVIDENCE", requests[1].context_material)
-        self.assertEqual((destination / "identity.md").read_bytes(), identity)
-        self.assertEqual(tuple((destination / "general").iterdir()), general_before)
-        self.assertEqual(get_context_binding("example"), binding)
+        documents = context_creation._placeholder_documents("example", definition)
+        self.assertEqual(documents["identity"].startswith("# example\n\n"), True)
+        self.assertIn("Project known to RotBot", documents["identity"])
+        self.assertEqual(documents["state"].startswith("# example State\n\n"), True)
+        self.assertIn("Git-backed", documents["state"])
+        self.assertIn("`main.py`", documents["state"])
 
     def test_context_is_created_bound_and_loadable_without_enrichment(self):
         destination = self.project_context_root / "example"
 
-        with patch.object(context_creation, "invoke") as invocation, patch(
-            "builtins.input", return_value="yes"
-        ), patch.object(
-            context_creation, "rot_say"
-        ), patch.object(context_creation, "rot_continue"):
-            result = context_creation._add_project_context(self.args())
+        result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        invocation.assert_not_called()
         self.assertTrue((destination / "identity.md").is_file())
         self.assertTrue((destination / "relationships.toml").is_file())
         self.assertTrue((destination / "match.toml").is_file())
@@ -380,104 +176,18 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(tuple((destination / "private").iterdir()), ())
         self.assertEqual(contexts.load_context("example").name, "example")
 
-    def test_context_develop_writes_general_documents_without_rewriting_identity(self):
-        self.run_add(answer="yes", output="not json")
-        root_identity = self.project_context_root / "example" / "identity.md"
-        original_identity = root_identity.read_bytes()
-
-        with patch.object(
-            context_creation,
-            "invoke",
-            side_effect=lambda invocation, validator, **_kwargs: AIResult(
-                invocation, 0,
-                self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output,
-                0.1, "Test",
-                value=validator(
-                    self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output
-                )
-            )
-        ):
-            result = context_creation.context_develop(
-                argparse.Namespace(name="example", agent=None)
-            )
-
-        self.assertEqual(result, 0)
-        loaded = contexts.load_context("example")
-        self.assertEqual(root_identity.read_bytes(), original_identity)
-        self.assertIn("Example is a small test project", (
-            self.project_context_root / "example" / "general" / "background.md"
-        ).read_text(encoding="utf-8"))
-        self.assertIn("Python entry point", loaded.state)
-
-        identity = self.project_context_root / "example" / "general" / "background.md"
-        identity.write_text("# Manual\n\n- Keep this.\n", encoding="utf-8")
-        with patch.object(
-            context_creation,
-            "invoke",
-            side_effect=lambda invocation, validator, **_kwargs: AIResult(
-                invocation, 0,
-                self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output,
-                0.1, "Test",
-                value=validator(
-                    self.identity_output if invocation.purpose.endswith("identity_development") else self.state_output
-                )
-            )
-        ):
-            result = context_creation.context_develop(
-                argparse.Namespace(name="example", agent=None)
-            )
-        self.assertEqual(result, 1)
-        self.assertEqual(identity.read_text(encoding="utf-8"), "# Manual\n\n- Keep this.\n")
-
     def test_generated_identity_and_state_use_notes_and_bullet_points(self):
-        identity = context_creation._parse_context_document(
-            "# example\n\n- Stable purpose.\n- Intended audience.",
-            self.project, "example", "identity"
-        )
-        state = context_creation._parse_context_document(
-            "# example State\n\n- Current capability.\n- Continued detail.",
-            self.project, "example", "state"
+        documents = context_creation._placeholder_documents(
+            "example",
+            SimpleNamespace(
+                source=SimpleNamespace(is_git_repo=True, required_paths=["main.py"])
+            )
         )
 
-        self.assertEqual(
-            identity,
-            "# example\n\n"
-            f"<!-- {context_creation.DOCUMENT_NOTES['identity']} -->\n\n"
-            "- Stable purpose.\n- Intended audience.\n"
-        )
-        self.assertEqual(
-            state,
-            "# example State\n\n"
-            f"<!-- {context_creation.DOCUMENT_NOTES['state']} -->\n\n"
-            "- Current capability.\n- Continued detail.\n"
-        )
-
-    def test_context_document_validator_rejects_wrong_heading_and_malformed_state(self):
-        cases = (
-            ("identity", "# example State\n\n- Wrong artifact."),
-            ("state", "# example\n\n- Wrong artifact."),
-            ("state", "# example State\n\nCurrent capability."),
-        )
-        for document_type, output in cases:
-            with self.subTest(document_type=document_type, output=output), self.assertRaises(
-                context_creation.ContextCreationError
-            ):
-                context_creation._parse_context_document(
-                    output, self.project, "example", document_type
-                )
-
-    def test_context_document_validator_rejects_comments_and_extra_sections(self):
-        invalid = (
-            "# example\n\n<!-- model note -->\n- Portable configuration.",
-            "# example State\n\n## Limitations\n- No installer"
-        )
-        for document_type, output in zip(("identity", "state"), invalid):
-            with self.subTest(document_type=document_type), self.assertRaises(
-                context_creation.ContextCreationError
-            ):
-                context_creation._parse_context_document(
-                    output, self.project, "example", document_type
-                )
+        self.assertIn("# example", documents["identity"])
+        self.assertIn("Project known to RotBot", documents["identity"])
+        self.assertIn(context_creation.DOCUMENT_NOTES["state"], documents["state"])
+        self.assertIn("- Context created by RotBot", documents["state"])
 
     def test_decline_happens_after_full_preview_and_writes_nothing(self):
         preview_seen = []
@@ -506,7 +216,7 @@ class ContextCreationTests(unittest.TestCase):
         existing_config.parent.mkdir(parents=True)
         existing_config.write_text('theme = "keep"\n', encoding="utf-8")
 
-        result, _agent, _rot_say, rot_continue = self.run_add(answer="yes")
+        result, _rot_say, rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
         destination = self.project_context_root / "example"
@@ -550,7 +260,7 @@ class ContextCreationTests(unittest.TestCase):
             "set_context_binding",
             side_effect=ConfigError("binding failed")
         ):
-            result, _agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+            result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 1)
         self.assertFalse((self.project_context_root / "example").exists())
@@ -567,7 +277,7 @@ class ContextCreationTests(unittest.TestCase):
             "_write_document",
             side_effect=OSError("write failed")
         ):
-            result, _agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+            result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 1)
         self.assertFalse((self.project_context_root / "example").exists())
@@ -616,22 +326,20 @@ class ContextCreationTests(unittest.TestCase):
         self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
 
-    def test_malformed_config_and_conflicting_binding_block_agent(self):
+    def test_malformed_config_and_conflicting_binding_block_creation(self):
         config = config_path()
         config.parent.mkdir(parents=True)
         config.write_text("[broken", encoding="utf-8")
-        result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+        result, _rot_say, _rot_continue = self.run_add(answer="yes")
         self.assertEqual(result, 1)
-        stream_agent.assert_not_called()
 
         config.write_text(
             "[contexts.example]\n"
             f'source_path = "{self.root / "other"}"\n',
             encoding="utf-8"
         )
-        result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+        result, _rot_say, _rot_continue = self.run_add(answer="yes")
         self.assertEqual(result, 1)
-        stream_agent.assert_not_called()
 
     def test_git_project_without_remote_can_generate_path_match(self):
         subprocess.run(
@@ -640,10 +348,9 @@ class ContextCreationTests(unittest.TestCase):
             check=True
         )
 
-        result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+        result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        stream_agent.assert_not_called()
 
     def test_non_git_project_can_generate_portable_match_and_binding(self):
         non_git = self.root / "plain-project"
@@ -651,7 +358,7 @@ class ContextCreationTests(unittest.TestCase):
         (non_git / "project.toml").write_text("name = 'plain'\n", encoding="utf-8")
         (non_git / "src").mkdir()
 
-        result, _agent, _rot_say, _rot_continue = self.run_add(
+        result, _rot_say, _rot_continue = self.run_add(
             answer="yes", args=self.args(name="plain", path=non_git)
         )
 
@@ -664,12 +371,11 @@ class ContextCreationTests(unittest.TestCase):
         self.assertNotIn(str(non_git), content)
         self.assertEqual(get_context_binding("plain")["source_path"], str(non_git))
 
-    def test_invalid_xdg_config_home_is_reported_before_agent(self):
+    def test_invalid_xdg_config_home_is_reported_before_creation(self):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "relative"}, clear=True):
-            result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
+            result, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 1)
-        stream_agent.assert_not_called()
 
 
 class ContextQuestionnaireTests(unittest.TestCase):
@@ -693,14 +399,14 @@ class ContextQuestionnaireTests(unittest.TestCase):
                 context_creation,
                 "_add_machine_context"
             ) as add_machine, patch.object(context_creation, "rot_say"):
-                result = context_creation.context_add(argparse.Namespace(agent=None))
+                result = context_creation.context_add(argparse.Namespace())
 
             self.assertEqual(result, 0)
             add_project.assert_not_called()
             add_person.assert_not_called()
             add_machine.assert_not_called()
 
-    def test_project_questions_route_name_path_and_agent(self):
+    def test_project_questions_route_name_and_path(self):
         answers = ("project", "/srv/example", "example")
 
         with patch("builtins.input", side_effect=answers), patch.object(
@@ -708,15 +414,14 @@ class ContextQuestionnaireTests(unittest.TestCase):
             "_add_project_context",
             return_value=7
         ) as add_project, patch.object(context_creation, "rot_say"):
-            result = context_creation.context_add(argparse.Namespace(agent="codex"))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 7)
         project_args = add_project.call_args.args[0]
         self.assertEqual(project_args.name, "example")
         self.assertEqual(project_args.path, "/srv/example")
-        self.assertEqual(project_args.agent, "codex")
 
-    def test_person_questions_route_role_and_display_name_without_agent(self):
+    def test_person_questions_route_role_and_display_name(self):
         answers = (
             "person", "alex", "user", "Alex Example", "1,2", "yes"
         )
@@ -733,7 +438,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent="codex"))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         entity = create_entity.call_args.args[0]
@@ -757,7 +462,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         entity = create_entity.call_args.args[0]
@@ -767,7 +472,6 @@ class ContextQuestionnaireTests(unittest.TestCase):
     def test_preselected_user_reuses_person_creation_workflow(self):
         answers = ("", "yes")
         args = argparse.Namespace(
-            agent=None,
             context_type="user",
             name="kamaji"
         )
@@ -806,7 +510,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ) as rot_say, patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         create_person.assert_called_once_with(
@@ -834,7 +538,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         inspect.assert_not_called()
@@ -866,7 +570,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         inspect.assert_called_once_with()
@@ -883,7 +587,6 @@ class ContextQuestionnaireTests(unittest.TestCase):
         )
         answers = ("", "inspect", "", "yes", "yes")
         args = argparse.Namespace(
-            agent=None,
             context_type="machine",
             name="desktop"
         )
@@ -932,7 +635,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         create_machine.assert_called_once_with("desktop", "Desktop", None, ANY)
@@ -976,7 +679,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "rot_say"
         ), patch.object(context_creation, "rot_continue"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         create_person.assert_not_called()
@@ -992,7 +695,7 @@ class ContextQuestionnaireTests(unittest.TestCase):
             context_creation,
             "_add_person_context"
         ) as add_person, patch.object(context_creation, "rot_say"):
-            result = context_creation.context_add(argparse.Namespace(agent=None))
+            result = context_creation.context_add(argparse.Namespace())
 
         self.assertEqual(result, 0)
         add_person.assert_not_called()

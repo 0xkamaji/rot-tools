@@ -64,8 +64,8 @@ INTERACTIVE_HELP = """ROT INTERACTIVE COMMANDS
   last save           Save the latest AI response locally
   last ask [MESSAGE]  Ask AI about the latest response
   last learn TARGET   Teach Rot from the latest response
-  learn TARGET TEXT   Store explicit local knowledge
-  learn show TARGET   Show local learned knowledge
+  context learn TARGET [TEXT]   Store explicit local knowledge
+  context show TARGET  Show local learned knowledge
   debug show          Show the latest debug output
   debug edit          Edit the latest debug output
   debug save          Save the latest debug output locally
@@ -80,7 +80,9 @@ Rot commands can also be entered directly, including:
   git pull
   git push
   context show
-  context show NAME
+  context show TARGET
+  context learn TARGET [TEXT]
+  context edit TARGET
   context list
   machine inspect
   ai sessions

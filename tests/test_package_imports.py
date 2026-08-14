@@ -36,7 +36,6 @@ class PackageImportTests(unittest.TestCase):
         "rotbot.contexts.inspection",
         "rotbot.contexts.matching",
         "rotbot.contexts.menu",
-        "rotbot.contexts.modification",
         "rotbot.contexts.binding",
         "rotbot.contexts.creation",
         "rotbot.contexts.config",

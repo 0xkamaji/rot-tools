@@ -179,28 +179,14 @@ class CompletionProvider:
 
     def _dynamic(self, path, destination, prefix, quote):
         try:
+            contact_names = [
+                item.name for item in people.list_person_contexts()
+                if item.role == "contact"
+            ]
             if path == ("context", "show") and destination == "name":
-                values = (
-                    list(loader.list_contexts())
-                    + [item.name for item in entities.list_user_contexts()]
-                    + [item.name for item in entities.list_assistant_contexts()]
-                    + [item.name for item in machines.list_machine_contexts()]
-                    + [
-                        item.name for item in people.list_person_contexts()
-                        if item.role == "contact"
-                    ]
-                )
-                return self._values(values, prefix, "context")
-            if path == ("context", "mod") and destination == "name":
-                values = (
-                    [item.name for item in entities.list_user_contexts()]
-                    + [item.name for item in entities.list_assistant_contexts()]
-                    + [
-                        item.name for item in people.list_person_contexts()
-                        if item.role == "contact"
-                    ]
-                )
-                return self._values(values, prefix, "context")
+                return self._values(contact_names, prefix, "context")
+            if path in (("context", "learn"), ("context", "edit")) and destination == "name":
+                return self._values(contact_names, prefix, "context")
             if path == ("context", "delete") and destination == "name":
                 return self._values(
                     (name for _kind, name in deletion.list_deletable_contexts()),

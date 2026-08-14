@@ -1,13 +1,7 @@
-import tempfile
-
 from rotbot.agents.invocation import prepare
 from rotbot.agents.runner import build_ask_request
 from rotbot.contexts import entities, loader, machines, people
 from rotbot.contexts.config import ConfigError
-from rotbot.contexts.creation import (
-    ContextCreationError,
-    build_context_develop_request
-)
 from rotbot.contexts.inspection import ContextInspectionError
 from rotbot.contexts.matching import MatchError
 from rotbot.ui.debug import render_ai_debug_plan
@@ -22,7 +16,6 @@ REQUEST_ERRORS = (
     entities.EntityContextError,
     MatchError,
     ConfigError,
-    ContextCreationError
 )
 
 
@@ -45,38 +38,6 @@ def debug_ask(args):
     except REQUEST_ERRORS as error:
         rot_say(str(error))
         return 2
-
-
-def debug_context_develop(args):
-    try:
-        operation = build_context_develop_request(args, tempfile.gettempdir())
-        sections = []
-        for label, request in (
-            ("IDENTITY", operation.identity_request),
-            ("STATE", operation.state_request)
-        ):
-            sections.append(
-                "=" * 60
-                + f"\nCONTEXT DEVELOPMENT: {label}\n"
-                + "=" * 60
-                + "\n\n"
-                + render_ai_debug_plan(prepare(request))
-            )
-        return _display_debug(
-            args, "\n\n".join(sections), "debug-context-develop"
-        )
-    except REQUEST_ERRORS as error:
-        rot_say(str(error))
-        return 2
-
-
-def debug_context_add(_args):
-    rot_say(
-        "Debug is not supported for context add because preparing that command "
-        "requires context creation and binding. Use debug context develop for an "
-        "existing project context."
-    )
-    return 2
 
 
 def debug_last_ask(_args):

@@ -20,28 +20,42 @@ class ParserDispatchTests(unittest.TestCase):
             {"debug_command": "ask", "question": ["what", "now"], "agent": "codex"}
         ),
         (
-            ["debug", "context", "develop", "rotbot", "--agent", "opencode"],
-            "debug_context_develop",
-            {
-                "debug_command": "context",
-                "debug_context_command": "develop",
-                "name": "rotbot",
-                "agent": "opencode"
-            }
-        ),
-        (
             ["debug", "last", "ask", "why"],
             "debug_last_ask",
             {"debug_command": "last", "debug_last_command": "ask", "instruction": ["why"]}
         ),
-        (["learn", "project", "exact", "fact"], "learn_command", {
-            "learn_command": "project", "learn_action": "append",
-            "learn_target": "project", "text": ["exact", "fact"]
-        }),
-        (["learn", "show", "user"], "learn_command", {
-            "learn_command": "show", "learn_show_target": "user",
-            "learn_action": "show", "learn_target": "user"
-        }),
+        (
+            ["context", "learn", "project", "exact", "fact"],
+            "learn_command",
+            {
+                "context_command": "learn",
+                "context_learn_target": "project",
+                "learn_action": "append",
+                "learn_target": "project",
+                "text": ["exact", "fact"]
+            }
+        ),
+        (
+            ["context", "learn", "contact", "kamaji", "lives", "in", "Tokyo"],
+            "learn_command",
+            {
+                "context_learn_target": "contact",
+                "name": "kamaji",
+                "learn_action": "append",
+                "learn_target": "contact",
+                "text": ["lives", "in", "Tokyo"]
+            }
+        ),
+        (
+            ["context", "edit", "user"],
+            "learn_command",
+            {
+                "context_command": "edit",
+                "context_edit_target": "user",
+                "learn_action": "edit",
+                "learn_target": "user"
+            }
+        ),
         (["debug", "show"], "debug_session_register", {"debug_command": "show"}),
         (["debug", "edit"], "debug_session_register", {"debug_command": "edit"}),
         (["debug", "save"], "debug_session_register", {"debug_command": "save"}),
@@ -81,14 +95,14 @@ class ParserDispatchTests(unittest.TestCase):
         (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
         (
-            ["context", "show", "signalrot"],
+            ["context", "show", "contact", "kamaji"],
             "context_show",
-            {"context_command": "show", "name": "signalrot"}
+            {"context_command": "show", "target": "contact", "name": "kamaji"}
         ),
         (
             ["context", "show"],
             "context_show",
-            {"context_command": "show", "name": None}
+            {"context_command": "show", "target": None, "name": None}
         ),
         (
             ["context", "bind"],
@@ -119,24 +133,23 @@ class ParserDispatchTests(unittest.TestCase):
             {"binding_type": "production"}
         ),
         (
-            ["context", "add", "--agent", "codex"],
+            ["context", "add"],
             "context_add",
             {
                 "context_command": "add",
                 "context_type": None,
-                "name": None,
-                "agent": "codex"
+                "name": None
             }
         ),
         (
             ["context", "add", "machine"],
             "context_add",
-            {"context_type": "machine", "name": None, "agent": None}
+            {"context_type": "machine", "name": None}
         ),
         (
             ["context", "add", "machine", "desktop"],
             "context_add",
-            {"context_type": "machine", "name": "desktop", "agent": None}
+            {"context_type": "machine", "name": "desktop"}
         ),
         (
             ["machine", "inspect"],
@@ -154,14 +167,9 @@ class ParserDispatchTests(unittest.TestCase):
             {"context_command": "delete", "name": None}
         ),
         (
-            ["context", "mod"],
-            "context_mod",
-            {"context_command": "mod", "name": None}
-        ),
-        (
-            ["context", "mod", "alex"],
-            "context_mod",
-            {"context_command": "mod", "name": "alex"}
+            ["context", "edit", "contact", "alex"],
+            "learn_command",
+            {"context_edit_target": "contact", "name": "alex"}
         ),
         (["sr", "status"], "sr_status", {"sr_command": "status"}),
         (
@@ -239,7 +247,7 @@ class ParserDispatchTests(unittest.TestCase):
         cases = (
             (["git"], ("pull", "push", "status")),
             (["ai"], ("sessions", "session")),
-            (["debug"], ("ask", "context")),
+            (["debug"], ("ask", "last")),
             (["ai", "session"], ("show",)),
             (["machine"], ("inspect",)),
             (["sr"], ("status", "context", "diff", "pull", "push", "publish"))
@@ -337,12 +345,13 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertNotIn("COMMAND: rotbot context inspect", message)
         self.assertIn("COMMAND: rotbot machine inspect", message)
         self.assertIn("COMMAND: rotbot context delete", message)
-        self.assertIn("COMMAND: rotbot context mod", message)
+        self.assertIn("COMMAND: rotbot context learn", message)
+        self.assertIn("COMMAND: rotbot context edit", message)
         self.assertIn("COMMAND: rotbot sr publish", message)
         self.assertIn("--help-verbose", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 22)
+        self.assertEqual(message.count("=" * 60), 20)
         self.assertNotIn("COMMAND: rotbot wtf", message)
 
     def test_verbose_help_can_be_scoped_to_a_command_group(self):

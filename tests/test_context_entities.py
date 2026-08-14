@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from rotbot.agents import invocation
 from rotbot.agents.config import OPENCODE
-from rotbot.contexts import entities, inspection, learning, loader, modification
+from rotbot.contexts import entities, inspection, learning, loader
 
 
 class EntityContextTests(unittest.TestCase):
@@ -319,18 +319,21 @@ class AssistantLayeringTests(unittest.TestCase):
         )
         self.assertIn("Installation-specific knowledge", path.read_text())
 
-    def test_builtin_only_modification_materializes_before_editing(self):
+    def test_builtin_only_assistant_materializes_before_writable_use(self):
         assistant = self.create_builtin()
+        assert not (self.context_root / "assistants" / "rot").exists()
 
-        resolved, document = modification._entity_document(
-            assistant.id, "behavior.md", "assistant", create=True
-        )
+        resolved, destination = entities.materialize_builtin_assistant(assistant.id)
 
         self.assertEqual(resolved.id, assistant.id)
         self.assertEqual(
-            document,
-            self.context_root / "assistants" / "rot" / "private" / "behavior.md"
+            destination,
+            self.context_root / "assistants" / "rot"
         )
+        self.assertTrue(destination.is_dir())
+        self.assertIn("Builtin behavior", (
+            destination / "general" / "behavior.md"
+        ).read_text(encoding="utf-8"))
 
     def test_bootstrap_selection_and_existing_binding_materialize_builtin(self):
         assistant = self.create_builtin()

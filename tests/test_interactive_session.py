@@ -345,13 +345,13 @@ class RotSessionTests(unittest.TestCase):
 
     def test_quoted_context_name_is_parsed_by_existing_cli(self):
         with patch.object(
-            command_parser, "context_show", return_value=0
-        ) as context_show:
+            command_parser, "context_bind", return_value=0
+        ) as context_bind:
             interactive.evaluate_input(
-                self.session, 'context show "some context"'
+                self.session, 'context bind "some context"'
             )
 
-        self.assertEqual(context_show.call_args.args[0].name, "some context")
+        self.assertEqual(context_bind.call_args.args[0].first, "some context")
 
     def test_malformed_quoting_does_not_end_session(self):
         with patch.object(interactive, "rot_say") as rot_say:
@@ -775,14 +775,14 @@ class RotSessionTests(unittest.TestCase):
         )
 
         def handler(parsed):
-            parsed.debug_sink("new exact rendering", "debug-context-develop")
+            parsed.debug_sink("new exact rendering", "debug-ask-rendered")
             return 0
 
         parsed = Mock(func=handler)
         with patch.object(interactive, "parse_args", return_value=parsed), patch(
             "rotbot.session.router.rot_command_names", return_value=("debug",)
         ):
-            interactive.evaluate_input(self.session, "debug context develop rotbot")
+            interactive.evaluate_input(self.session, "debug ask --render")
 
         self.assertEqual(self.session.debug_response.text, "new exact rendering")
         self.assertFalse(self.session.debug_response.edited)

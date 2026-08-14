@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from rotbot.cli import parser as command_parser
-from rotbot.contexts import entities
+from rotbot.contexts import entities, people
 from rotbot.session import completion, shell
 
 
@@ -47,7 +47,7 @@ class CompletionProviderTests(unittest.TestCase):
             [
                 value + " "
                 for value in (
-                    "add", "bind", "delete", "develop", "list", "mod", "show"
+                    "add", "bind", "delete", "edit", "learn", "list", "show"
                 )
             ]
         )
@@ -114,11 +114,12 @@ class CompletionProviderTests(unittest.TestCase):
         ), patch.object(
             completion.machines, "list_machine_contexts", return_value=()
         ), patch.object(
-            completion.people, "list_person_contexts", return_value=()
+            completion.people, "list_person_contexts",
+            return_value=(people.PersonContext("alex", "contact", "Alex", (), "p"),)
         ):
-            values = self.values("context show r")
+            values = self.values("context show contact a")
 
-        self.assertEqual(values, ["rot ", "rotbot "])
+        self.assertEqual(values, ["alex "])
 
     def test_completion_does_not_dispatch_execute_or_invoke_ai(self):
         with patch.object(command_parser, "parse_args") as parse, patch(

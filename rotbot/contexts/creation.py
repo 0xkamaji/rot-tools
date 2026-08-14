@@ -1,21 +1,13 @@
 import os
 from pathlib import Path
-import re
 import stat
 import tempfile
 import shutil
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from rotbot.agents.invocation import AIRequest, invoke
 from rotbot.commands.machine import inspect_local_machine, show_inspection
 from rotbot.contexts import documents as context_documents, entities, loader, machines, people
-from rotbot.contexts.evidence import (
-    ProjectDevelopmentEvidence,
-    inspect_project_development_evidence,
-    render_identity_evidence,
-    render_state_evidence
-)
 from rotbot.contexts.matching import (
     MatchError,
     build_source_match_toml,
@@ -56,7 +48,6 @@ PATH_PRIORITY = (
     "tests/", "assets/", "scripts/", "README.md", "README"
 )
 MAX_TREE_ENTRIES = 100
-MAX_AGENT_OUTPUT_BYTES = 250_000
 MAX_REMOTES = 32
 DOCUMENT_NOTES = {
     "identity": (
@@ -69,15 +60,6 @@ DOCUMENT_NOTES = {
     )
 }
 PLACEHOLDER_POINT = "Context created by RotBot. AI enrichment has not yet been completed."
-SENSITIVE_CONTENT_PATTERN = re.compile(
-    r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|"
-    r"private[_-]?key|client[_-]?secret)\s*[:=]|"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|https?://[^\s/:]+:[^\s/@]+@"
-)
-ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?m)(?:^|[\s`'(\[])"
-    r"(?:/(?:[^\s/]+/)+[^\s]*|[A-Za-z]:\\[^\s]+)"
-)
 
 
 class ContextCreationError(Exception):
@@ -142,190 +124,6 @@ def _inspect_project(project, remotes):
         raise ContextCreationError("Project has too many configured Git remotes.")
     entries = _safe_entries(project)
     return _match_paths(entries)
-
-
-def _identity_development_task(name):
-    return (
-        f"Draft only stable project identity for the project named {name}. Use only "
-        "the provided bounded identity evidence. Do not inspect or modify files. "
-        "Describe "
-        "stable facts: what the project is, its core purpose, intended role or "
-        "audience, stable architecture, and repository identity when useful. "
-        "Avoid marketing, invented history, temporary status, speculative plans, "
-        "future vision, secrets, credentials, machine-local absolute paths, and "
-        "detailed transient feature inventories."
-    )
-
-
-def _state_development_task(name):
-    return (
-        f"Draft only current project state for the project named {name}. Use only "
-        "the provided bounded current implementation evidence. Do not inspect or "
-        "modify files. Describe only "
-        "what currently exists: major capabilities, structure, entry points, "
-        "implemented integrations, commands, and directly evident limitations. "
-        "Avoid roadmaps, speculation, secrets, credentials, and machine-local "
-        "absolute paths."
-    )
-
-
-IDENTITY_OUTPUT_CONTRACT = (
-    "Return only the identity Markdown document. It must begin with the exact "
-    "project heading requested by RotBot, followed only by bullet points beginning "
-    "with `- `. Do not use a code fence, commentary, additional headings, or "
-    "Markdown comments."
-)
-STATE_OUTPUT_CONTRACT = (
-    "Return only the state Markdown document. It must begin with the exact project "
-    "state heading requested by RotBot, followed only by bullet points beginning "
-    "with `- `. Do not use a code fence, commentary, additional headings, or "
-    "Markdown comments."
-)
-
-
-def _context_development_requests(
-    name, evidence, working_directory, agent_name=None,
-    parent_command="context develop"
-):
-    common = {
-        "parent_command": parent_command,
-        "working_directory": working_directory,
-        "agent_name": agent_name,
-        "timeout": 300,
-        "retries": 1,
-        "isolated": True
-    }
-    return (
-        AIRequest(
-            purpose="context_identity_development",
-            task=_identity_development_task(name),
-            context_material=render_identity_evidence(evidence),
-            output_contract=(
-                IDENTITY_OUTPUT_CONTRACT + f" The first line must be exactly `# {name}`."
-            ),
-            **common
-        ),
-        AIRequest(
-            purpose="context_state_development",
-            task=_state_development_task(name),
-            context_material=render_state_evidence(evidence),
-            output_contract=(
-                STATE_OUTPUT_CONTRACT
-                + f" The first line must be exactly `# {name} State`."
-            ),
-            **common
-        )
-    )
-
-
-@dataclass(frozen=True)
-class ContextDevelopmentOperation:
-    identity_request: AIRequest
-    state_request: AIRequest
-    name: str
-    project: Path
-    destination: Path
-    evidence: ProjectDevelopmentEvidence
-
-
-def build_context_develop_request(args, working_directory):
-    name = getattr(args, "name", None)
-    if not name:
-        raise ContextCreationError("A project context name is required.")
-    loader.load_context(name)
-    definition = load_match_definition(name)
-    binding = get_context_binding(name)
-    source = binding.get("source_path")
-    if source is None:
-        raise ContextCreationError(
-            f"Project context '{name}' does not have a local source binding."
-        )
-    project, _is_git_repo, remotes = inspect_source_project(source)
-    matched = match_source_definition(project, name, definition)
-    if not matched.strong:
-        raise ContextCreationError(
-            f"The bound source no longer strongly matches project context '{name}'."
-        )
-    return _build_context_development_operation(
-        name, project, remotes, working_directory, getattr(args, "agent", None)
-    )
-
-
-def _build_context_development_operation(
-    name, project, remotes, working_directory, agent_name=None,
-    parent_command="context develop"
-):
-    evidence = inspect_project_development_evidence(project, remotes, name)
-    identity_request, state_request = _context_development_requests(
-        name, evidence, working_directory, agent_name, parent_command
-    )
-    return ContextDevelopmentOperation(
-        identity_request=identity_request,
-        state_request=state_request,
-        name=name,
-        project=project,
-        destination=loader.project_context_directory(name),
-        evidence=evidence
-    )
-
-
-def _placeholder_documents(name, definition):
-    source = definition.source
-    git_state = "Git-backed" if source.is_git_repo else "not Git-backed"
-    paths = ", ".join(f"`{path}`" for path in source.required_paths)
-    return {
-        "identity": (
-            context_documents.render_identity(name, "project")
-        ),
-        "state": (
-            f"# {name} State\n\n<!-- {DOCUMENT_NOTES['state']} -->\n\n"
-            f"- {PLACEHOLDER_POINT}\n"
-            f"- The project is {git_state}.\n"
-            f"- Portable recognition currently requires: {paths}.\n"
-        )
-    }
-
-
-def _parse_context_document(output, project, name, document_type):
-    if not isinstance(output, str):
-        raise ContextCreationError(f"Generated {document_type}.md must be text.")
-    if len(output.encode("utf-8")) > MAX_AGENT_OUTPUT_BYTES:
-        raise ContextCreationError(
-            f"The AI agent returned an oversized {document_type} document."
-        )
-    content = output.strip()
-    expected_heading = f"# {name}" + (" State" if document_type == "state" else "")
-    local_path = str(project)
-    lines = content.splitlines()
-    points = [line for line in lines[1:] if line.strip()]
-    if (
-        not content
-        or not lines
-        or lines[0] != expected_heading
-        or "\0" in content
-        or local_path in content
-        or ABSOLUTE_PATH_PATTERN.search(content)
-        or SENSITIVE_CONTENT_PATTERN.search(content)
-        or "<!--" in content
-        or "```" in content
-        or "~~~" in content
-        or any(line.startswith("#") for line in points)
-        or not points
-        or any(not line.startswith("- ") or not line[2:].strip() for line in points)
-        or any(
-            ord(character) < 32 and character not in {"\n", "\t"}
-            for character in content
-        )
-    ):
-        raise ContextCreationError(
-            f"Generated {document_type}.md is empty or invalid. Expected "
-            f"`{expected_heading}` followed only by bullet points."
-        )
-    return (
-        f"{expected_heading}\n\n<!-- {DOCUMENT_NOTES[document_type]} -->\n\n"
-        + "\n".join(points)
-        + "\n"
-    )
 
 
 def _confirm(message, default=False):
@@ -598,7 +396,6 @@ def context_add(args):
         project_args = SimpleNamespace(
             name=name,
             path=path,
-            agent=getattr(args, "agent", None)
         )
         return _add_project_context(project_args)
 
@@ -719,99 +516,21 @@ def _write_document(path, content):
         os.chmod(path, 0o600)
 
 
-def _atomic_replace_documents(destination, expected, documents):
-    originals = {}
-    replacements = {}
-    try:
-        for name in ("identity", "state"):
-            path = (
-                destination / "general" / "background.md"
-                if name == "identity"
-                else destination / "general" / "state.md"
-            )
-            if path.is_symlink() or (path.exists() and not path.is_file()):
-                raise ContextCreationError(f"Invalid project context document: {path.name}")
-            original = path.read_text(encoding="utf-8") if path.exists() else None
-            expected_content = None
-            if original != expected_content:
-                raise ContextCreationError(
-                    f"Generated enrichment was not applied because {path.name} "
-                    "is no longer in its expected pre-development state."
-                )
-            originals[path] = original
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False
-            ) as temporary:
-                replacement = Path(temporary.name)
-                temporary.write(documents[name])
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            if os.name != "nt":
-                mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
-                os.chmod(replacement, mode)
-            replacements[path] = replacement
-        replaced = []
-        try:
-            for path, replacement in replacements.items():
-                os.replace(replacement, path)
-                replaced.append(path)
-                replacements[path] = None
-        except OSError:
-            for path in replaced:
-                if originals[path] is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    path.write_text(originals[path], encoding="utf-8")
-            raise
-    except ContextCreationError:
-        raise
-    except (OSError, UnicodeError) as error:
-        raise ContextCreationError(f"Could not apply AI enrichment: {error}") from None
-    finally:
-        for replacement in replacements.values():
-            if replacement is not None:
-                try:
-                    replacement.unlink()
-                except OSError:
-                    pass
-
-
-def _enrich_project_context(operation):
-    try:
-        expected = _placeholder_documents(
-            operation.name, load_match_definition(operation.name)
+def _placeholder_documents(name, definition):
+    source = definition.source
+    git_state = "Git-backed" if source.is_git_repo else "not Git-backed"
+    paths = ", ".join(f"`{path}`" for path in source.required_paths)
+    return {
+        "identity": (
+            context_documents.render_identity(name, "project")
+        ),
+        "state": (
+            f"# {name} State\n\n<!-- {DOCUMENT_NOTES['state']} -->\n\n"
+            f"- {PLACEHOLDER_POINT}\n"
+            f"- The project is {git_state}.\n"
+            f"- Portable recognition currently requires: {paths}.\n"
         )
-    except (MatchError, loader.ContextError, ContextCreationError) as error:
-        return f"AI enrichment could not start: {error}"
-    from rotbot.ui.ai import AIActivityPresenter
-
-    generated = {}
-    for document_type, request in (
-        ("identity", operation.identity_request),
-        ("state", operation.state_request)
-    ):
-        presenter = AIActivityPresenter(
-            f"developing {document_type} context", stop_on_stream=False
-        )
-        result = invoke(
-            request,
-            validator=lambda output, kind=document_type: _parse_context_document(
-                output, operation.project, operation.name, kind
-            ),
-            on_event=presenter
-        )
-        if not result.successful:
-            detail = result.validation_error or (
-                f"AI enrichment failed with exit code {result.returncode}."
-            )
-            return f"{document_type} phase failed: {detail}"
-        generated[document_type] = result.value
-    try:
-        _atomic_replace_documents(operation.destination, expected, generated)
-    except ContextCreationError as error:
-        return str(error)
-    return None
+    }
 
 
 def _create_and_bind(
@@ -1012,21 +731,4 @@ def _add_project_context(args):
     rot_say(
         f"Context '{name}' created, validated, and its source path registered."
     )
-    return 0
-
-
-def context_develop(args):
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="rotbot-context-agent-"
-        ) as agent_directory:
-            operation = build_context_develop_request(args, agent_directory)
-            enrichment_error = _enrich_project_context(operation)
-    except (loader.ContextError, MatchError, ConfigError, ContextCreationError) as error:
-        rot_say(str(error))
-        return 1
-    if enrichment_error is not None:
-        rot_say(f"AI enrichment failed:\n{enrichment_error}\n\nThe context was not changed.")
-        return 1
-    rot_say(f"Project context '{operation.name}' enriched successfully.")
     return 0

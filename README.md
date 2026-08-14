@@ -473,19 +473,20 @@ menu. Direct subcommands remain available for faster scripted use.
 | Command                      | Purpose                            |
 | ---------------------------- | ---------------------------------- |
 | `rot context list`           | List available contexts            |
-| `rot context show [NAME]`    | Display the current session or a saved context |
+| `rot context show`           | Display the active session context |
+| `rot context show TARGET`    | Show learned knowledge for `user`, `assistant`, `project`, `machine`, or `contact NAME` |
 | `rot context bind`           | Choose a saved context to bind to the active session |
 | `rot context bind TYPE [NAME]` | Bind a project, user, assistant, or machine to the active session |
 | `rot context bind PATH`      | Detect and bind a local project    |
 | `rot context bind NAME PATH` | Bind a specific project path       |
 | `rot context add`            | Interactively create a project, user, assistant, contact, or machine context |
-| `rot context develop NAME`   | Enrich a newly created project context through the shared AI runtime |
 | `rot context add user [NAME]` | Create a first-class user context |
 | `rot context add assistant [NAME]` | Create an assistant with safe capability defaults |
 | `rot context add machine [NAME]` | Create a machine directly, then inspect or leave empty |
 | `rot context add user [NAME]` | Create a user with the person workflow |
 | `rot context add assistant [NAME]` | Create an assistant with the person workflow |
-| `rot context mod [NAME]`     | Add categorized information to a person context |
+| `rot context learn TARGET [TEXT]` | Store explicit knowledge for `user`, `assistant`, `project`, `machine`, or `contact NAME` |
+| `rot context edit TARGET`    | Choose and edit a general or private knowledge category |
 | `rot context delete [NAME]` | Archive a context, or choose one from a list |
 
 Archived contexts are moved beneath the hidden `contexts/.archive/` data directory,
@@ -540,17 +541,23 @@ leaves files and configuration unchanged. Existing machine contexts are
 never overwritten. Inspection never invokes AI, scans installed packages, or
 inspects a remote machine.
 
-`rot context mod` currently supports people. It reads the selected Markdown
-file's existing `##` headings, adds information beneath one of them, or creates
-a new heading with a reusable guidance comment.
+`rot context show TARGET` displays knowledge recorded for a target. A target is
+`user`, `assistant`, `project`, `machine`, or `contact NAME`. It reads the
+selected document's existing `##` headings, shows information beneath them, and
+selects only populated categories.
 
 When showing a person, RotBot displays only populated Markdown sections. Empty
 template headings, guidance comments, metadata, and role-inapplicable files are
 omitted.
 
+`rot context learn TARGET [TEXT]` stores explicit knowledge for a target in the
+appropriate general or private category. Omitting `TEXT` opens the interactive
+prompt. `rot context edit TARGET` presents the knowledge learning menus for the
+target and lets you choose a document to preserve or extend.
+
 ### Show a context
 
-Run without a name to show the authoritative active session context:
+Run without arguments to show the authoritative active session context:
 
 ```bash
 rot context show
@@ -561,8 +568,8 @@ independently resolve configuration or environment again. Outside an interactive
 session, the command resolves the current context as a standalone fallback.
 
 ```bash
-rot context show rotbot
-rot context show signalrot
+rot context show project rotbot
+rot context show user Kamaji
 ```
 
 Saved context output includes all populated knowledge categories from both
@@ -650,10 +657,10 @@ rot sr context --full
 This differs from:
 
 ```bash
-rot context show signalrot
+rot context show project signalrot
 ```
 
-`rot context show signalrot` displays the context files.
+`rot context show project signalrot` displays the learned project context files.
 `rot sr context` provides a SignalRot-specific dashboard.
 `rot sr context --full` is a shortcut for the complete context display.
 
