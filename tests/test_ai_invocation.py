@@ -138,6 +138,8 @@ class AIInvocationTests(unittest.TestCase):
 
         with patch.object(
             invocation, "resolve_provider", return_value=(OPENCODE, None)
+        ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
         ):
             plan = invocation.prepare(request)
 

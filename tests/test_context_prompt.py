@@ -1,6 +1,6 @@
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from rotbot.contexts import entities, inspection, loader, machines, people, prompt
 from rotbot.session.capabilities import CapabilityState
@@ -47,7 +47,7 @@ class PromptCompilerTests(unittest.TestCase):
         self.assertIn("calibrate explanations", rendered)
         self.assertIn("User experience marker", rendered)
         self.assertIn("<machine_context>", rendered)
-        self.assertIn("portable/shareable", rendered)
+        self.assertIn("deterministic and general", rendered)
         self.assertIn("CachyOS marker", rendered)
         self.assertIn("<project_context>", rendered)
         self.assertIn("Project identity marker", rendered)
@@ -160,16 +160,24 @@ class PromptCompilerTests(unittest.TestCase):
         ) as load_private:
             context = prompt.resolve_prompt_context(inspected, "Codex")
             rendered = prompt.build_ask_prompt(context, "Question")
+            private_context = prompt.resolve_prompt_context(
+                inspected, "Codex", view="full"
+            )
+            private_rendered = prompt.build_ask_prompt(private_context, "Question")
 
-        load_portable.assert_called_once_with("laptop", view="egress")
+        self.assertEqual(
+            load_portable.call_args_list,
+            [call("laptop", view="egress"), call("laptop", view="full")]
+        )
         load_private.assert_not_called()
         self.assertNotIn("PortableOS", rendered)
+        self.assertIn("PortableOS", private_rendered)
         self.assertIn("Portable purpose", rendered)
-        self.assertIn("PortableTool", rendered)
+        self.assertNotIn("PortableTool", rendered)
         self.assertNotIn("PRIVATE_CONTEXT_MUST_NOT_LEAVE_ROTBOT", rendered)
         self.assertNotIn("<!--", rendered)
 
-    def test_resolver_uses_populated_people_and_project_without_vision(self):
+    def test_resolver_uses_dynamic_general_project_vision(self):
         inspected = inspection.InspectedContext(
             "rot", "assistant-id",
             "kamaji", "user-id",
@@ -185,7 +193,12 @@ class PromptCompilerTests(unittest.TestCase):
         user = entities.UserContext("kamaji", "Kamaji", (), "user-id")
 
         project = loader.Context(
-            "rotbot", "Stable project identity", "Current project state", "project-id"
+            "rotbot", "Stable project identity", "Current project state", "project-id",
+            knowledge=(
+                loader.ProjectDocument("identity.md", "identity", "Stable project identity"),
+                loader.ProjectDocument("state.md", "general", "Current project state"),
+                loader.ProjectDocument("vision.md", "general", "Project vision marker"),
+            )
         )
         with patch.object(
             entities,
@@ -200,19 +213,17 @@ class PromptCompilerTests(unittest.TestCase):
             return_value=(user, (
                 people.PersonDocument("experience.md", (("Technical", "Python"),)),
             ))
-        ), patch.object(loader, "load_context", return_value=project), patch.object(
-            loader, "load_vision"
-        ) as load_vision:
+        ), patch.object(loader, "load_context", return_value=project) as load_project:
             context = prompt.resolve_prompt_context(inspected, "OpenCode")
             rendered = prompt.build_ask_prompt(context, "Question")
 
-        load_vision.assert_not_called()
+        load_project.assert_called_once_with("rotbot", view="egress")
         self.assertIn("Curious", rendered)
         self.assertIn("Direct", rendered)
         self.assertIn("Python", rendered)
         self.assertIn("Stable project identity", rendered)
         self.assertIn("Current project state", rendered)
-        self.assertNotIn("vision", rendered.lower())
+        self.assertIn("Project vision marker", rendered)
 
 
 if __name__ == "__main__":

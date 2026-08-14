@@ -122,23 +122,23 @@ def _validate_document(content):
     return content
 
 
-def _local_document(directory):
+def _private_document(directory):
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise LearningError(f"Invalid context directory: {directory}")
-    local = directory / "local"
+    private = directory / "private"
     try:
-        if not os.path.lexists(local):
-            local.mkdir(mode=0o700)
-        if local.is_symlink() or not local.is_dir():
-            raise LearningError(f"Invalid local context directory: {local}")
+        if not os.path.lexists(private):
+            private.mkdir(mode=0o700)
+        if private.is_symlink() or not private.is_dir():
+            raise LearningError(f"Invalid private context directory: {private}")
         if os.name != "nt":
-            os.chmod(local, 0o700)
+            os.chmod(private, 0o700)
     except LearningError:
         raise
     except OSError as error:
-        raise LearningError(f"Could not prepare local context: {error}") from None
-    return local / "learned.md"
+        raise LearningError(f"Could not prepare private context: {error}") from None
+    return private / "learned.md"
 
 
 def _read(path):
@@ -210,7 +210,7 @@ def learn_text(target, text, *, inspected=None, reference=None):
 
 
 def _append_learned(directory, text):
-    path = _local_document(directory)
+    path = _private_document(directory)
     content, before = _read(path)
     base = LEARNED_TEMPLATE if content is None else _validate_document(content)
     updated = base.rstrip() + "\n\n" + _validate_entry(text)
@@ -220,7 +220,7 @@ def _append_learned(directory, text):
 
 def edit_learned(target, *, inspected=None, reference=None, editor=None):
     context, directory = _resolve(target, inspected, reference)
-    path = _local_document(directory)
+    path = _private_document(directory)
     content, before = _read(path)
     original = LEARNED_TEMPLATE if content is None else _validate_document(content)
     try:
@@ -233,7 +233,7 @@ def edit_learned(target, *, inspected=None, reference=None, editor=None):
 
 def show_learned(target, *, inspected=None, reference=None):
     context, directory = _resolve(target, inspected, reference)
-    path = _local_document(directory)
+    path = _private_document(directory)
     content, _before = _read(path)
     if content is None:
         raise LearningError(
@@ -266,7 +266,7 @@ def learn_command(args):
         else:
             rot_say(
                 f"Learning target: {target} '{context.name}'\n"
-                "Enter the exact text to append to local/learned.md:"
+                "Enter the exact text to append to private/learned.md:"
             )
             try:
                 text = input("> ")

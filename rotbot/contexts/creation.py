@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from rotbot.agents.invocation import AIRequest, invoke
 from rotbot.commands.machine import inspect_local_machine, show_inspection
-from rotbot.contexts import entities, loader, machines, people
+from rotbot.contexts import documents as context_documents, entities, loader, machines, people
 from rotbot.contexts.evidence import (
     ProjectDevelopmentEvidence,
     inspect_project_development_evidence,
@@ -58,11 +58,6 @@ PATH_PRIORITY = (
 MAX_TREE_ENTRIES = 100
 MAX_AGENT_OUTPUT_BYTES = 250_000
 MAX_REMOTES = 32
-INITIAL_VISION = (
-    "# Vision\n\n"
-    "<!-- Future ideas and vision for the growth of this project belong here. "
-    "Add each idea as a bullet point beginning with '-'. -->\n"
-)
 DOCUMENT_NOTES = {
     "identity": (
         "Stable facts about what this project is, its purpose, audience, and "
@@ -280,9 +275,7 @@ def _placeholder_documents(name, definition):
     paths = ", ".join(f"`{path}`" for path in source.required_paths)
     return {
         "identity": (
-            f"# {name}\n\n<!-- {DOCUMENT_NOTES['identity']} -->\n\n"
-            f"- {PLACEHOLDER_POINT}\n"
-            f"- This is the `{name}` project context.\n"
+            context_documents.render_identity(name, "project")
         ),
         "state": (
             f"# {name} State\n\n<!-- {DOCUMENT_NOTES['state']} -->\n\n"
@@ -478,7 +471,7 @@ def _add_person_context(name, role, display_name, related_projects=()):
     rot_continue(
         "Proposed files:\n\n"
         + "\n".join(
-            f"  {loader.CONTEXT_ROOT / 'contacts' / name / ('metadata.toml' if filename == 'metadata.toml' else 'local/' + filename)}"
+            f"  {loader.CONTEXT_ROOT / 'contacts' / name / filename}"
             for filename in files
         )
     )
@@ -528,7 +521,7 @@ def _add_machine_context(
     rot_continue(
         "Proposed files:\n\n"
         + "\n".join(
-            f"  {loader.CONTEXT_ROOT / 'machines' / name / ('metadata.toml' if filename == 'metadata.toml' else 'local/' + filename)}"
+            f"  {loader.CONTEXT_ROOT / 'machines' / name / filename}"
             for filename in files
         )
         + (
@@ -731,14 +724,19 @@ def _atomic_replace_documents(destination, expected, documents):
     replacements = {}
     try:
         for name in ("identity", "state"):
-            path = destination / "local" / f"{name}.md"
-            if path.is_symlink() or not path.is_file():
+            path = (
+                destination / "general" / "background.md"
+                if name == "identity"
+                else destination / "general" / "state.md"
+            )
+            if path.is_symlink() or (path.exists() and not path.is_file()):
                 raise ContextCreationError(f"Invalid project context document: {path.name}")
-            original = path.read_text(encoding="utf-8")
-            if original != expected[name]:
+            original = path.read_text(encoding="utf-8") if path.exists() else None
+            expected_content = None
+            if original != expected_content:
                 raise ContextCreationError(
                     f"Generated enrichment was not applied because {path.name} "
-                    "is no longer an unenriched placeholder."
+                    "is no longer in its expected pre-development state."
                 )
             originals[path] = original
             with tempfile.NamedTemporaryFile(
@@ -750,7 +748,8 @@ def _atomic_replace_documents(destination, expected, documents):
                 temporary.flush()
                 os.fsync(temporary.fileno())
             if os.name != "nt":
-                os.chmod(replacement, stat.S_IMODE(path.stat().st_mode))
+                mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+                os.chmod(replacement, mode)
             replacements[path] = replacement
         replaced = []
         try:
@@ -760,7 +759,10 @@ def _atomic_replace_documents(destination, expected, documents):
                 replacements[path] = None
         except OSError:
             for path in replaced:
-                path.write_text(originals[path], encoding="utf-8")
+                if originals[path] is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(originals[path], encoding="utf-8")
             raise
     except ContextCreationError:
         raise
@@ -831,18 +833,15 @@ def _create_and_bind(
         _write_document(
             destination / "metadata.toml", loader.render_project_metadata(name, context_id)
         )
-        local = destination / "local"
-        local.mkdir(mode=0o700)
-        (destination / "shareable").mkdir(mode=0o700)
+        (destination / "general").mkdir(mode=0o700)
+        (destination / "private").mkdir(mode=0o700)
         files = {
             "identity.md": documents["identity"],
-            "state.md": documents["state"],
-            "vision.md": INITIAL_VISION,
-            "match.toml": match_document,
-            "learned.md": "# Learned\n"
+            "relationships.toml": "",
+            "match.toml": match_document
         }
         for filename, content in files.items():
-            _write_document(local / filename, content)
+            _write_document(destination / filename, content)
 
         current_binding = get_context_binding(name, target_config)
         current_source = current_binding.get("source_path")
@@ -856,7 +855,6 @@ def _create_and_bind(
         saved_binding = get_context_binding(name, target_config).get("source_path")
         if (
             not loaded.identity.strip()
-            or not loaded.state.strip()
             or loaded_match != definition
             or not matched.strong
             or saved_binding != str(project)
@@ -955,17 +953,17 @@ def _add_project_context(args):
     rot_continue(
         "Proposed files:\n\n"
         f"  {destination / 'metadata.toml'}\n"
-        f"  {destination / 'local' / 'identity.md'}\n"
-        f"  {destination / 'local' / 'state.md'}\n"
-        f"  {destination / 'local' / 'vision.md'}\n"
-        f"  {destination / 'local' / 'match.toml'}\n\n"
+        f"  {destination / 'identity.md'}\n"
+        f"  {destination / 'relationships.toml'}\n"
+        f"  {destination / 'match.toml'}\n"
+        f"  {destination / 'general'}\n"
+        f"  {destination / 'private'}\n\n"
         "Local registration:\n\n"
         f"  {name}.source_path = {project}"
     )
     for filename, content in (
         ("identity.md", documents["identity"]),
-        ("state.md", documents["state"]),
-        ("vision.md", INITIAL_VISION),
+        ("relationships.toml", ""),
         ("match.toml", match_document)
     ):
         rot_say(f"PROPOSED {filename}")
@@ -1012,27 +1010,8 @@ def _add_project_context(args):
         return 1
 
     rot_say(
-        f"Context '{name}' created, validated, and its source path registered.\n"
-        "Attempting optional AI enrichment..."
+        f"Context '{name}' created, validated, and its source path registered."
     )
-    with tempfile.TemporaryDirectory(prefix="rotbot-context-agent-") as agent_directory:
-        operation = _build_context_development_operation(
-            name,
-            project,
-            remotes,
-            agent_directory,
-            getattr(args, "agent", None),
-            parent_command="context add"
-        )
-        enrichment_error = _enrich_project_context(operation)
-    if enrichment_error is not None:
-        rot_say(
-            f"AI enrichment warning:\n{enrichment_error}\n\n"
-            "The context remains usable. Retry with:\n"
-            f"  rot context develop {name}"
-        )
-    else:
-        rot_say(f"Project context '{name}' enriched successfully.")
     return 0
 
 

@@ -219,7 +219,7 @@ def sr_push(args):
 
 def sr_context(args):
     if getattr(args, "full", False):
-        return context_show(SimpleNamespace(name="signalrot", vision=False))
+        return context_show(SimpleNamespace(name="signalrot"))
     return show_signalrot_context()
 
 

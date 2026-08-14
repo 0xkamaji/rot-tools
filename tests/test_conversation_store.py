@@ -58,6 +58,10 @@ class ConversationStoreTests(unittest.TestCase):
         with patch.object(
             invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(
+            ai, "get_agent_trust", return_value="external"
+        ), patch.object(
             invocation, "build_ask_prompt", return_value="INITIAL"
         ), patch.object(
             invocation, "build_context_refresh_prompt", return_value="REFRESH"

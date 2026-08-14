@@ -36,7 +36,7 @@ def ai_context_preview(args):
         ("projects", inspected.project)
     )
     blocked_paths = tuple(
-        f"{category}/{name}/local/"
+        f"{category}/{name}/private/"
         for category, name in blocked
         if name is not None
     )
@@ -45,8 +45,8 @@ def ai_context_preview(args):
         "----------------------",
         preview,
         "",
-        "BLOCKED LOCAL CONTEXT PATHS (NOT SENT)",
-        "--------------------------------------",
+        "BLOCKED PRIVATE CONTEXT PATHS (NOT SENT)",
+        "----------------------------------------",
         *(blocked_paths or ("(none)",))
     ]
     rot_say("\n".join(lines))

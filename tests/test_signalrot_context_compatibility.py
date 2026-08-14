@@ -17,7 +17,7 @@ class SignalRotContextCompatibilityTests(unittest.TestCase):
         self.assertEqual(result, 6)
         shown_args = context_show.call_args.args[0]
         self.assertEqual(shown_args.name, "signalrot")
-        self.assertFalse(shown_args.vision)
+        self.assertFalse(hasattr(shown_args, "vision"))
 
     def test_summary_context_uses_specialized_display(self):
         with patch.object(signalrot, "show_signalrot_context", return_value=4) as show:

@@ -76,14 +76,17 @@ class PackageImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "contexts"
             project = root / "projects" / "rotbot"
-            local = project / "local"
-            local.mkdir(parents=True)
+            project.mkdir(parents=True)
             (project / "metadata.toml").write_text(
                 loader.render_project_metadata("rotbot"), encoding="utf-8"
             )
-            (local / "identity.md").write_text("identity", encoding="utf-8")
-            (local / "state.md").write_text("state", encoding="utf-8")
-            (local / "match.toml").write_text(
+            (project / "identity.md").write_text("identity", encoding="utf-8")
+            (project / "relationships.toml").write_text("", encoding="utf-8")
+            (project / "general").mkdir()
+            private = project / "private"
+            private.mkdir()
+            (private / "state.md").write_text("state", encoding="utf-8")
+            (project / "match.toml").write_text(
                 "[source]\n"
                 "is_git_repo = true\n"
                 'git_remotes = ["github.com/0xkamaji/rotbot"]\n'

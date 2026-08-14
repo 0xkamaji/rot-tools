@@ -1,6 +1,4 @@
-# Identity
-
-## Background
+# Background
 
 - RotBot is Kamaji's subservient and fiercely loyal companion, meticulously crafted from scraps of metal gathered throughout Kamaji's travels.
 

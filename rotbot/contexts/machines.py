@@ -16,16 +16,8 @@ from rotbot.contexts.identifiers import (
 )
 
 
-PORTABLE_FILENAMES = ("metadata.toml", "identity.md", "software.toml", "learned.md")
-IDENTITY_TEMPLATE = (
-    "# Identity\n\n"
-    "<!-- A general overview of this machine, its purpose, and its place in the larger computing environment. -->\n\n"
-    "## Purpose\n\n"
-    "<!-- What this machine is primarily used for. -->\n\n"
-    "## Environment\n\n"
-    "<!-- How this machine relates to other devices, projects, people, and workflows. -->\n\n"
-    "## Important Context\n\n"
-    "<!-- Useful information about the machine that does not fit naturally into structured metadata. -->\n"
+PORTABLE_FILENAMES = (
+    "metadata.toml", "identity.md", "relationships.toml", "machine.toml"
 )
 PORTABLE_SCALAR_FIELDS = (
     "device_type",
@@ -182,6 +174,11 @@ def render_machine_metadata(machine):
         f"name = {_toml_value(machine.name)}",
         f"display_name = {_toml_value(machine.display_name)}"
     ]
+    return "\n".join(lines) + "\n"
+
+
+def render_machine_facts(machine):
+    lines = []
     facts = machine.portable_facts
     for field in PORTABLE_SCALAR_FIELDS:
         if field in facts:
@@ -196,7 +193,7 @@ def render_machine_metadata(machine):
         lines.extend(("", "[[gpus]]"))
         for key, value in gpu.items():
             lines.append(f"{key} = {_toml_value(value)}")
-    metadata = "\n".join(lines) + "\n"
+    metadata = "\n".join(lines) + ("\n" if lines else "")
     try:
         tomllib.loads(metadata)
     except tomllib.TOMLDecodeError as error:
@@ -207,9 +204,11 @@ def render_machine_metadata(machine):
 def render_machine_files(machine):
     return {
         "metadata.toml": render_machine_metadata(machine),
-        "identity.md": IDENTITY_TEMPLATE,
-        "software.toml": "",
-        "learned.md": "# Learned\n"
+        "identity.md": documents.render_identity(
+            machine.name, "machine", machine.display_name
+        ),
+        "relationships.toml": documents.render_relationships(),
+        "machine.toml": render_machine_facts(machine)
     }
 
 
@@ -219,6 +218,10 @@ def _machines_root(machines_root=None, create=False):
         root.mkdir(parents=True, mode=0o700)
     if root.is_symlink() or not root.is_dir():
         raise MachineContextError(f"Invalid machine context directory: {root}")
+    try:
+        documents.recover_interrupted_migrations(root)
+    except documents.ContextDocumentError as error:
+        raise MachineContextError(str(error)) from None
     return root
 
 
@@ -226,8 +229,16 @@ def machine_context_directory(name, *, machines_root=None):
     name = _validate_identifier(name, "name")
     root = _machines_root(machines_root)
     directory = root / name
+    try:
+        documents.recover_interrupted_migration(directory)
+    except documents.ContextDocumentError as error:
+        raise MachineContextError(str(error)) from None
     if directory.is_symlink() or not directory.is_dir():
         raise MachineContextError(f"Unknown or invalid machine context: {name}")
+    try:
+        documents.ensure_structure(directory, "machine")
+    except documents.ContextDocumentError as error:
+        raise MachineContextError(str(error)) from None
     return directory
 
 
@@ -236,9 +247,7 @@ def _read_portable_files(name, directory):
     metadata_path = directory / "metadata.toml"
     paths = [metadata_path]
     try:
-        paths.extend(documents.semantic_files(
-            directory, "full", {"identity.md", "software.toml", "learned.md"}
-        ))
+        paths.extend((directory / "identity.md", directory / "relationships.toml", directory / "machine.toml"))
     except documents.ContextDocumentError as error:
         raise MachineContextError(str(error)) from None
     for path in paths:
@@ -260,6 +269,7 @@ def _read_portable_files(name, directory):
 def load_machine_context(name, *, machines_root=None):
     directory = machine_context_directory(name, machines_root=machines_root)
     metadata = tomllib.loads((directory / "metadata.toml").read_text(encoding="utf-8"))
+    facts_document = tomllib.loads((directory / "machine.toml").read_text(encoding="utf-8"))
     if (
         metadata.get("type") != "machine"
         or metadata.get("name") != name
@@ -267,9 +277,9 @@ def load_machine_context(name, *, machines_root=None):
     ):
         raise MachineContextError(f"Invalid machine metadata: {name}")
     facts = {
-        key: metadata[key]
+        key: facts_document[key]
         for key in (*PORTABLE_SCALAR_FIELDS, "cpu", "memory", "gpus")
-        if key in metadata
+        if key in facts_document
     }
     return build_machine_context(
         name,
@@ -282,12 +292,12 @@ def load_machine_context(name, *, machines_root=None):
 def load_machine_files(name, *, machines_root=None, view="full"):
     directory = machine_context_directory(name, machines_root=machines_root)
     machine = load_machine_context(name, machines_root=machines_root)
-    loaded = [MachineDocument("metadata.toml", (directory / "metadata.toml").read_text(encoding="utf-8"))]
+    loaded = [
+        MachineDocument("metadata.toml", (directory / "metadata.toml").read_text(encoding="utf-8")),
+        MachineDocument("machine.toml", (directory / "machine.toml").read_text(encoding="utf-8"))
+    ]
     try:
-        paths = documents.semantic_files(
-            directory, view, {"identity.md", "software.toml", "learned.md"},
-            include_legacy_local=view == "full"
-        )
+        paths = documents.semantic_files(directory, view)
     except documents.ContextDocumentError as error:
         raise MachineContextError(str(error)) from None
     loaded.extend(MachineDocument(path.name, path.read_text(encoding="utf-8")) for path in paths)
@@ -387,11 +397,11 @@ def create_machine(
         created = True
         _write_document(destination / "metadata.toml", files["metadata.toml"])
         created_files.append("metadata.toml")
-        local = destination / "local"
-        local.mkdir(mode=0o700)
-        (destination / "shareable").mkdir(mode=0o700)
-        for filename in ("identity.md", "software.toml", "learned.md"):
-            _write_document(local / filename, files[filename])
+        _write_document(destination / "identity.md", files["identity.md"])
+        _write_document(destination / "relationships.toml", files["relationships.toml"])
+        _write_document(destination / "machine.toml", files["machine.toml"])
+        (destination / "general").mkdir(mode=0o700)
+        (destination / "private").mkdir(mode=0o700)
     except BaseException as error:
         rollback_errors = ()
         if created:

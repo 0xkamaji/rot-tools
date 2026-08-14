@@ -6,7 +6,7 @@ from rotbot.ui.terminal import rot_say
 
 
 CONTEXT_CATEGORIES = ("users", "assistants", "machines", "projects", "contacts")
-PRIVACY_NAMESPACES = ("local", "shareable")
+PRIVACY_NAMESPACES = ("general", "private")
 
 
 class PrivacyInspectionError(Exception):

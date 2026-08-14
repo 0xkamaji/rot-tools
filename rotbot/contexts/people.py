@@ -5,7 +5,7 @@ import tomllib
 from typing import NamedTuple
 import shutil
 
-from rotbot.contexts import loader
+from rotbot.contexts import documents, loader
 from rotbot.contexts.identifiers import (
     ContextIdentifierError,
     legacy_context_id,
@@ -15,110 +15,6 @@ from rotbot.contexts.identifiers import (
 
 
 PERSON_ROLES = ("contact", "user", "assistant")
-CORE_TEMPLATES = {
-    "identity.md": (
-        "# Identity\n\n"
-        "<!-- Relatively stable information describing who this person is. -->\n\n"
-        "## Background\n\n"
-        "<!-- Occupation, education, location, personal history, and other relevant life context. -->\n\n"
-        "## Skills and Knowledge\n\n"
-        "<!-- Subjects this person understands and abilities they have developed. -->\n\n"
-        "## Interests\n\n"
-        "<!-- Hobbies, subjects, communities, and activities this person regularly cares about. -->\n\n"
-        "## Traits\n\n"
-        "<!-- Stable characteristics, tendencies, and qualities that are useful for understanding this person. -->\n\n"
-        "## Important Details\n\n"
-        "<!-- Significant facts about this person that should remain easy to find. -->\n\n"
-        "## Other\n\n"
-        "<!-- Relevant identity information that does not fit naturally into another section. -->\n"
-    ),
-    "preferences.md": (
-        "# Preferences\n\n"
-        "<!-- This person's preferences, habits, and preferred ways of communicating or working. -->\n\n"
-        "## Communication\n\n"
-        "<!-- Preferred tone, level of detail, communication methods, and conversational habits. -->\n\n"
-        "## Collaboration\n\n"
-        "<!-- How this person prefers to work with others, make decisions, review work, and receive feedback. -->\n\n"
-        "## Tools and Workflows\n\n"
-        "<!-- Preferred software, platforms, processes, and ways of organizing or completing work. -->\n\n"
-        "## Likes and Dislikes\n\n"
-        "<!-- Relevant tastes, aversions, favorites, and strong preferences. -->\n\n"
-        "## Accessibility and Accommodations\n\n"
-        "<!-- Accessibility needs, accommodations, or circumstances that should influence interactions and planning. -->\n\n"
-        "## Other\n\n"
-        "<!-- Relevant preferences that do not fit naturally into another section. -->\n"
-    ),
-    "relationship.md": (
-        "# Relationship\n\n"
-        "<!-- How this person relates to the active user and the context they share. -->\n\n"
-        "## Connection\n\n"
-        "<!-- How this person and the active user know one another and the nature of their relationship. -->\n\n"
-        "## Shared History\n\n"
-        "<!-- Important experiences, projects, events, or background shared by both people. -->\n\n"
-        "## Personal Dynamic\n\n"
-        "<!-- How the two people interact personally, including recurring patterns or useful interpersonal context. -->\n\n"
-        "## Working Dynamic\n\n"
-        "<!-- How the two people communicate, collaborate, divide work, review decisions, or solve problems together. -->\n\n"
-        "## Shared Responsibilities\n\n"
-        "<!-- Ongoing projects, obligations, commitments, or areas of responsibility involving both people. -->\n\n"
-        "## Boundaries\n\n"
-        "<!-- Relevant personal, professional, communication, or privacy boundaries within the relationship. -->\n\n"
-        "## Other\n\n"
-        "<!-- Relevant relationship information that does not fit naturally into another section. -->\n"
-    ),
-    "state.md": (
-        "# State\n\n"
-        "<!-- Current, temporary, or ongoing information involving this person. -->\n\n"
-        "## Current Circumstances\n\n"
-        "<!-- What is currently happening in this person's life, work, environment, or situation. -->\n\n"
-        "## Active Work\n\n"
-        "<!-- Projects, tasks, responsibilities, or problems currently receiving this person's attention. -->\n\n"
-        "## Upcoming\n\n"
-        "<!-- Planned events, deadlines, appointments, trips, or expected changes. -->\n\n"
-        "## Open Items\n\n"
-        "<!-- Pending decisions, unresolved questions, awaited responses, or incomplete matters. -->\n\n"
-        "## Recent Changes\n\n"
-        "<!-- Recent events or developments that affect the person's current context. -->\n\n"
-        "## Other\n\n"
-        "<!-- Current or temporary information that does not fit naturally into another section. -->\n"
-    )
-}
-USER_TEMPLATES = {
-    "experience.md": (
-        "# Experience\n\n"
-        "<!-- The user's accumulated knowledge, abilities, training, and practical experience. -->\n\n"
-        "## Professional\n\n"
-        "<!-- Roles, industries, responsibilities, accomplishments, and other professional experience. -->\n\n"
-        "## Technical\n\n"
-        "<!-- Experience with technologies, tools, systems, programming, engineering, or technical problem-solving. -->\n\n"
-        "## Creative\n\n"
-        "<!-- Experience with music, writing, photography, design, art, performance, or other creative practices. -->\n\n"
-        "## Practical\n\n"
-        "<!-- Hands-on skills, crafts, hobbies, outdoor abilities, maintenance skills, and other real-world capabilities. -->\n\n"
-        "## Education and Training\n\n"
-        "<!-- Formal education, certifications, courses, mentorship, and structured training. -->\n\n"
-        "## Learning\n\n"
-        "<!-- Subjects and skills the user is currently developing, including their present level of familiarity. -->\n\n"
-        "## Other\n\n"
-        "<!-- Relevant experience that does not fit naturally into another section. -->\n"
-    ),
-    "priorities.md": (
-        "# Priorities\n\n"
-        "<!-- The goals, responsibilities, constraints, and areas of focus that currently shape the user's decisions. -->\n\n"
-        "## Current Goals\n\n"
-        "<!-- Specific outcomes the user is actively trying to achieve. -->\n\n"
-        "## Ongoing Responsibilities\n\n"
-        "<!-- Recurring work, obligations, relationships, and areas that regularly require attention. -->\n\n"
-        "## Areas of Focus\n\n"
-        "<!-- Subjects, projects, or activities currently receiving significant time and energy. -->\n\n"
-        "## Constraints\n\n"
-        "<!-- Time, money, health, technical, logistical, or situational limitations that may affect recommendations and plans. -->\n\n"
-        "## Later\n\n"
-        "<!-- Ideas, projects, and goals worth retaining but not currently active. -->\n\n"
-        "## Other\n\n"
-        "<!-- Relevant priorities that do not fit naturally into another section. -->\n"
-    )
-}
 
 
 class PersonContextError(Exception):
@@ -164,6 +60,10 @@ def _canonical_contact_directory(name):
     except loader.ContextError as error:
         raise PersonContextError(str(error)) from None
     directory = _contacts_root() / name
+    try:
+        documents.recover_interrupted_migration(directory)
+    except documents.ContextDocumentError as error:
+        raise PersonContextError(str(error)) from None
     if directory.is_symlink() or not directory.is_dir():
         raise PersonContextError(f"Unknown or invalid person context: {name}")
     return directory
@@ -270,18 +170,13 @@ def render_person_files(person):
         "related_projects = "
         f"{json.dumps(list(person.related_projects), ensure_ascii=False)}\n"
     )
-    files = {"metadata.toml": metadata, **CORE_TEMPLATES, "learned.md": "# Learned\n"}
-    if person.role == "user":
-        files.update(USER_TEMPLATES)
-    return files
-
-
-def person_document_names(person):
-    return tuple(
-        filename
-        for filename in render_person_files(person)
-        if filename.endswith(".md")
-    )
+    return {
+        "metadata.toml": metadata,
+        "identity.md": documents.render_identity(
+            person.name, person.role, person.display_name
+        ),
+        "relationships.toml": documents.render_relationships(person.related_projects)
+    }
 
 
 def _strip_markdown_comment(line, in_comment):
@@ -349,48 +244,30 @@ def populated_markdown_sections(markdown, filename):
 
 
 def load_person_documents(name, *, people_root=None, view="full"):
-    if people_root is None:
-        person = load_person_context(name)
-        directory = person_context_directory(person)
-        documents = []
-        from rotbot.contexts import documents as context_documents
-        try:
-            paths = context_documents.semantic_files(
-                directory, view, set(person_document_names(person)),
-                include_legacy_local=view == "full"
-            )
-        except context_documents.ContextDocumentError as error:
-            raise PersonContextError(str(error)) from None
-        for path in paths:
-            content = path.read_text(encoding="utf-8")
-            documents.append(PersonDocument(
-                path.name, populated_markdown_sections(content, path.name)
-            ))
-        return person, tuple(documents)
-    root = _people_root(people_root)
+    root = _people_root(people_root) if people_root is not None else None
     person = load_person_context(name, people_root=root)
     directory = person_context_directory(person, people_root=root)
-    documents = []
-    for filename in person_document_names(person):
-        path = directory / filename
-        if path.is_symlink() or not path.is_file():
-            raise PersonContextError(f"Invalid person document: {name}/{filename}")
-        try:
+    loaded = []
+    try:
+        paths = documents.semantic_files(directory, view)
+        for path in paths:
             content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            raise PersonContextError(
-                f"Could not load person document '{name}/{filename}': {error}"
-            ) from None
-        documents.append(
-            PersonDocument(filename, populated_markdown_sections(content, filename))
-        )
-    return person, tuple(documents)
+            loaded.append(PersonDocument(
+                path.name, populated_markdown_sections(content, path.name)
+            ))
+    except (OSError, UnicodeError, documents.ContextDocumentError) as error:
+        raise PersonContextError(str(error)) from None
+    return person, tuple(loaded)
 
 
 def load_person_context(name, *, people_root=None):
     if people_root is None:
         directory = _canonical_contact_directory(name)
         directory_role = "contact"
+        try:
+            documents.ensure_structure(directory, directory_role)
+        except documents.ContextDocumentError as error:
+            raise PersonContextError(str(error)) from None
         metadata_path = directory / "metadata.toml"
         try:
             metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
@@ -408,6 +285,10 @@ def load_person_context(name, *, people_root=None):
         return person
     root = _people_root(people_root)
     directory_role, directory = _find_person_directory(name, root)
+    try:
+        documents.ensure_structure(directory, directory_role)
+    except documents.ContextDocumentError as error:
+        raise PersonContextError(str(error)) from None
     metadata_path = directory / "metadata.toml"
     if (
         directory.is_symlink()
@@ -454,6 +335,10 @@ def list_person_contexts(*, people_root=None):
             return ()
         if root.is_symlink() or not root.is_dir():
             raise PersonContextError(f"Invalid contact context directory: {root}")
+        try:
+            documents.recover_interrupted_migrations(root)
+        except documents.ContextDocumentError as error:
+            raise PersonContextError(str(error)) from None
         contexts = []
         for entry in root.iterdir():
             try:
@@ -505,20 +390,6 @@ def _write_document(path, content):
         os.chmod(path, 0o600)
 
 
-def _rollback_person(destination, filenames):
-    errors = []
-    for filename in filenames:
-        try:
-            (destination / filename).unlink(missing_ok=True)
-        except OSError as error:
-            errors.append(str(error))
-    try:
-        destination.rmdir()
-    except OSError as error:
-        errors.append(str(error))
-    return tuple(errors)
-
-
 def create_person_context(
     name,
     role,
@@ -548,11 +419,12 @@ def create_person_context(
         try:
             destination.mkdir(mode=0o700)
             _write_document(destination / "metadata.toml", files.pop("metadata.toml"))
-            local = destination / "local"
-            local.mkdir(mode=0o700)
-            (destination / "shareable").mkdir(mode=0o700)
-            for filename, content in files.items():
-                _write_document(local / filename, content)
+            _write_document(destination / "identity.md", files.pop("identity.md"))
+            _write_document(
+                destination / "relationships.toml", files.pop("relationships.toml")
+            )
+            (destination / "general").mkdir(mode=0o700)
+            (destination / "private").mkdir(mode=0o700)
         except BaseException as error:
             shutil.rmtree(destination, ignore_errors=True)
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
@@ -572,10 +444,20 @@ def create_person_context(
     try:
         destination.mkdir()
         created = True
-        for filename, content in files.items():
-            _write_document(destination / filename, content)
+        _write_document(destination / "metadata.toml", files.pop("metadata.toml"))
+        _write_document(destination / "identity.md", files.pop("identity.md"))
+        _write_document(
+            destination / "relationships.toml", files.pop("relationships.toml")
+        )
+        (destination / "general").mkdir(mode=0o700)
+        (destination / "private").mkdir(mode=0o700)
     except BaseException as error:
-        rollback_errors = _rollback_person(destination, files) if created else ()
+        rollback_errors = ()
+        if created:
+            try:
+                shutil.rmtree(destination)
+            except OSError as rollback_error:
+                rollback_errors = (str(rollback_error),)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
         message = f"Could not create person context '{person.name}': {error}"

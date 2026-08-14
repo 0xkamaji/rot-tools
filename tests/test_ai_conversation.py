@@ -41,6 +41,10 @@ class AIConversationTests(unittest.TestCase):
         with patch.object(
             invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(
+            ai, "get_agent_trust", return_value="external"
+        ), patch.object(
             invocation, "build_ask_prompt", return_value="INITIAL"
         ), patch.object(
             invocation, "build_context_refresh_prompt", return_value="REFRESH"
@@ -119,6 +123,8 @@ class AIConversationTests(unittest.TestCase):
         conversation = ai.AIConversation.create(backend)
 
         with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(ai, "get_agent_trust", return_value="external"), patch.object(
             invocation, "build_ask_prompt", return_value="INITIAL"
         ):
             conversation.send("First question", Mock(), Path("/work"))
@@ -147,6 +153,10 @@ class AIConversationTests(unittest.TestCase):
 
         with patch.object(
             invocation, "resolve_egress_context", side_effect=contexts
+        ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(
+            ai, "get_agent_trust", return_value="external"
         ), patch.object(
             invocation, "build_ask_prompt", return_value="INITIAL"
         ) as initial, patch.object(
@@ -178,6 +188,10 @@ class AIConversationTests(unittest.TestCase):
         with patch.object(
             invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(
+            ai, "get_agent_trust", return_value="external"
+        ), patch.object(
             invocation, "build_ask_prompt", return_value="COMPILED ROT CONTEXT"
         ):
             conversation.send("Why?", inspected, Path("/work"))
@@ -197,6 +211,8 @@ class AIConversationTests(unittest.TestCase):
         conversation = ai.AIConversation.create(backend)
 
         with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(ai, "get_agent_trust", return_value="external"), patch.object(
             invocation, "build_ask_prompt", return_value="CONTEXT"
         ):
             conversation.send("first", Mock(), Path("/old"), authority="TALK")
@@ -251,6 +267,10 @@ class AIConversationTests(unittest.TestCase):
         ) as builder, patch.object(
             invocation, "resolve_egress_context", return_value=Mock()
         ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(
+            ai, "get_agent_trust", return_value="external"
+        ), patch.object(
             invocation, "build_context_refresh_prompt", return_value="REFRESH"
         ):
             conversation.send("real next", Mock(), Path("/work"))
@@ -281,6 +301,8 @@ class AIConversationTests(unittest.TestCase):
             invocation, "resolve_provider", return_value=(invocation.OPENCODE, None)
         ), patch.object(
             invocation, "resolve_egress_context", return_value=context
+        ), patch.object(
+            invocation, "get_agent_trust", return_value="external"
         ):
             plan = invocation.prepare(request)
 
@@ -300,7 +322,8 @@ class AIConversationTests(unittest.TestCase):
         conversation = ai.AIConversation.create(backend)
         conversation.context_view = "full"
         conversation.context_fingerprint = "private-fingerprint"
-        request = conversation.build_request("external next", Mock(), Path("/work"))
+        with patch.object(ai, "get_agent_trust", return_value="external"):
+            request = conversation.build_request("external next", Mock(), Path("/work"))
 
         self.assertEqual(request.provider_state, ())
         self.assertIsNone(request.previous_context_fingerprint)

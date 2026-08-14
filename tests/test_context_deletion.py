@@ -33,11 +33,12 @@ class ContextDeletionTests(unittest.TestCase):
         (destination / "metadata.toml").write_text(
             loader.render_project_metadata(name), encoding="utf-8"
         )
-        local = destination / "local"
-        local.mkdir()
-        (destination / "shareable").mkdir()
-        (local / "identity.md").write_text("identity", encoding="utf-8")
-        (local / "state.md").write_text("state", encoding="utf-8")
+        (destination / "general").mkdir()
+        private = destination / "private"
+        private.mkdir()
+        (destination / "identity.md").write_text("identity", encoding="utf-8")
+        (destination / "relationships.toml").write_text("", encoding="utf-8")
+        (private / "state.md").write_text("state", encoding="utf-8")
         (destination / "marker.txt").write_text(marker, encoding="utf-8")
         return destination
 

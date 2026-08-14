@@ -9,7 +9,7 @@ from rotbot.contexts.paths import config_root, contexts_root, data_root
 
 
 LOCAL_SECRET = "ROT_LOCAL_SECRET_SENTINEL_93A7"
-SHAREABLE = "ROT_SHAREABLE_SENTINEL_A11C"
+GENERAL = "ROT_GENERAL_SENTINEL_A11C"
 
 
 class ContextPrivacyTests(unittest.TestCase):
@@ -30,11 +30,11 @@ class ContextPrivacyTests(unittest.TestCase):
             "kamaji", "Kamaji", context_id="497e5a65-9bcf-4ddb-90bc-d1d5535a8c63"
         )
         destination = entities.create_entity_context(user, root=self.contexts)
-        (destination / "local" / "experience.md").write_text(
+        (destination / "private" / "experience.md").write_text(
             f"# Experience\n\n## Private\n\n{LOCAL_SECRET}\n", encoding="utf-8"
         )
-        (destination / "shareable" / "experience.md").write_text(
-            f"# Experience\n\n## Public Egress\n\n{SHAREABLE}\n", encoding="utf-8"
+        (destination / "general" / "experience.md").write_text(
+            f"# Experience\n\n## Public Egress\n\n{GENERAL}\n", encoding="utf-8"
         )
         return user
 
@@ -49,7 +49,7 @@ class ContextPrivacyTests(unittest.TestCase):
         override = {**environment, "ROTBOT_CONTEXT_ROOT": str(self.root / "custom")}
         self.assertEqual(contexts_root(override), self.root / "custom")
 
-    def test_full_context_unions_namespaces_but_egress_is_allowlisted(self):
+    def test_full_context_unions_namespaces_but_egress_excludes_private(self):
         user = self.create_user()
 
         _user, full = entities.load_user_documents(user.id, root=self.contexts, view="full")
@@ -60,9 +60,9 @@ class ContextPrivacyTests(unittest.TestCase):
         egress_text = repr(egress)
 
         self.assertIn(LOCAL_SECRET, full_text)
-        self.assertIn(SHAREABLE, full_text)
+        self.assertIn(GENERAL, full_text)
         self.assertNotIn(LOCAL_SECRET, egress_text)
-        self.assertIn(SHAREABLE, egress_text)
+        self.assertIn(GENERAL, egress_text)
 
     def test_new_user_and_machine_are_created_in_external_context_root(self):
         (self.contexts / "machines").mkdir()
@@ -75,8 +75,8 @@ class ContextPrivacyTests(unittest.TestCase):
         self.assertEqual(user_path.parent, self.contexts / "users")
         self.assertEqual(machine_path.parent, self.contexts / "machines")
         self.assertNotIn(Path(__file__).resolve().parents[1], user_path.parents)
-        self.assertTrue((user_path / "local").is_dir())
-        self.assertTrue((machine_path / "local").is_dir())
+        self.assertTrue((user_path / "private").is_dir())
+        self.assertTrue((machine_path / "private").is_dir())
 
     def test_outbound_payload_excludes_local_semantics_config_paths_and_ids(self):
         user = self.create_user()
@@ -95,7 +95,7 @@ class ContextPrivacyTests(unittest.TestCase):
         payload = prompt.build_ask_prompt(context, "question")
 
         self.assertIn("Name: Kamaji", payload)
-        self.assertIn(SHAREABLE, payload)
+        self.assertIn(GENERAL, payload)
         self.assertNotIn(LOCAL_SECRET, payload)
         self.assertNotIn(user.id, payload)
         self.assertNotIn("/private/worktree", payload)

@@ -22,13 +22,13 @@ class PrivacyCommandTests(unittest.TestCase):
 
     def test_privacy_inspect_lists_filenames_without_secret_contents(self):
         context = self.root / "rotbot" / "contexts" / "users" / "kamaji"
-        (context / "local").mkdir(parents=True)
-        (context / "shareable").mkdir()
-        (context / "local" / "secrets.md").write_text(
+        (context / "private").mkdir(parents=True)
+        (context / "general").mkdir()
+        (context / "private" / "secrets.md").write_text(
             "do-not-print-this-secret", encoding="utf-8"
         )
-        (context / "shareable" / "identity.md").write_text(
-            "shareable-content-must-not-be-read", encoding="utf-8"
+        (context / "general" / "profile.md").write_text(
+            "general-content-must-not-be-read", encoding="utf-8"
         )
 
         with patch.object(
@@ -39,9 +39,9 @@ class PrivacyCommandTests(unittest.TestCase):
         self.assertEqual(result, 0)
         rendered = say.call_args.args[0]
         self.assertIn("secrets.md", rendered)
-        self.assertIn("identity.md", rendered)
+        self.assertIn("profile.md", rendered)
         self.assertNotIn("do-not-print-this-secret", rendered)
-        self.assertNotIn("shareable-content-must-not-be-read", rendered)
+        self.assertNotIn("general-content-must-not-be-read", rendered)
         self.assertIn("Machine-local config: excluded", rendered)
         for category in ("USERS", "ASSISTANTS", "MACHINES", "PROJECTS", "CONTACTS"):
             self.assertIn(category, rendered)
@@ -58,7 +58,7 @@ class PrivacyCommandTests(unittest.TestCase):
         ) as inspect, patch.object(
             ai.prompt, "resolve_egress_context", return_value=resolved
         ) as resolve, patch.object(
-            ai.prompt, "_context_blocks", return_value=["SHAREABLE PREVIEW"]
+            ai.prompt, "_context_blocks", return_value=["GENERAL EGRESS PREVIEW"]
         ), patch.object(ai, "rot_say") as say, patch(
             "rotbot.agents.runner.ask_agent"
         ) as backend, patch.object(socket, "create_connection") as network:
@@ -71,11 +71,11 @@ class PrivacyCommandTests(unittest.TestCase):
         network.assert_not_called()
         rendered = say.call_args.args[0]
         self.assertIn("ROT AI CONTEXT PREVIEW", rendered)
-        self.assertIn("SHAREABLE PREVIEW", rendered)
-        self.assertIn("assistants/rot/local/", rendered)
-        self.assertIn("users/kamaji/local/", rendered)
-        self.assertIn("machines/laptop/local/", rendered)
-        self.assertIn("projects/rotbot/local/", rendered)
+        self.assertIn("GENERAL EGRESS PREVIEW", rendered)
+        self.assertIn("assistants/rot/private/", rendered)
+        self.assertIn("users/kamaji/private/", rendered)
+        self.assertIn("machines/laptop/private/", rendered)
+        self.assertIn("projects/rotbot/private/", rendered)
 
     def test_parser_routes_and_scoped_help(self):
         self.assertIs(command_parser.parse_args(["ai", "context", "preview"]).func, ai.ai_context_preview)

@@ -49,13 +49,17 @@ class ContextLoaderTests(unittest.TestCase):
     ):
         directory = self.projects / name
         directory.mkdir()
-        local = directory / "local"
-        local.mkdir()
-        (directory / "shareable").mkdir()
-        (local / "identity.md").write_text(identity, encoding="utf-8")
-        (local / "state.md").write_text(state, encoding="utf-8")
+        (directory / "metadata.toml").write_text(
+            contexts.render_project_metadata(name), encoding="utf-8"
+        )
+        (directory / "general").mkdir()
+        private = directory / "private"
+        private.mkdir()
+        (directory / "identity.md").write_text(identity, encoding="utf-8")
+        (directory / "relationships.toml").write_text("", encoding="utf-8")
+        (private / "state.md").write_text(state, encoding="utf-8")
         if vision is not MISSING:
-            (local / "vision.md").write_text(vision, encoding="utf-8")
+            (private / "vision.md").write_text(vision, encoding="utf-8")
         return directory
 
     def test_list_contexts_discovers_valid_directories_in_sorted_order(self):
@@ -63,7 +67,7 @@ class ContextLoaderTests(unittest.TestCase):
         self.create_context("alpha")
         (self.projects / "ordinary.txt").write_text("ignored", encoding="utf-8")
         (self.projects / "missing-state").mkdir()
-        self.create_context(".hidden")
+        (self.projects / ".hidden").mkdir()
 
         self.assertEqual(contexts.list_contexts(), ("alpha", "zeta"))
 
@@ -73,10 +77,10 @@ class ContextLoaderTests(unittest.TestCase):
         category.mkdir(parents=True)
         directory = category / "outsider"
         directory.mkdir()
-        local = directory / "local"
-        local.mkdir()
-        (local / "identity.md").write_text("identity", encoding="utf-8")
-        (local / "state.md").write_text("state", encoding="utf-8")
+        (directory / "general").mkdir()
+        (directory / "private").mkdir()
+        (directory / "identity.md").write_text("identity", encoding="utf-8")
+        (directory / "relationships.toml").write_text("", encoding="utf-8")
 
         self.assertEqual(contexts.list_contexts(), ())
         with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
@@ -142,7 +146,7 @@ class ContextLoaderTests(unittest.TestCase):
 
         self.assertEqual(loaded.name, "example")
 
-    def test_build_context_prompt_includes_both_files_as_read_only(self):
+    def test_build_context_prompt_includes_identity_and_knowledge_as_read_only(self):
         self.create_context(
             "example",
             "identity text",
@@ -154,37 +158,34 @@ class ContextLoaderTests(unittest.TestCase):
 
         self.assertIn("EXAMPLE CONTEXT IDENTITY (READ-ONLY)", prompt)
         self.assertIn("identity text", prompt)
-        self.assertIn("EXAMPLE CONTEXT STATE (READ-ONLY)", prompt)
+        self.assertIn("EXAMPLE CONTEXT KNOWLEDGE (READ-ONLY)", prompt)
         self.assertIn("state text", prompt)
-        self.assertNotIn("vision text", prompt)
+        self.assertIn("[private/state.md]", prompt)
+        self.assertIn("[private/vision.md]", prompt)
 
-    def test_load_context_does_not_read_or_return_vision(self):
-        directory = self.create_context("example", "identity", "state")
-        (directory / "local" / "vision.md").write_bytes(b"\xff")
+    def test_load_context_discovers_vision_by_selected_view(self):
+        directory = self.create_context("example", vision="private vision")
+        (directory / "general" / "vision.md").write_text(
+            "general vision", encoding="utf-8"
+        )
 
-        loaded = contexts.load_context("example")
+        full = contexts.load_context("example", view="full")
+        egress = contexts.load_context("example", view="egress")
 
-        self.assertEqual((loaded.name, loaded.identity, loaded.state), (
-            "example", "identity\n", "state\n"
-        ))
-        self.assertIsNotNone(loaded.id)
-        self.assertFalse(hasattr(loaded, "vision"))
-
-    def test_load_vision_distinguishes_present_missing_and_empty(self):
-        self.create_context("present", vision="possible future")
-        self.create_context("missing")
-        self.create_context("empty", vision="")
-
-        self.assertEqual(contexts.load_vision("present"), "possible future")
-        self.assertIsNone(contexts.load_vision("missing"))
-        self.assertEqual(contexts.load_vision("empty"), "")
-
-    def test_load_vision_does_not_read_identity_or_state(self):
-        directory = self.create_context("example", vision="vision only")
-        (directory / "local" / "identity.md").write_bytes(b"\xff")
-        (directory / "local" / "state.md").write_bytes(b"\xff")
-
-        self.assertEqual(contexts.load_vision("example"), "vision only")
+        self.assertIn(
+            contexts.ProjectDocument("vision.md", "general", "general vision"),
+            full.knowledge
+        )
+        self.assertIn(
+            contexts.ProjectDocument("vision.md", "private", "private vision"),
+            full.knowledge
+        )
+        self.assertEqual(
+            tuple(document for document in egress.knowledge
+                  if document.filename == "vision.md"),
+            (contexts.ProjectDocument("vision.md", "general", "general vision"),)
+        )
+        self.assertFalse(hasattr(full, "vision"))
 
     def test_load_context_rejects_invalid_and_unknown_names(self):
         for name in (
@@ -197,36 +198,31 @@ class ContextLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
             contexts.load_context("does-not-exist")
 
-    def test_load_vision_rejects_invalid_and_unknown_names(self):
-        for name in ("../outside", "/tmp/outside", "nested/context", "."):
-            with self.subTest(name=name), self.assertRaises(contexts.ContextError):
-                contexts.load_vision(name)
-
-        with self.assertRaisesRegex(contexts.ContextError, "Unknown or invalid"):
-            contexts.load_vision("does-not-exist")
-
     def test_list_and_load_reject_context_symlink_outside_root(self):
         outside = Path(self.temporary_directory.name) / "outside"
         outside.mkdir()
-        local = outside / "local"
-        local.mkdir()
-        (local / "identity.md").write_text("identity", encoding="utf-8")
-        (local / "state.md").write_text("state", encoding="utf-8")
+        (outside / "general").mkdir()
+        (outside / "private").mkdir()
+        (outside / "metadata.toml").write_text(
+            contexts.render_project_metadata("linked"), encoding="utf-8"
+        )
+        (outside / "identity.md").write_text("identity", encoding="utf-8")
+        (outside / "relationships.toml").write_text("", encoding="utf-8")
         (self.projects / "linked").symlink_to(outside, target_is_directory=True)
 
         self.assertEqual(contexts.list_contexts(), ())
         with self.assertRaises(contexts.ContextError):
             contexts.load_context("linked")
 
-    def test_load_vision_rejects_symlink_outside_context(self):
+    def test_load_context_rejects_symlinked_vision_knowledge(self):
         directory = self.create_context("example")
         outside = Path(self.temporary_directory.name) / "outside-vision.md"
         outside.write_text("outside vision", encoding="utf-8")
-        (directory / "local" / "vision.md").symlink_to(outside)
+        (directory / "private" / "vision.md").symlink_to(outside)
 
         self.assertEqual(contexts.list_contexts(), ("example",))
-        with self.assertRaisesRegex(contexts.ContextError, "Invalid vision"):
-            contexts.load_vision("example")
+        with self.assertRaisesRegex(contexts.ContextError, "Invalid knowledge document"):
+            contexts.load_context("example")
 
     def test_show_handler_displays_loaded_files_without_modifying_them(self):
         directory = self.create_context("example", "identity", "state")
@@ -242,11 +238,11 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertIn("identity", rot_continue.call_args.args[0])
         self.assertIn("state", rot_continue.call_args.args[0])
         self.assertEqual(
-            (directory / "local" / "identity.md").read_text(encoding="utf-8"),
+            (directory / "identity.md").read_text(encoding="utf-8"),
             "identity"
         )
         self.assertEqual(
-            (directory / "local" / "state.md").read_text(encoding="utf-8"),
+            (directory / "private" / "state.md").read_text(encoding="utf-8"),
             "state"
         )
 
@@ -261,14 +257,9 @@ class ContextLoaderTests(unittest.TestCase):
         destination = people.create_person_context(
             "alex", "contact", "Alex Example"
         )
-        identity = destination / "local" / "identity.md"
+        identity = destination / "private" / "biography.md"
         identity.write_text(
-            identity.read_text(encoding="utf-8").replace(
-                "<!-- Occupation, education, location, personal history, and "
-                "other relevant life context. -->",
-                "<!-- Occupation, education, location, personal history, and "
-                "other relevant life context. -->\n\n- Grew up near the coast."
-            ),
+            "# Biography\n\n## Background\n\n- Grew up near the coast.\n",
             encoding="utf-8"
         )
 
@@ -276,9 +267,7 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_continue"
         ) as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name="alex", vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name="alex"))
 
         self.assertEqual(result, 0)
         self.assertIn("PERSON CONTEXT: alex (Alex Example)", rot_say.call_args.args[0])
@@ -302,15 +291,14 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_continue"
         ) as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name="alex", vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name="alex"))
 
         self.assertEqual(result, 0)
         output = rot_continue.call_args.args[0]
         self.assertIn("METADATA (metadata.toml; read-only)", output)
         self.assertIn("related_projects = []", output)
-        self.assertTrue(output.endswith("(no recorded information)"))
+        self.assertIn("IDENTITY (identity.md; read-only)", output)
+        self.assertIn("Person known to the RotBot user", output)
 
     def test_machine_show_loads_only_portable_files(self):
         destination = machines.create_machine(
@@ -332,9 +320,7 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_continue"
         ) as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name="desktop", vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name="desktop"))
 
         self.assertEqual(result, 0)
         self.assertIn("MACHINE CONTEXT: desktop", rot_say.call_args.args[0])
@@ -343,17 +329,6 @@ class ContextLoaderTests(unittest.TestCase):
         self.assertNotIn("private-host-sentinel", output)
         load_local.assert_not_called()
 
-    def test_machine_vision_is_rejected(self):
-        machines.create_machine("desktop", machines_root=self.machines)
-
-        with patch.object(contexts, "rot_say") as rot_say:
-            result = contexts.context_show(
-                argparse.Namespace(name="desktop", vision=True)
-            )
-
-        self.assertEqual(result, 1)
-        self.assertIn("only supported for project", rot_say.call_args.args[0])
-
     def test_show_without_name_lists_typed_contexts_and_uses_selection(self):
         self.create_context("alpha")
         people.create_person_context("alex", "contact", "Alex")
@@ -361,9 +336,7 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_say"
         ) as rot_say, patch.object(contexts, "rot_continue") as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name=None, vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name=None))
 
         self.assertEqual(result, 0)
         self.assertTrue(any(
@@ -371,9 +344,7 @@ class ContextLoaderTests(unittest.TestCase):
             and "2. contact: alex" in call.args[0]
             for call in rot_say.call_args_list
         ))
-        self.assertTrue(
-            rot_continue.call_args.args[0].endswith("(no recorded information)")
-        )
+        self.assertIn("Person known to the RotBot user", rot_continue.call_args.args[0])
 
     def test_show_without_name_can_display_current_session_read_only(self):
         from rotbot.contexts import inspection
@@ -401,29 +372,12 @@ class ContextLoaderTests(unittest.TestCase):
             "inspect_current_context",
             return_value=inspected
         ) as inspect, patch.object(contexts, "rot_say") as rot_say:
-            result = contexts.context_show(
-                argparse.Namespace(name=None, vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name=None))
 
         self.assertEqual(result, 0)
         inspect.assert_called_once_with(bootstrap=False)
         self.assertIn("CURRENT ROTBOT CONTEXT", rot_say.call_args.args[0])
         self.assertIn("Project:    rotbot", rot_say.call_args.args[0])
-
-    def test_current_session_show_rejects_vision_without_inspection(self):
-        from rotbot.contexts import inspection
-
-        with patch("builtins.input", return_value="1"), patch.object(
-            inspection,
-            "inspect_current_context"
-        ) as inspect, patch.object(contexts, "rot_say") as rot_say:
-            result = contexts.context_show(
-                argparse.Namespace(name=None, vision=True)
-            )
-
-        self.assertEqual(result, 1)
-        inspect.assert_not_called()
-        self.assertIn("saved project context", rot_say.call_args.args[0])
 
     def test_show_selection_menu_can_exit_without_displaying(self):
         self.create_context("alpha")
@@ -435,9 +389,7 @@ class ContextLoaderTests(unittest.TestCase):
                 contexts,
                 "rot_continue"
             ) as rot_continue:
-                result = contexts.context_show(
-                    argparse.Namespace(name=None, vision=False)
-                )
+                result = contexts.context_show(argparse.Namespace(name=None))
 
             self.assertEqual(result, 0)
             rot_continue.assert_not_called()
@@ -447,33 +399,22 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_say"
         ) as rot_say:
-            result = contexts.context_show(
-                argparse.Namespace(name=None, vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name=None))
 
         self.assertEqual(result, 1)
         self.assertIn("No saved contexts", rot_say.call_args.args[0])
 
-    def test_show_rejects_ambiguous_name_and_person_vision(self):
+    def test_show_rejects_ambiguous_name(self):
         self.create_context("shared")
         people.create_person_context("shared", "contact", "Shared")
         machines.create_machine("shared", machines_root=self.machines)
-        people.create_person_context("alex", "contact", "Alex")
         with patch.object(contexts, "rot_say") as rot_say:
-            ambiguous = contexts.context_show(
-                argparse.Namespace(name="shared", vision=False)
-            )
-            ambiguous_message = rot_say.call_args.args[0]
-            person_vision = contexts.context_show(
-                argparse.Namespace(name="alex", vision=True)
-            )
+            result = contexts.context_show(argparse.Namespace(name="shared"))
 
-        self.assertEqual(ambiguous, 1)
-        self.assertIn("ambiguous", ambiguous_message)
-        self.assertEqual(person_vision, 1)
-        self.assertIn("only supported for project", rot_say.call_args.args[0])
+        self.assertEqual(result, 1)
+        self.assertIn("ambiguous", rot_say.call_args.args[0])
 
-    def test_standard_show_excludes_vision_when_present(self):
+    def test_standard_show_includes_dynamically_discovered_vision(self):
         self.create_context(
             "example",
             identity="unique identity",
@@ -485,68 +426,14 @@ class ContextLoaderTests(unittest.TestCase):
             contexts,
             "rot_continue"
         ) as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name="example", vision=False)
-            )
+            result = contexts.context_show(argparse.Namespace(name="example"))
 
         self.assertEqual(result, 0)
         output = rot_continue.call_args.args[0]
         self.assertIn("unique identity", output)
         self.assertIn("unique state", output)
-        self.assertNotIn("unique vision", output)
-
-    def test_vision_show_excludes_standard_context_and_includes_warning(self):
-        self.create_context(
-            "example",
-            identity="unique identity",
-            state="unique state content",
-            vision="unique vision"
-        )
-
-        with patch.object(contexts, "rot_say") as rot_say, patch.object(
-            contexts,
-            "rot_continue"
-        ) as rot_continue:
-            result = contexts.context_show(
-                argparse.Namespace(name="example", vision=True)
-            )
-
-        self.assertEqual(result, 0)
-        self.assertIn("VISION", rot_say.call_args.args[0])
-        output = rot_continue.call_args.args[0]
         self.assertIn("unique vision", output)
-        self.assertNotIn("unique identity", output)
-        self.assertNotIn("unique state content", output)
-        self.assertIn("possible future direction", output)
-        self.assertIn("not current state", output)
-        self.assertIn("approved requirement", output)
-        self.assertIn("authorization to implement", output)
-
-    def test_vision_show_treats_missing_as_nonfatal_and_empty_as_present(self):
-        self.create_context("missing")
-        self.create_context("empty", vision="")
-
-        with patch.object(contexts, "rot_say") as rot_say, patch.object(
-            contexts,
-            "rot_continue"
-        ) as rot_continue:
-            missing_result = contexts.context_show(
-                argparse.Namespace(name="missing", vision=True)
-            )
-            missing_message = rot_say.call_args.args[0]
-            rot_say.reset_mock()
-            empty_result = contexts.context_show(
-                argparse.Namespace(name="empty", vision=True)
-            )
-
-        self.assertEqual(missing_result, 0)
-        self.assertEqual(
-            missing_message,
-            "No vision document exists for context 'missing'."
-        )
-        self.assertEqual(empty_result, 0)
-        self.assertIn("VISION", rot_say.call_args.args[0])
-        self.assertEqual(rot_continue.call_count, 1)
+        self.assertIn("private/vision.md", output)
 
     def test_generic_context_operations_do_not_invoke_agents_or_modify_files(self):
         directory = self.create_context("example", "identity", "state", "vision")
@@ -561,10 +448,8 @@ class ContextLoaderTests(unittest.TestCase):
         ), patch.object(contexts, "rot_continue"):
             contexts.list_contexts()
             contexts.load_context("example")
-            contexts.load_vision("example")
             contexts.build_context_prompt("example")
-            contexts.context_show(argparse.Namespace(name="example", vision=False))
-            contexts.context_show(argparse.Namespace(name="example", vision=True))
+            contexts.context_show(argparse.Namespace(name="example"))
 
         stream_agent.assert_not_called()
         after = {

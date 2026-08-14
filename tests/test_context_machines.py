@@ -20,17 +20,22 @@ class MachineContextTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def test_creation_writes_exact_three_portable_files(self):
+    def test_creation_writes_canonical_machine_layout(self):
         destination = machines.create_machine(
             "desktop", "Main Desktop", machines_root=self.machines_root
         )
 
         self.assertEqual(
             {path.name for path in destination.iterdir()},
-            {"metadata.toml", "local", "shareable"}
+            {
+                "metadata.toml", "identity.md", "relationships.toml",
+                "machine.toml", "general", "private"
+            }
         )
+        self.assertEqual(tuple((destination / "general").iterdir()), ())
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
 
-    def test_metadata_serializes_normalized_portable_facts(self):
+    def test_machine_document_serializes_normalized_portable_facts(self):
         facts = {
             "device_type": "desktop",
             "operating_system": "CachyOS",
@@ -60,9 +65,12 @@ class MachineContextTests(unittest.TestCase):
             "type": "machine",
             "id": metadata["id"],
             "name": "desktop",
-            "display_name": "Main Desktop",
-            **facts
+            "display_name": "Main Desktop"
         })
+        self.assertEqual(
+            tomllib.loads((destination / "machine.toml").read_text(encoding="utf-8")),
+            facts
+        )
 
     def test_minimal_metadata_omits_unknown_values(self):
         destination = machines.create_machine(
@@ -80,24 +88,18 @@ class MachineContextTests(unittest.TestCase):
         })
         self.assertNotIn("unknown", (destination / "metadata.toml").read_text())
 
-    def test_identity_and_software_templates_are_natural_and_valid(self):
+    def test_rendered_files_have_canonical_identity_relationships_and_machine_facts(self):
         files = machines.render_machine_files(
             machines.build_machine_context("desktop", "Desktop")
         )
 
         identity = files["identity.md"]
-        for heading in (
-            "# Identity",
-            "## Purpose",
-            "## Environment",
-            "## Important Context"
-        ):
-            self.assertIn(heading, identity)
-        self.assertIn("<!-- A general overview of this machine", identity)
-        self.assertIn("<!-- Useful information about the machine", identity)
-        self.assertEqual(tomllib.loads(files["software.toml"]), {})
+        self.assertIn("# Desktop", identity)
+        self.assertIn("Machine known to RotBot.", identity)
+        self.assertEqual(tomllib.loads(files["relationships.toml"]), {})
+        self.assertEqual(tomllib.loads(files["machine.toml"]), {})
 
-    def test_loader_accepts_freeform_identity_and_ordered_software(self):
+    def test_loader_accepts_freeform_identity_and_dynamic_markdown(self):
         destination = machines.create_machine(
             "desktop", machines_root=self.machines_root
         )
@@ -105,9 +107,8 @@ class MachineContextTests(unittest.TestCase):
             "Manually edited without template headings.\n",
             encoding="utf-8"
         )
-        (destination / "software.toml").write_text(
-            '[[software]]\nname = "Ollama"\ncategory = "local-ai"\n\n'
-            '[[software]]\nname = "OpenCode"\ncategory = "development"\n',
+        (destination / "general" / "software.md").write_text(
+            "# Software\n\n## Tools\n\n1. Ollama\n2. OpenCode\n",
             encoding="utf-8"
         )
 
@@ -117,8 +118,7 @@ class MachineContextTests(unittest.TestCase):
 
         self.assertEqual(machine.name, "desktop")
         content = {document.filename: document.content for document in documents}
-        software = tomllib.loads(content["software.toml"])["software"]
-        self.assertEqual([entry["name"] for entry in software], ["Ollama", "OpenCode"])
+        self.assertIn("1. Ollama\n2. OpenCode", content["software.md"])
         self.assertIn("without template headings", content["identity.md"])
 
     def test_listing_discovers_only_valid_machine_contexts(self):

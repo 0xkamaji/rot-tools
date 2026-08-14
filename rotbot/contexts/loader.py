@@ -31,6 +31,14 @@ class Context(NamedTuple):
     state: str
     id: str | None = None
     learned: str = ""
+    knowledge: tuple = ()
+    relationships: tuple = ()
+
+
+class ProjectDocument(NamedTuple):
+    filename: str
+    disclosure: str
+    content: str
 
 
 def validate_context_name(name):
@@ -58,17 +66,12 @@ def project_context_directory(name):
 
 
 def _existing_project_document(directory, filename):
-    candidates = (
-        directory / "local" / filename,
-        directory / "shareable" / filename,
-        directory / filename
-    )
-    for path in candidates:
-        if path.is_symlink():
-            raise ContextError(f"Invalid {filename.removesuffix('.md')} document for context: {directory.name}")
-        if path.is_file():
-            return path
-    return candidates[0]
+    path = directory / filename
+    if path.is_symlink():
+        raise ContextError(
+            f"Invalid {filename.removesuffix('.md')} document for context: {directory.name}"
+        )
+    return path
 
 
 def context_paths(name):
@@ -76,8 +79,11 @@ def context_paths(name):
     category = CONTEXT_ROOT / PROJECT_CONTEXT_CATEGORY
     directory = project_context_directory(name)
     try:
+        documents.recover_interrupted_migration(directory)
         resolved_category = category.resolve(strict=True)
         resolved_directory = directory.resolve(strict=True)
+    except documents.ContextDocumentError as error:
+        raise ContextError(str(error)) from None
     except OSError:
         raise ContextError(f"Unknown or invalid context: {name}") from None
 
@@ -90,12 +96,14 @@ def context_paths(name):
         or resolved_directory.parent != resolved_category
     ):
         raise ContextError(f"Unknown or invalid context: {name}")
-
-    identity_path = _existing_project_document(resolved_directory, "identity.md")
-    state_path = _existing_project_document(resolved_directory, "state.md")
-    if not identity_path.is_file() or not state_path.is_file():
+    try:
+        documents.ensure_structure(resolved_directory, "project")
+    except documents.ContextDocumentError as error:
+        raise ContextError(str(error)) from None
+    identity_path = resolved_directory / "identity.md"
+    if not identity_path.is_file():
         raise ContextError(f"Unknown or invalid context: {name}")
-    return identity_path, state_path
+    return identity_path, resolved_directory / "private" / "state.md"
 
 
 def _context_paths(name):
@@ -107,8 +115,9 @@ def list_contexts():
     if not category.exists():
         return ()
     try:
+        documents.recover_interrupted_migrations(category)
         entries = tuple(category.iterdir())
-    except OSError as error:
+    except (OSError, documents.ContextDocumentError) as error:
         raise ContextError(f"Could not list contexts: {error}") from None
 
     names = []
@@ -121,26 +130,9 @@ def list_contexts():
     return tuple(sorted(names))
 
 
-def _project_content(directory, filename, view):
-    try:
-        paths = documents.semantic_files(
-            directory, view,
-            {"identity.md", "state.md", "vision.md", "match.md", "match.toml", "learned.md"},
-            include_legacy_local=view == "full"
-        )
-    except documents.ContextDocumentError as error:
-        raise ContextError(str(error)) from None
-    values = [path.read_text(encoding="utf-8") for path in paths if path.name == filename]
-    return "\n\n".join(value.rstrip() for value in values if value.strip()) + (
-        "\n" if any(value.strip() for value in values) else ""
-    )
-
-
 def load_context(name, *, view="full"):
     identity_path, _state_path = context_paths(name)
     directory = identity_path.parent
-    if directory.name in {"local", "shareable"}:
-        directory = directory.parent
     metadata_path = directory / "metadata.toml"
     try:
         if metadata_path.exists():
@@ -152,14 +144,36 @@ def load_context(name, *, view="full"):
             context_id = validate_context_id(metadata.get("id"))
         else:
             context_id = legacy_context_id("project", name)
+        semantic_paths = documents.semantic_files(directory, view)
+        knowledge = tuple(
+            ProjectDocument(
+                path.name,
+                "identity" if path.parent == directory else path.parent.name,
+                path.read_text(encoding="utf-8")
+            )
+            for path in semantic_paths
+        )
+        state = next(
+            (item.content for item in reversed(knowledge) if item.filename == "state.md"),
+            ""
+        )
+        learned = next(
+            (item.content for item in reversed(knowledge) if item.filename == "learned.md"),
+            ""
+        )
         return Context(
             name=name,
-            identity=_project_content(directory, "identity.md", view),
-            state=_project_content(directory, "state.md", view),
+            identity=(directory / "identity.md").read_text(encoding="utf-8"),
+            state=state,
             id=context_id,
-            learned=_project_content(directory, "learned.md", view)
+            learned=learned,
+            knowledge=knowledge,
+            relationships=documents.load_relationships(directory)
         )
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError, ContextIdentifierError) as error:
+    except (
+        OSError, UnicodeError, tomllib.TOMLDecodeError, ContextIdentifierError,
+        documents.ContextDocumentError
+    ) as error:
         raise ContextError(f"Could not load context '{name}': {error}") from None
 
 
@@ -176,26 +190,6 @@ def load_context_reference(reference):
     return matches[0]
 
 
-def load_vision(name):
-    identity_path, _state_path = context_paths(name)
-    directory = identity_path.parent
-    if directory.name in {"local", "shareable"}:
-        directory = directory.parent
-    paths = [
-        path for path in (
-            directory / "shareable" / "vision.md",
-            directory / "local" / "vision.md",
-            directory / "vision.md"
-        ) if path.exists() or path.is_symlink()
-    ]
-    if not paths:
-        return None
-    for path in paths:
-        if path.is_symlink() or not path.is_file():
-            raise ContextError(f"Invalid vision document for context: {name}")
-    return "\n\n".join(path.read_text(encoding="utf-8").rstrip() for path in paths)
-
-
 def build_context_prompt(name, *, view="full"):
     context = load_context(name, view=view)
     label = context.name.upper()
@@ -203,18 +197,21 @@ def build_context_prompt(name, *, view="full"):
         f"{label} CONTEXT IDENTITY (READ-ONLY)\n"
         "--------------------------------------\n"
         f"{context.identity}\n\n"
-        f"{label} CONTEXT STATE (READ-ONLY)\n"
-        "-----------------------------------\n"
-        f"{context.state}"
+        f"{label} CONTEXT KNOWLEDGE (READ-ONLY)\n"
+        "---------------------------------------\n"
+        + "\n\n".join(
+            f"[{item.disclosure}/{item.filename}]\n{item.content}"
+            for item in context.knowledge if item.filename != "identity.md"
+        )
     )
 
 
 def atomic_replace_state(name, content):
     _identity_path, state_path = context_paths(name)
-    directory = state_path.parent.parent if state_path.parent.name in {"local", "shareable"} else state_path.parent
-    local = directory / "local"
-    local.mkdir(mode=0o700, exist_ok=True)
-    state_path = local / "state.md"
+    directory = state_path.parent.parent
+    private = directory / "private"
+    private.mkdir(mode=0o700, exist_ok=True)
+    state_path = private / "state.md"
     temporary_path = state_path.with_suffix(".tmp")
     temporary_path.write_text(content.rstrip() + "\n", encoding="utf-8")
     if os.name != "nt":
@@ -322,10 +319,7 @@ def _choose_context_scope():
         rot_say("Please choose 1, 2, or 3.")
 
 
-def _show_current_context(vision_only):
-    if vision_only:
-        rot_say("--vision is only supported when showing a saved project context.")
-        return 1
+def _show_current_context():
     from rotbot.contexts.inspection import (
         ContextInspectionError,
         inspect_current_context,
@@ -341,27 +335,7 @@ def _show_current_context(vision_only):
     return 1 if inspected.warnings else 0
 
 
-def _show_project_context(name, vision_only):
-    if vision_only:
-        try:
-            vision = load_vision(name)
-        except ContextError as error:
-            rot_say(str(error))
-            return 1
-
-        if vision is None:
-            rot_say(f"No vision document exists for context '{name}'.")
-            return 0
-
-        rot_say(f"VISION: {name}")
-        rot_continue(
-            "Vision describes possible future direction. It is not current "
-            "state, an approved requirement, or authorization to implement "
-            "anything.\n\n"
-            f"{vision}"
-        )
-        return 0
-
+def _show_project_context(name):
     try:
         context = load_context(name)
     except ContextError as error:
@@ -373,9 +347,12 @@ def _show_project_context(name, vision_only):
         "IDENTITY (identity.md; read-only)\n"
         "---------------------------------\n"
         f"{context.identity}\n\n"
-        "STATE (state.md; read-only)\n"
-        "---------------------------\n"
-        f"{context.state}"
+        "KNOWLEDGE (general/ + private/; read-only)\n"
+        "------------------------------------------\n"
+        + ("\n\n".join(
+            f"{item.disclosure}/{item.filename}\n{item.content.rstrip()}"
+            for item in context.knowledge if item.filename != "identity.md"
+        ) or "(none)")
     )
     return 0
 
@@ -510,7 +487,7 @@ def context_show(args):
             rot_say("Context display cancelled.")
             return 0
         if scope == "current":
-            return _show_current_context(getattr(args, "vision", False))
+            return _show_current_context()
         if not entries:
             rot_say("No saved contexts are available to show.")
             return 1
@@ -520,14 +497,10 @@ def context_show(args):
             return 0
         context_type, name = selected
 
-    vision_only = getattr(args, "vision", False)
-    if context_type != "project" and vision_only:
-        rot_say("--vision is only supported for project contexts.")
-        return 1
     if context_type in {"user", "assistant"}:
         return _show_entity_context(name, context_type)
     if context_type == "contact":
         return _show_person_context(name)
     if context_type == "machine":
         return _show_machine_context(name)
-    return _show_project_context(name, vision_only)
+    return _show_project_context(name)

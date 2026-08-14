@@ -64,6 +64,8 @@ class NativeStreamingBackend:
 class StreamingConversationTests(unittest.TestCase):
     def send(self, conversation, on_text=None):
         with patch.object(invocation, "resolve_egress_context", return_value=Mock()), patch.object(
+            invocation, "get_agent_trust", return_value="external"
+        ), patch.object(ai, "get_agent_trust", return_value="external"), patch.object(
             invocation, "build_ask_prompt", return_value="PROMPT"
         ):
             return conversation.send(

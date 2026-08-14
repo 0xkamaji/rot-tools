@@ -59,7 +59,7 @@ def context_menu(args):
                 "develop": (context_develop, SimpleNamespace(name=None, agent=None)),
                 "list": (context_list, SimpleNamespace()),
                 "mod": (context_mod, SimpleNamespace(name=None)),
-                "show": (context_show, SimpleNamespace(name=None, vision=False)),
+                "show": (context_show, SimpleNamespace(name=None)),
                 "bind": (
                     context_bind,
                     SimpleNamespace(first=None, second=None, binding_type=None)

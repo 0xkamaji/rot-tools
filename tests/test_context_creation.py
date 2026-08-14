@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -202,94 +201,40 @@ class ContextCreationTests(unittest.TestCase):
         self.assertNotIn(str(secret_config), prompt)
         self.assertNotIn("do-not-send", prompt)
 
-    def test_agent_failure_or_invalid_output_preserves_usable_context(self):
-        cases = (
-            (7, "failure"),
-            (0, ""),
-            (0, "not json"),
-            (0, json.dumps({"identity": "# Identity"})),
-            (0, json.dumps({
-                "identity": "# Identity",
-                "state": "# State",
-                "match": "# Match"
-            }))
-        )
-        for index, (returncode, output) in enumerate(cases):
-            with self.subTest(returncode=returncode, output=output):
-                name = f"example-{index}"
-                result, _agent, _rot_say, _rot_continue = self.run_add(
-                    answer="yes",
-                    output=output,
-                    returncode=returncode,
-                    args=self.args(name=name)
-                )
-                self.assertEqual(result, 0)
-                destination = self.project_context_root / name
-                self.assertTrue(destination.exists())
-                self.assertEqual(
-                    (destination / "local" / "identity.md").read_text(encoding="utf-8"),
-                    context_creation._placeholder_documents(
-                        name, context_matching.load_match_definition(name)
-                    )["identity"]
-                )
-                self.assertEqual(
-                    get_context_binding(name)["source_path"], str(self.project)
-                )
-
-    def test_agent_output_rejects_control_characters_and_absolute_paths(self):
-        outputs = (
-            json.dumps({
-                "identity": (
-                    "# Identity\n\nHuman-maintained and must not be rewritten "
-                    "automatically.\n\x1b[2J"
-                ),
-                "state": "# State\n\nCurrent."
-            }),
-            json.dumps({
-                "identity": (
-                    "# Identity\n\nHuman-maintained and must not be rewritten "
-                    "automatically."
-                ),
-                "state": "# State\n\nStored at /home/someone/project/main.py."
-            })
-        )
-        for index, output in enumerate(outputs):
-            with self.subTest(output=output):
-                name = f"unsafe-{index}"
-                result, _agent, _rot_say, _rot_continue = self.run_add(
-                    answer="yes",
-                    output=output,
-                    args=self.args(name=name)
-                )
-                self.assertEqual(result, 0)
-                identity = (
-                    self.project_context_root / name / "local" / "identity.md"
-                ).read_text(encoding="utf-8")
-                self.assertIn(context_creation.PLACEHOLDER_POINT, identity)
-
-    def test_identity_does_not_require_literal_maintenance_wording(self):
-        output = json.dumps({
-            "identity": "# Identity\n\nA stable description of the project.",
-            "state": "# State\n\nThe project currently has an entry point."
-        })
-
-        result, _agent, _rot_say, _rot_continue = self.run_add(
-            answer="no", output=output
+    def test_context_add_does_not_invoke_agent_and_creates_empty_namespaces(self):
+        result, agent, _rot_say, _rot_continue = self.run_add(
+            answer="yes", output="ignored", returncode=7
         )
 
         self.assertEqual(result, 0)
+        agent.assert_not_called()
+        destination = self.project_context_root / "example"
+        self.assertEqual(tuple((destination / "general").iterdir()), ())
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
+        self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
 
-    def test_context_enrichment_requests_one_runtime_retry(self):
-        result, invocation, _rot_say, _rot_continue = self.run_add(answer="yes")
+    def test_generated_documents_reject_control_characters_and_absolute_paths(self):
+        for document_type, output in (
+            ("identity", "# example\n\n- Unsafe.\n\x1b[2J"),
+            ("state", "# example State\n\n- Stored at /home/someone/project/main.py."),
+        ):
+            with self.subTest(document_type=document_type), self.assertRaises(
+                context_creation.ContextCreationError
+            ):
+                context_creation._parse_context_document(
+                    output, self.project, "example", document_type
+                )
 
-        self.assertEqual(result, 0)
-        request = invocation.call_args.args[0]
-        self.assertEqual(invocation.call_count, 2)
-        identity, state = (call.args[0] for call in invocation.call_args_list)
+    def test_context_develop_requests_one_runtime_retry(self):
+        self.run_add(answer="yes")
+        operation = context_creation.build_context_develop_request(
+            argparse.Namespace(name="example", agent=None), self.root
+        )
+        identity, state = operation.identity_request, operation.state_request
         self.assertEqual(identity.purpose, "context_identity_development")
         self.assertEqual(state.purpose, "context_state_development")
-        self.assertEqual(identity.parent_command, "context add")
-        self.assertEqual(state.parent_command, "context add")
+        self.assertEqual(identity.parent_command, "context develop")
+        self.assertEqual(state.parent_command, "context develop")
         self.assertEqual(identity.retries, 1)
         self.assertEqual(state.retries, 1)
         self.assertIn("stable project identity", identity.task)
@@ -321,10 +266,10 @@ class ContextCreationTests(unittest.TestCase):
 
     def test_identity_success_and_state_failure_changes_no_documents(self):
         self.run_add(answer="yes", output="invalid")
-        destination = self.project_context_root / "example" / "local"
+        destination = self.project_context_root / "example" / "general"
         before = {
             name: (destination / f"{name}.md").read_bytes()
-            for name in ("identity", "state")
+            for name in ()
         }
 
         def invoke(request, validator, **_kwargs):
@@ -352,8 +297,7 @@ class ContextCreationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(invoked.call_count, 2)
         self.assertIn("state phase failed", say.call_args.args[0])
-        for name, content in before.items():
-            self.assertEqual((destination / f"{name}.md").read_bytes(), content)
+        self.assertEqual(tuple(destination.iterdir()), ())
 
     def test_both_documents_are_validated_before_one_atomic_apply(self):
         self.run_add(answer="yes", output="invalid")
@@ -395,9 +339,9 @@ class ContextCreationTests(unittest.TestCase):
             answer="yes", output="not json"
         )
         self.assertEqual(result, 0)
-        destination = self.project_context_root / "example" / "local"
+        destination = self.project_context_root / "example"
         identity = (destination / "identity.md").read_bytes()
-        state = (destination / "state.md").read_bytes()
+        general_before = tuple((destination / "general").iterdir())
         binding = dict(get_context_binding("example"))
 
         with patch.object(debug_commands, "prepare") as prepare, patch.object(
@@ -414,35 +358,32 @@ class ContextCreationTests(unittest.TestCase):
         self.assertIn("PROJECT IDENTITY EVIDENCE", requests[0].context_material)
         self.assertIn("CURRENT IMPLEMENTATION EVIDENCE", requests[1].context_material)
         self.assertEqual((destination / "identity.md").read_bytes(), identity)
-        self.assertEqual((destination / "state.md").read_bytes(), state)
+        self.assertEqual(tuple((destination / "general").iterdir()), general_before)
         self.assertEqual(get_context_binding("example"), binding)
 
-    def test_context_is_created_bound_and_loadable_before_enrichment(self):
+    def test_context_is_created_bound_and_loadable_without_enrichment(self):
         destination = self.project_context_root / "example"
 
-        def verify_created(invocation, **_kwargs):
-            self.assertTrue((destination / "local" / "identity.md").is_file())
-            self.assertTrue((destination / "local" / "state.md").is_file())
-            self.assertTrue((destination / "local" / "vision.md").is_file())
-            self.assertTrue((destination / "local" / "match.toml").is_file())
-            self.assertEqual(contexts.load_context("example").name, "example")
-            self.assertEqual(get_context_binding("example")["source_path"], str(self.project))
-            return AIResult(
-                invocation, 127, "", 0.1, "Test", validation_error="unavailable"
-            )
-
-        with patch.object(
-            context_creation, "invoke", side_effect=verify_created
-        ) as invocation, patch("builtins.input", return_value="yes"), patch.object(
+        with patch.object(context_creation, "invoke") as invocation, patch(
+            "builtins.input", return_value="yes"
+        ), patch.object(
             context_creation, "rot_say"
         ), patch.object(context_creation, "rot_continue"):
             result = context_creation._add_project_context(self.args())
 
         self.assertEqual(result, 0)
-        invocation.assert_called_once()
+        invocation.assert_not_called()
+        self.assertTrue((destination / "identity.md").is_file())
+        self.assertTrue((destination / "relationships.toml").is_file())
+        self.assertTrue((destination / "match.toml").is_file())
+        self.assertEqual(tuple((destination / "general").iterdir()), ())
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
+        self.assertEqual(contexts.load_context("example").name, "example")
 
-    def test_context_develop_replaces_only_placeholders(self):
+    def test_context_develop_writes_general_documents_without_rewriting_identity(self):
         self.run_add(answer="yes", output="not json")
+        root_identity = self.project_context_root / "example" / "identity.md"
+        original_identity = root_identity.read_bytes()
 
         with patch.object(
             context_creation,
@@ -462,10 +403,13 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         loaded = contexts.load_context("example")
-        self.assertIn("Example is a small test project", loaded.identity)
-        self.assertNotIn(context_creation.PLACEHOLDER_POINT, loaded.identity)
+        self.assertEqual(root_identity.read_bytes(), original_identity)
+        self.assertIn("Example is a small test project", (
+            self.project_context_root / "example" / "general" / "background.md"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("Python entry point", loaded.state)
 
-        identity = self.project_context_root / "example" / "local" / "identity.md"
+        identity = self.project_context_root / "example" / "general" / "background.md"
         identity.write_text("# Manual\n\n- Keep this.\n", encoding="utf-8")
         with patch.object(
             context_creation,
@@ -553,8 +497,6 @@ class ContextCreationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertTrue(any("PROPOSED identity.md" in item for item in preview_seen))
-        self.assertTrue(any("PROPOSED state.md" in item for item in preview_seen))
-        self.assertTrue(any("PROPOSED vision.md" in item for item in preview_seen))
         self.assertTrue(any("PROPOSED match.toml" in item for item in preview_seen))
         self.assertFalse((self.project_context_root / "example").exists())
         self.assertFalse(config_path().exists())
@@ -570,23 +512,14 @@ class ContextCreationTests(unittest.TestCase):
         destination = self.project_context_root / "example"
         self.assertEqual(
             {path.name for path in destination.iterdir()},
-            {"metadata.toml", "local", "shareable"}
+            {"metadata.toml", "identity.md", "relationships.toml", "match.toml", "general", "private"}
         )
-        vision = destination / "local" / "vision.md"
-        self.assertEqual(
-            vision.read_text(encoding="utf-8"),
-            context_creation.INITIAL_VISION
-        )
-        self.assertIn("<!--", context_creation.INITIAL_VISION)
-        self.assertIn("future ideas and vision", context_creation.INITIAL_VISION.lower())
-        self.assertTrue(any(
-            "projects/example/local/identity.md" in item.args[0]
-            for item in rot_continue.call_args_list
-        ))
+        self.assertEqual(tuple((destination / "general").iterdir()), ())
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
         loaded = contexts.load_context("example")
-        self.assertIn("Example is a small test project", loaded.identity)
-        self.assertIn("Python entry point", loaded.state)
-        match_text = (destination / "local" / "match.toml").read_text(encoding="utf-8")
+        self.assertEqual(loaded.identity, "# example\n\nProject known to RotBot.\n")
+        self.assertEqual(loaded.state, "")
+        match_text = (destination / "match.toml").read_text(encoding="utf-8")
         definition = context_matching.parse_match_toml(match_text)
         self.assertTrue(definition.source.is_git_repo)
         self.assertIn("github.com/example/project", definition.source.git_remotes)
@@ -710,7 +643,7 @@ class ContextCreationTests(unittest.TestCase):
         result, stream_agent, _rot_say, _rot_continue = self.run_add(answer="yes")
 
         self.assertEqual(result, 0)
-        self.assertEqual(stream_agent.call_count, 2)
+        stream_agent.assert_not_called()
 
     def test_non_git_project_can_generate_portable_match_and_binding(self):
         non_git = self.root / "plain-project"
@@ -723,7 +656,7 @@ class ContextCreationTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 0)
-        match_path = self.project_context_root / "plain" / "local" / "match.toml"
+        match_path = self.project_context_root / "plain" / "match.toml"
         content = match_path.read_text(encoding="utf-8")
         definition = context_matching.parse_match_toml(content)
         self.assertFalse(definition.source.is_git_repo)

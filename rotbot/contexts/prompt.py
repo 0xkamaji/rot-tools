@@ -43,13 +43,13 @@ preferences, goals, priorities, and constraints into account when relevant.
 Do not mention personal facts solely to demonstrate awareness of them. Do not
 force unrelated personal information into the answer."""
 
-MACHINE_INSTRUCTIONS = """This context describes the portable/shareable
+MACHINE_INSTRUCTIONS = """This context describes the deterministic and general
 characteristics of the machine on which this RotBot invocation is running.
 
 Use this information when operating system, hardware, software, compatibility,
 performance, or the local execution environment matters.
 
-Do not assume private/local machine information beyond what is provided."""
+Do not assume private machine information beyond what is provided."""
 
 PROJECT_INSTRUCTIONS = """This context describes the active project associated
 with the current invocation.
@@ -93,6 +93,7 @@ class PromptContext:
     working_directory: str
     execution_backend: str
     runtime: object | None = None
+    view: str = "egress"
 
 
 def _entity_block(reference, context_type, view):
@@ -118,27 +119,22 @@ def _entity_block(reference, context_type, view):
 
 def _machine_block(name, view):
     machine, documents = machines.load_machine_files(name, view=view)
-    content = {document.filename: document.content.strip() for document in documents}
     sections = []
-    identity_sections = people.populated_markdown_sections(
-        content.get("identity.md", ""), "identity.md"
-    )
-    if identity_sections:
-        identity = "\n\n".join(
-            f"### {heading}\n\n{text}" if heading is not None else text
-            for heading, text in identity_sections
+    facts = machines.render_machine_facts(machine).strip()
+    if view == "full" and facts:
+        sections.append(("machine facts", facts))
+    for document in documents:
+        if not document.filename.endswith(".md"):
+            continue
+        parsed = people.populated_markdown_sections(
+            document.content, document.filename
         )
-        sections.append(("identity", identity))
-    if content.get("software.toml"):
-        sections.append(("software", content["software.toml"]))
-    learned_sections = people.populated_markdown_sections(
-        content.get("learned.md", ""), "learned.md"
-    )
-    if learned_sections:
-        sections.append((
-            "learned",
-            "\n\n".join(text for _heading, text in learned_sections)
-        ))
+        content = "\n\n".join(
+            f"### {heading}\n\n{text}" if heading is not None else text
+            for heading, text in parsed
+        )
+        if content:
+            sections.append((document.filename.removesuffix(".md"), content))
     return PromptContextBlock(
         "machine", machine.id, machine.display_name, tuple(sections)
     )
@@ -147,12 +143,9 @@ def _machine_block(name, view):
 def _project_block(name, view):
     project = loader.load_context(name, view=view)
     sections = tuple(
-        (label, content.strip())
-        for label, content in (
-            ("identity", project.identity), ("state", project.state),
-            ("learned", project.learned)
-        )
-        if content.strip()
+        (document.filename.removesuffix(".md"), document.content.strip())
+        for document in project.knowledge
+        if document.content.strip()
     )
     return PromptContextBlock("project", project.id, project.name, sections)
 
@@ -179,7 +172,8 @@ def resolve_prompt_context(
         ),
         working_directory=str(inspected.cwd),
         execution_backend=execution_backend,
-        runtime=capability_state
+        runtime=capability_state,
+        view=view
     )
 
 

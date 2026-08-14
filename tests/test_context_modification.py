@@ -55,30 +55,29 @@ class PersonModificationTests(unittest.TestCase):
     def create_project(self, name):
         destination = self.projects / name
         destination.mkdir()
-        local = destination / "local"
-        local.mkdir()
-        (destination / "shareable").mkdir()
-        (local / "identity.md").write_text("identity", encoding="utf-8")
-        (local / "state.md").write_text("state", encoding="utf-8")
+        (destination / "metadata.toml").write_text(
+            loader.render_project_metadata(name), encoding="utf-8"
+        )
+        (destination / "general").mkdir()
+        (destination / "private").mkdir()
+        (destination / "identity.md").write_text("identity", encoding="utf-8")
+        (destination / "relationships.toml").write_text("", encoding="utf-8")
         return destination
 
-    def test_adds_predefined_category_without_modifying_metadata(self):
+    def test_adds_category_to_dynamic_private_document_without_modifying_metadata(self):
         destination = self.create_person()
         metadata = (destination / "metadata.toml").read_text(encoding="utf-8")
 
         updated = modification.add_person_information(
             "alex",
-            "identity.md",
+            "biography.md",
             "Background",
-            "Grew up near the coast."
+            "Grew up near the coast.",
+            category_description="Personal history and relevant background."
         )
 
         content = updated.read_text(encoding="utf-8")
         self.assertIn("- Grew up near the coast.\n", content)
-        self.assertLess(
-            content.index("- Grew up near the coast."),
-            content.index("## Skills and Knowledge")
-        )
         self.assertEqual(
             (destination / "metadata.toml").read_text(encoding="utf-8"),
             metadata
@@ -86,7 +85,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_existing_category_receives_information_before_next_category(self):
         destination = self.create_person()
-        identity = destination / "local" / "identity.md"
+        identity = destination / "private" / "biography.md"
         identity.write_text(
             "# Identity\n\n## Background\n\n- Existing.\n\n"
             "## Interests\n\n- Music.\n",
@@ -95,7 +94,7 @@ class PersonModificationTests(unittest.TestCase):
 
         modification.add_person_information(
             "alex",
-            "identity.md",
+            "biography.md",
             "Background",
             "New detail."
         )
@@ -104,42 +103,31 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(content.count("## Background"), 1)
         self.assertLess(content.index("- New detail."), content.index("## Interests"))
 
-    def test_role_controls_available_markdown_documents(self):
-        self.create_person()
+    def test_available_documents_are_discovered_dynamically(self):
+        contact_path = self.create_person()
+        (contact_path / "private" / "notes.md").write_text("# Notes\n", encoding="utf-8")
         contact = people.load_person_context("alex")
-        self.create_person("kamaji", "user", "Kamaji")
+        user_path = self.create_person("kamaji", "user", "Kamaji")
+        (user_path / "private" / "experience.md").write_text("# Experience\n", encoding="utf-8")
         user = entities.load_user_context("kamaji", root=self.context_root)
-        self.create_person("rot", "assistant", "Rot")
+        assistant_path = self.create_person("rot", "assistant", "Rot")
+        (assistant_path / "private" / "journal.md").write_text("# Journal\n", encoding="utf-8")
         assistant = entities.load_assistant_context("rot", root=self.context_root)
 
-        self.assertEqual(
-            modification.available_documents(contact),
-            ("identity.md", "preferences.md", "relationship.md", "state.md")
-        )
-        self.assertIn("experience.md", modification.available_documents(user))
-        self.assertIn("priorities.md", modification.available_documents(user))
-        self.assertEqual(
-            modification.available_documents(assistant),
-            ("identity.md", "behavior.md", "relationship.md", "state.md")
-        )
-        self.assertNotIn("metadata.toml", modification.available_documents(user))
-        with self.assertRaises(modification.PersonModificationError):
-            modification.add_person_information(
-                "alex",
-                "experience.md",
-                "Professional",
-                "Not allowed."
-            )
+        self.assertEqual(modification.available_documents(contact), ("notes.md",))
+        self.assertEqual(modification.available_documents(user), ("experience.md",))
+        self.assertEqual(modification.available_documents(assistant), ("journal.md",))
 
     def test_invalid_input_duplicate_categories_and_symlinks_are_rejected(self):
         destination = self.create_person()
-        identity = destination / "local" / "identity.md"
+        identity = destination / "private" / "biography.md"
+        identity.write_text("# Biography\n", encoding="utf-8")
         original = "# Identity\n\n## Background\n\n- One.\n\n## Background\n\n- Two.\n"
         identity.write_text(original, encoding="utf-8")
         with self.assertRaises(modification.PersonModificationError):
             modification.add_person_information(
                 "alex",
-                "identity.md",
+                "biography.md",
                 "Background",
                 "Three."
             )
@@ -151,7 +139,7 @@ class PersonModificationTests(unittest.TestCase):
             ):
                 modification.add_person_information(
                     "alex",
-                    "identity.md",
+                    "biography.md",
                     category,
                     information
                 )
@@ -162,13 +150,14 @@ class PersonModificationTests(unittest.TestCase):
         identity.symlink_to(outside)
         with self.assertRaises(modification.PersonModificationError):
             modification.add_person_information(
-                "alex", "identity.md", "Background", "Detail"
+                "alex", "biography.md", "Background", "Detail"
             )
         self.assertEqual(outside.read_text(encoding="utf-8"), "outside")
 
     def test_failed_atomic_replace_preserves_original_and_cleans_temporary_file(self):
         destination = self.create_person()
-        identity = destination / "local" / "identity.md"
+        identity = destination / "private" / "biography.md"
+        identity.write_text("# Biography\n", encoding="utf-8")
         original = identity.read_text(encoding="utf-8")
 
         with patch.object(
@@ -178,19 +167,19 @@ class PersonModificationTests(unittest.TestCase):
         ), self.assertRaises(modification.PersonModificationError):
             modification.add_person_information(
                 "alex",
-                "identity.md",
+                "biography.md",
                 "Background",
                 "Detail."
             )
 
         self.assertEqual(identity.read_text(encoding="utf-8"), original)
-        self.assertEqual(tuple(destination.glob(".identity.md.*.tmp")), ())
+        self.assertEqual(tuple((destination / "private").glob(".biography.md.*.tmp")), ())
 
     def test_metadata_update_changes_only_allowed_fields(self):
         destination = self.create_person(
             related_projects=("rotbot",)
         )
-        identity = (destination / "local" / "identity.md").read_text(encoding="utf-8")
+        identity = (destination / "identity.md").read_text(encoding="utf-8")
         original_id = people.load_person_context("alex").id
 
         modification.replace_person_metadata(
@@ -206,7 +195,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(loaded.related_projects, ("rotbot", "signalrot"))
         self.assertEqual(loaded.id, original_id)
         self.assertEqual(
-            (destination / "local" / "identity.md").read_text(encoding="utf-8"),
+            (destination / "identity.md").read_text(encoding="utf-8"),
             identity
         )
 
@@ -233,7 +222,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_metadata_menu_changes_display_name(self):
         self.create_person()
-        answers = ("5", "1", "Alex Updated", "yes")
+        answers = ("2", "1", "Alex Updated", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
@@ -249,7 +238,7 @@ class PersonModificationTests(unittest.TestCase):
         self.create_person(related_projects=("rotbot",))
         self.create_project("rotbot")
         self.create_project("signalrot")
-        answers = ("5", "2", "1", "yes")
+        answers = ("2", "2", "1", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
@@ -267,7 +256,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_metadata_menu_removes_related_project(self):
         self.create_person(related_projects=("rotbot", "signalrot"))
-        answers = ("5", "3", "1", "yes")
+        answers = ("2", "3", "1", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
@@ -284,7 +273,7 @@ class PersonModificationTests(unittest.TestCase):
         metadata = destination / "metadata.toml"
         original = metadata.read_text(encoding="utf-8")
 
-        with patch("builtins.input", side_effect=("5", "4")), patch.object(
+        with patch("builtins.input", side_effect=("2", "4")), patch.object(
             modification,
             "rot_say"
         ):
@@ -313,14 +302,17 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(tuple(destination.glob(".metadata.toml.*.tmp")), ())
 
     def test_omitted_name_lists_people_and_routes_numbered_choices(self):
-        self.create_person("alex", "contact", "Alex")
+        alex = self.create_person("alex", "contact", "Alex")
+        (alex / "private" / "notes.md").write_text(
+            "# Notes\n\n## Background\n", encoding="utf-8"
+        )
         self.create_person("zeta", "contact", "Zeta")
         answers = ("1", "1", "1", "A detail.", "yes")
 
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.contacts / "alex" / "local" / "identity.md"
+            return_value=self.contacts / "alex" / "private" / "notes.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"
@@ -330,7 +322,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(result, 0)
         add_information.assert_called_once_with(
             "alex",
-            "identity.md",
+            "notes.md",
             "Background",
             "A detail.",
             category_description=None
@@ -343,8 +335,10 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_explicit_person_can_add_custom_category(self):
         self.create_person()
+        notes = self.contacts / "alex" / "private" / "notes.md"
+        notes.write_text("# Notes\n\n## Background\n", encoding="utf-8")
         categories = modification.person_document_categories(
-            "alex", "identity.md"
+            "alex", "notes.md"
         )
         custom_option = str(len(categories) + 1)
         answers = (
@@ -359,7 +353,7 @@ class PersonModificationTests(unittest.TestCase):
         with patch("builtins.input", side_effect=answers), patch.object(
             modification,
             "add_person_information",
-            return_value=self.contacts / "alex" / "local" / "identity.md"
+            return_value=self.contacts / "alex" / "private" / "notes.md"
         ) as add_information, patch.object(
             modification,
             "rot_say"
@@ -369,7 +363,7 @@ class PersonModificationTests(unittest.TestCase):
         self.assertEqual(result, 0)
         add_information.assert_called_once_with(
             "alex",
-            "identity.md",
+            "notes.md",
             "Family",
             "Has two siblings.",
             category_description="Family members and relevant family context."
@@ -380,13 +374,13 @@ class PersonModificationTests(unittest.TestCase):
 
         modification.add_person_information(
             "alex",
-            "identity.md",
+            "family.md",
             "Family",
             "Has two siblings.",
             category_description="Family members and relevant family context."
         )
 
-        content = (destination / "local" / "identity.md").read_text(encoding="utf-8")
+        content = (destination / "private" / "family.md").read_text(encoding="utf-8")
         self.assertIn(
             "## Family\n\n"
             "<!-- Family members and relevant family context. -->\n\n"
@@ -395,7 +389,7 @@ class PersonModificationTests(unittest.TestCase):
         )
         self.assertEqual(
             modification.person_document_categories(
-                "alex", "identity.md"
+                "alex", "family.md"
             )[-1],
             "Family"
         )
@@ -407,7 +401,7 @@ class PersonModificationTests(unittest.TestCase):
                 1
             )
         destination = self.create_person()
-        identity = destination / "local" / "identity.md"
+        identity = destination / "identity.md"
         original = identity.read_text(encoding="utf-8")
         with patch("builtins.input", side_effect=("1", EOFError())), patch.object(
             modification,
@@ -419,7 +413,7 @@ class PersonModificationTests(unittest.TestCase):
 
     def test_numbered_modification_menus_offer_graceful_exit(self):
         self.create_person()
-        for answer in ("exit", "6"):
+        for answer in ("exit", "3"):
             with self.subTest(answer=answer), patch(
                 "builtins.input",
                 return_value=answer

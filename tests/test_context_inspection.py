@@ -69,12 +69,16 @@ class ContextInspectionTests(unittest.TestCase):
     def create_project(self, name):
         directory = self.projects / name
         directory.mkdir()
-        (directory / "identity.md").write_text(f"{name} identity\n", encoding="utf-8")
-        (directory / "state.md").write_text(f"{name} state\n", encoding="utf-8")
         (directory / "metadata.toml").write_text(
             loader.render_project_metadata(name),
             encoding="utf-8"
         )
+        (directory / "identity.md").write_text(f"{name} identity\n", encoding="utf-8")
+        (directory / "relationships.toml").write_text("", encoding="utf-8")
+        (directory / "general").mkdir()
+        private = directory / "private"
+        private.mkdir()
+        (private / "state.md").write_text(f"{name} state\n", encoding="utf-8")
         return directory
 
     def write_config(self, bindings="", defaults=True):

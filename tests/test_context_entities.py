@@ -29,12 +29,22 @@ class EntityContextTests(unittest.TestCase):
         self.assertIsInstance(entities.load_assistant_context(assistant.id, root=self.root), entities.AssistantContext)
         self.assertEqual(tomllib.loads((user_path / "metadata.toml").read_text())["type"], "user")
         self.assertEqual(tomllib.loads((assistant_path / "metadata.toml").read_text())["type"], "assistant")
-        self.assertTrue((assistant_path / "local" / "behavior.md").is_file())
-        self.assertTrue((user_path / "local" / "identity.md").is_file())
-        self.assertFalse((user_path / "identity.md").exists())
-        self.assertFalse((assistant_path / "behavior.md").exists())
-        self.assertTrue((user_path / "shareable").is_dir())
-        self.assertTrue((assistant_path / "shareable").is_dir())
+        structural = {
+            "metadata.toml", "identity.md", "relationships.toml", "general", "private"
+        }
+        self.assertEqual({path.name for path in user_path.iterdir()}, structural)
+        self.assertEqual(
+            {path.name for path in assistant_path.iterdir()},
+            structural | {"capabilities.toml"}
+        )
+        self.assertTrue((user_path / "identity.md").is_file())
+        self.assertTrue((assistant_path / "identity.md").is_file())
+        self.assertTrue((user_path / "relationships.toml").is_file())
+        self.assertTrue((assistant_path / "relationships.toml").is_file())
+        self.assertEqual(tuple((user_path / "general").iterdir()), ())
+        self.assertEqual(tuple((user_path / "private").iterdir()), ())
+        self.assertEqual(tuple((assistant_path / "general").iterdir()), ())
+        self.assertEqual(tuple((assistant_path / "private").iterdir()), ())
         self.assertTrue((assistant_path / "capabilities.toml").is_file())
         self.assertFalse((user_path / "capabilities.toml").exists())
 
@@ -55,23 +65,27 @@ class EntityContextTests(unittest.TestCase):
             ["alpha", "zeta"]
         )
 
-    def test_entity_documents_union_local_and_shareable_semantics(self):
+    def test_entity_documents_union_identity_general_and_private_semantics(self):
         user = entities.build_user_context(
             "alex", context_id="00000000-0000-4000-8000-000000000005"
         )
         destination = entities.create_entity_context(user, root=self.root)
-        (destination / "local" / "identity.md").write_text(
-            "# Identity\n\n## Local\n\nPrivate identity.\n", encoding="utf-8"
+        (destination / "identity.md").write_text(
+            "# Identity\n\n## Stable\n\nCanonical identity.\n", encoding="utf-8"
         )
-        (destination / "shareable" / "experience.md").write_text(
-            "# Experience\n\n## Shared\n\nPublic experience.\n", encoding="utf-8"
+        (destination / "general" / "experience.md").write_text(
+            "# Experience\n\n## General\n\nGeneral experience.\n", encoding="utf-8"
+        )
+        (destination / "private" / "notes.md").write_text(
+            "# Notes\n\n## Private\n\nPrivate note.\n", encoding="utf-8"
         )
 
         _user, documents = entities.load_user_documents(user.id, root=self.root)
 
         rendered = repr(documents)
-        self.assertIn("Private identity", rendered)
-        self.assertIn("Public experience", rendered)
+        self.assertIn("Canonical identity", rendered)
+        self.assertIn("General experience", rendered)
+        self.assertIn("Private note", rendered)
 
 
 class AssistantLayeringTests(unittest.TestCase):
@@ -102,18 +116,18 @@ class AssistantLayeringTests(unittest.TestCase):
         )
         destination = self.builtin_root / "rot"
         destination.mkdir()
-        (destination / "shareable").mkdir()
+        (destination / "general").mkdir()
+        (destination / "private").mkdir()
         (destination / "metadata.toml").write_text(
             entities.render_metadata(assistant), encoding="utf-8"
         )
         (destination / "capabilities.toml").write_text(
             entities.SAFE_CAPABILITIES, encoding="utf-8"
         )
-        self.write(destination / "shareable", "identity.md", "Builtin identity")
-        self.write(destination / "shareable", "behavior.md", "Builtin behavior")
-        self.write(
-            destination / "shareable", "relationship.md", "Builtin relationship"
-        )
+        self.write(destination, "identity.md", "Builtin identity")
+        (destination / "relationships.toml").write_text("", encoding="utf-8")
+        self.write(destination / "general", "behavior.md", "Builtin behavior")
+        self.write(destination / "general", "relationship.md", "Builtin relationship")
         return assistant
 
     def create_local(self):
@@ -138,25 +152,25 @@ class AssistantLayeringTests(unittest.TestCase):
         loaded = self.loaded()
 
         self.assertEqual(
-            tuple(loaded), ("behavior.md", "identity.md", "relationship.md")
+            tuple(loaded), ("identity.md", "behavior.md", "relationship.md")
         )
         self.assertIn("Builtin identity", repr(loaded["identity.md"]))
 
-    def test_local_only_assistant_loads_local_documents(self):
+    def test_created_assistant_loads_dynamic_general_documents(self):
         _assistant, destination = self.create_local()
-        self.write(destination / "shareable", "state.md", "Local state")
+        self.write(destination / "general", "state.md", "Local state")
 
         loaded = self.loaded("egress")
 
-        self.assertEqual(tuple(loaded), ("state.md",))
+        self.assertEqual(tuple(loaded), ("identity.md", "state.md"))
         self.assertIn("Local state", repr(loaded["state.md"]))
 
     def test_local_assistant_is_authoritative_without_builtin_fallback(self):
         self.create_builtin()
         _assistant, destination = self.create_local()
-        self.write(destination / "shareable", "behavior.md", "Local behavior")
-        self.write(destination / "shareable", "identity.md", "Local identity")
-        self.write(destination / "shareable", "state.md", "Local state")
+        self.write(destination / "general", "behavior.md", "Local behavior")
+        self.write(destination, "identity.md", "Local identity")
+        self.write(destination / "general", "state.md", "Local state")
 
         loaded = self.loaded("egress")
 
@@ -168,21 +182,22 @@ class AssistantLayeringTests(unittest.TestCase):
         self.assertNotIn("relationship.md", loaded)
         self.assertIn("Local state", repr(loaded["state.md"]))
 
-    def test_empty_local_document_does_not_resurrect_builtin_default(self):
+    def test_empty_general_document_does_not_resurrect_builtin_default(self):
         self.create_builtin()
         _assistant, destination = self.create_local()
-        (destination / "shareable" / "behavior.md").write_text(
-            entities.BEHAVIOR_TEMPLATE, encoding="utf-8"
+        (destination / "general" / "behavior.md").write_text(
+            "# Behavior\n\n<!-- Add general behavior knowledge here. -->\n",
+            encoding="utf-8"
         )
 
         loaded = self.loaded("egress")
 
         self.assertNotIn("behavior.md", loaded)
 
-    def test_egress_excludes_private_local_override_while_full_retains_it(self):
+    def test_egress_excludes_private_document_while_full_retains_it(self):
         self.create_builtin()
         _assistant, destination = self.create_local()
-        self.write(destination / "local", "behavior.md", "Private behavior")
+        self.write(destination / "private", "behavior.md", "Private behavior")
 
         egress = self.loaded("egress")
         full = self.loaded("full")
@@ -196,7 +211,7 @@ class AssistantLayeringTests(unittest.TestCase):
         self.create_local()
 
         loaded = self.loaded("egress")
-        self.assertEqual(loaded, {})
+        self.assertEqual(tuple(loaded), ("identity.md",))
 
     def test_materialization_preserves_seed_and_is_idempotent(self):
         assistant = self.create_builtin()
@@ -218,27 +233,23 @@ class AssistantLayeringTests(unittest.TestCase):
             (builtin / "capabilities.toml").read_text()
         )
         self.assertEqual(
-            (destination / "shareable" / "identity.md").read_text(),
-            (builtin / "shareable" / "identity.md").read_text()
+            (destination / "identity.md").read_text(),
+            (builtin / "identity.md").read_text()
         )
         self.assertEqual(
-            (destination / "shareable" / "behavior.md").read_text(),
-            (builtin / "shareable" / "behavior.md").read_text()
+            (destination / "general" / "behavior.md").read_text(),
+            (builtin / "general" / "behavior.md").read_text()
         )
-        for filename in entities.ASSISTANT_DOCUMENTS:
-            self.assertTrue((destination / "local" / filename).is_file())
-        self.assertTrue(
-            (destination / "local" / "learned.md").read_text().startswith("# Learned")
-        )
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
         self.assertEqual(before, {
             path.relative_to(builtin): path.read_bytes()
             for path in builtin.rglob("*") if path.is_file()
         })
 
-        (destination / "shareable" / "identity.md").write_text(
+        (destination / "identity.md").write_text(
             "# Identity\n\n## Details\n\nLocal evolution\n", encoding="utf-8"
         )
-        self.write(builtin / "shareable", "identity.md", "Updated builtin")
+        self.write(builtin, "identity.md", "Updated builtin")
         second, same_destination = entities.materialize_builtin_assistant("rot")
         self.assertEqual(second.id, assistant.id)
         self.assertEqual(same_destination, destination)
@@ -269,7 +280,7 @@ class AssistantLayeringTests(unittest.TestCase):
         self.assertEqual(learned_assistant.id, assistant.id)
         self.assertEqual(
             path,
-            self.context_root / "assistants" / "rot" / "local" / "learned.md"
+            self.context_root / "assistants" / "rot" / "private" / "learned.md"
         )
         self.assertIn("Installation-specific knowledge", path.read_text())
 
@@ -277,13 +288,13 @@ class AssistantLayeringTests(unittest.TestCase):
         assistant = self.create_builtin()
 
         resolved, document = modification._entity_document(
-            assistant.id, "behavior.md", "assistant"
+            assistant.id, "behavior.md", "assistant", create=True
         )
 
         self.assertEqual(resolved.id, assistant.id)
         self.assertEqual(
             document,
-            self.context_root / "assistants" / "rot" / "local" / "behavior.md"
+            self.context_root / "assistants" / "rot" / "private" / "behavior.md"
         )
 
     def test_bootstrap_selection_and_existing_binding_materialize_builtin(self):
@@ -310,8 +321,8 @@ class AssistantLayeringTests(unittest.TestCase):
     def test_prepared_ask_contains_one_effective_identity_and_behavior_document(self):
         self.create_builtin()
         assistant, destination = self.create_local()
-        self.write(destination / "shareable", "identity.md", "Local identity")
-        self.write(destination / "shareable", "behavior.md", "Local behavior")
+        self.write(destination, "identity.md", "Local identity")
+        self.write(destination / "general", "behavior.md", "Local behavior")
         inspected = inspection.InspectedContext(
             "rot", assistant.id, None, None, None, None, None, None,
             Path("/work"),

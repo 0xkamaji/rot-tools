@@ -18,7 +18,7 @@ class PersonContextTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def test_contact_creation_has_exact_core_layout_and_metadata(self):
+    def test_contact_creation_has_canonical_layout_and_metadata(self):
         destination = people.create_person_context(
             "alex", "contact", "Alex Example", people_root=self.root
         )
@@ -28,10 +28,9 @@ class PersonContextTests(unittest.TestCase):
             {
                 "metadata.toml",
                 "identity.md",
-                "preferences.md",
-                "relationship.md",
-                "state.md",
-                "learned.md"
+                "relationships.toml",
+                "general",
+                "private"
             }
         )
         metadata = tomllib.loads(
@@ -44,7 +43,7 @@ class PersonContextTests(unittest.TestCase):
         self.assertEqual(metadata["related_projects"], [])
         self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
 
-    def test_user_creation_adds_user_templates_and_defaults_display_name(self):
+    def test_user_creation_uses_same_empty_dynamic_namespaces(self):
         destination = people.create_person_context(
             "kamaji", "user", people_root=self.root
         )
@@ -54,12 +53,9 @@ class PersonContextTests(unittest.TestCase):
             {
                 "metadata.toml",
                 "identity.md",
-                "preferences.md",
-                "relationship.md",
-                "state.md",
-                "experience.md",
-                "priorities.md",
-                "learned.md"
+                "relationships.toml",
+                "general",
+                "private"
             }
         )
         metadata = tomllib.loads(
@@ -68,6 +64,8 @@ class PersonContextTests(unittest.TestCase):
         self.assertEqual(metadata["role"], "user")
         self.assertEqual(metadata["name"], "kamaji")
         self.assertRegex(metadata["id"], r"^[0-9a-f-]{36}$")
+        self.assertEqual(tuple((destination / "general").iterdir()), ())
+        self.assertEqual(tuple((destination / "private").iterdir()), ())
 
     def test_assistant_creation_uses_core_layout_and_related_project(self):
         destination = people.create_person_context(
@@ -83,14 +81,11 @@ class PersonContextTests(unittest.TestCase):
             {
                 "metadata.toml",
                 "identity.md",
-                "preferences.md",
-                "relationship.md",
-                "state.md",
-                "learned.md"
+                "relationships.toml",
+                "general",
+                "private"
             }
         )
-        self.assertFalse((destination / "experience.md").exists())
-        self.assertFalse((destination / "priorities.md").exists())
         metadata = tomllib.loads(
             (destination / "metadata.toml").read_text(encoding="utf-8")
         )
@@ -226,8 +221,8 @@ class PersonContextTests(unittest.TestCase):
         destination = people.create_person_context(
             "alex", "contact", "Alex", people_root=self.root
         )
-        identity = destination / "identity.md"
-        identity.write_text(
+        profile = destination / "general" / "profile.md"
+        profile.write_text(
             "# Identity\n\n"
             "<!-- General guidance. -->\n\n"
             "## Background\n\n"
@@ -243,15 +238,14 @@ class PersonContextTests(unittest.TestCase):
         )
 
         self.assertEqual(person.name, "alex")
-        identity_document = documents[0]
+        identity_document, profile_document = documents
         self.assertEqual(identity_document.filename, "identity.md")
+        self.assertEqual(profile_document.filename, "profile.md")
         self.assertEqual(
-            identity_document.sections,
+            profile_document.sections,
             (("Background", "- Grew up near the coast."),)
         )
-        self.assertTrue(all(
-            not document.sections for document in documents[1:]
-        ))
+        self.assertTrue(identity_document.sections)
 
     def test_person_document_parser_preserves_fenced_content_and_rejects_malformed(self):
         destination = people.create_person_context(
@@ -307,57 +301,16 @@ class PersonContextTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(people.PersonContextError):
                 people.load_person_context(name, people_root=self.root)
 
-    def test_templates_contain_only_headings_and_guidance(self):
-        expected_categories = {
-            "identity.md": (
-                "Background", "Skills and Knowledge", "Interests", "Traits",
-                "Important Details", "Other"
-            ),
-            "preferences.md": (
-                "Communication", "Collaboration", "Tools and Workflows",
-                "Likes and Dislikes", "Accessibility and Accommodations", "Other"
-            ),
-            "relationship.md": (
-                "Connection", "Shared History", "Personal Dynamic",
-                "Working Dynamic", "Shared Responsibilities", "Boundaries", "Other"
-            ),
-            "state.md": (
-                "Current Circumstances", "Active Work", "Upcoming", "Open Items",
-                "Recent Changes", "Other"
-            ),
-            "experience.md": (
-                "Professional", "Technical", "Creative", "Practical",
-                "Education and Training", "Learning", "Other"
-            ),
-            "priorities.md": (
-                "Current Goals", "Ongoing Responsibilities", "Areas of Focus",
-                "Constraints", "Later", "Other"
-            )
-        }
+    def test_rendered_person_files_are_only_canonical_structural_documents(self):
         files = people.render_person_files(
             people.build_person_context("kamaji", "user")
         )
 
-        for filename, categories in expected_categories.items():
-            with self.subTest(filename=filename):
-                content = files[filename]
-                headings = tuple(
-                    line[3:] for line in content.splitlines() if line.startswith("## ")
-                )
-                self.assertEqual(headings, categories)
-                self.assertEqual(content.count("<!--"), len(categories) + 1)
-                self.assertNotIn("\n- ", content)
-
-        self.assertIn(
-            "<!-- Accessibility needs, accommodations, or circumstances that "
-            "should influence interactions and planning. -->",
-            files["preferences.md"]
+        self.assertEqual(
+            set(files), {"metadata.toml", "identity.md", "relationships.toml"}
         )
-        self.assertIn(
-            "<!-- Time, money, health, technical, logistical, or situational "
-            "limitations that may affect recommendations and plans. -->",
-            files["priorities.md"]
-        )
+        self.assertIn("# kamaji", files["identity.md"])
+        self.assertEqual(tomllib.loads(files["relationships.toml"]), {})
 
     def test_unsupported_role_is_rejected_before_creation(self):
         with self.assertRaises(people.PersonContextError):

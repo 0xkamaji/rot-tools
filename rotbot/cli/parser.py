@@ -189,7 +189,7 @@ def create_parser():
 
     learn_show_parser = learn_commands.add_parser(
         "show",
-        help="Show an entire local learned.md document"
+        help="Show an entire private learned.md document"
     )
     learn_show_commands = learn_show_parser.add_subparsers(
         dest="learn_show_target",
@@ -218,7 +218,7 @@ def create_parser():
 
     learn_edit_parser = learn_commands.add_parser(
         "edit",
-        help="Edit an entire local learned.md document"
+        help="Edit an entire private learned.md document"
     )
     learn_edit_commands = learn_edit_parser.add_subparsers(
         dest="learn_edit_target",
@@ -359,13 +359,13 @@ def create_parser():
     )
     ai_context_preview_parser = ai_context_commands.add_parser(
         "preview",
-        help="Preview resolved shareable AI context without invoking a backend"
+        help="Preview resolved general AI context without invoking a backend"
     )
     ai_context_preview_parser.set_defaults(func=ai_context_preview)
 
     privacy_parser = commands.add_parser(
         "privacy",
-        help="Inspect local and shareable context file boundaries"
+        help="Inspect general and private context file boundaries"
     )
     privacy_commands = privacy_parser.add_subparsers(dest="privacy_command")
     privacy_parser.set_defaults(
@@ -470,11 +470,6 @@ def create_parser():
         "name",
         nargs="?",
         help="Optional saved context name; omit to choose current or saved context"
-    )
-    context_show_parser.add_argument(
-        "--vision",
-        action="store_true",
-        help="Show only the optional vision document"
     )
     context_show_parser.set_defaults(func=context_show)
 

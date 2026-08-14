@@ -659,9 +659,7 @@ def register_local_machine(
             if local_record is not None:
                 local_record.unlink(missing_ok=True)
             if created:
-                for filename in machines.PORTABLE_FILENAMES:
-                    (destination / filename).unlink(missing_ok=True)
-                destination.rmdir()
+                shutil.rmtree(destination)
             raise
     except MachineRegistrationError:
         raise

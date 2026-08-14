@@ -298,8 +298,6 @@ def load_match_definition(name):
     try:
         identity_path, _state_path = loader.context_paths(name)
         directory = identity_path.parent
-        if directory.name in {"local", "shareable"}:
-            directory = directory.parent
         match_path = loader._existing_project_document(directory, "match.toml")
         legacy_path = loader._existing_project_document(directory, "match.md")
     except loader.ContextError as error:

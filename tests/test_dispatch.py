@@ -91,14 +91,9 @@ class ParserDispatchTests(unittest.TestCase):
             {"context_command": "show", "name": "signalrot"}
         ),
         (
-            ["context", "show", "signalrot", "--vision"],
-            "context_show",
-            {"context_command": "show", "name": "signalrot", "vision": True}
-        ),
-        (
             ["context", "show"],
             "context_show",
-            {"context_command": "show", "name": None, "vision": False}
+            {"context_command": "show", "name": None}
         ),
         (
             ["context", "bind"],
@@ -275,6 +270,7 @@ class ParserDispatchTests(unittest.TestCase):
             ["machine", "inspect", "--inspect"],
             ["context", "mod", "alex", "extra"],
             ["context", "delete", "example", "extra"],
+            ["context", "show", "signalrot", "--vision"],
             ["wtf"],
             ["sr", "context", "--refresh"],
             ["sr", "diff", "--note", "production only"],
@@ -292,7 +288,7 @@ class ParserDispatchTests(unittest.TestCase):
             (["machine", "-h"], ("usage: rotbot machine", "inspect")),
             (["git", "-h"], ("usage: rotbot git", "status")),
             (["git", "status", "-h"], ("usage: rotbot git status", "--fetch")),
-            (["context", "show", "-h"], ("usage: rotbot context show", "--vision"))
+            (["context", "show", "-h"], ("usage: rotbot context show",))
         )
         for argv, expected in cases:
             with self.subTest(argv=argv), patch.object(
@@ -306,6 +302,8 @@ class ParserDispatchTests(unittest.TestCase):
             self.assertIn("usage:", message)
             for text in expected:
                 self.assertIn(text, message)
+            if argv == ["context", "show", "-h"]:
+                self.assertNotIn("--vision", message)
 
     def test_context_add_help_describes_interactive_creation(self):
         with patch.object(

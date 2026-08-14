@@ -1,8 +1,12 @@
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
+import tomllib
+
+from rotbot.contexts import documents, machines, matching
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,7 @@ _SOURCE_LAYOUTS = (
     (Path("people/assistant"), "assistants"),
     (Path("people/contact"), "contacts"),
 )
-_NAMESPACES = ("local", "shareable")
+_NAMESPACE_MAP = {"local": "private", "shareable": "general"}
 
 
 class _UnsafeRecord(Exception):
@@ -49,54 +53,161 @@ def _item(name, category, source, destination, classification, detail=""):
     )
 
 
+def _add_content(files, relative, content):
+    if relative in files:
+        raise _UnsafeRecord(f"multiple source files map to {relative}")
+    files[relative] = content
+
+
 def _add_file(files, relative, path):
     if path.is_symlink() or not path.is_file():
         raise _UnsafeRecord(f"unsupported non-regular file: {path}")
-    if relative in files:
-        raise _UnsafeRecord(f"multiple source files map to {relative}")
     try:
-        files[relative] = path.read_bytes()
+        _add_content(files, relative, path.read_bytes())
     except OSError as error:
         raise _UnsafeRecord(f"could not read {path}: {error}") from None
 
 
-def _add_namespace(files, directories, source, namespace):
-    root = source / namespace
+def _knowledge_content(path):
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise _UnsafeRecord(f"could not read {path}: {error}") from None
+    if path.name == "relationship.md":
+        return "relationships.md", content
+    if path.suffix == ".md":
+        return path.name, content
+    if path.suffix == ".toml":
+        try:
+            text = content.decode("utf-8")
+            tomllib.loads(text)
+        except (UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise _UnsafeRecord(f"invalid legacy TOML knowledge {path}: {error}") from None
+        rendered = f"# {path.stem.replace('_', ' ').title()}\n\n```toml\n{text.rstrip()}\n```\n"
+        return f"{path.stem}.md", rendered.encode("utf-8")
+    raise _UnsafeRecord(f"unsupported legacy knowledge document: {path}")
+
+
+def _add_namespace(files, directories, source, legacy_namespace, category):
+    root = source / legacy_namespace
     if not os.path.lexists(root):
         return
     if root.is_symlink() or not root.is_dir():
         raise _UnsafeRecord(f"invalid privacy namespace: {root}")
+    namespace = _NAMESPACE_MAP[legacy_namespace]
     directories.add(Path(namespace))
     for path in root.iterdir():
         if path.is_dir() or path.is_symlink():
             raise _UnsafeRecord(f"nested privacy paths are not supported: {path}")
-        _add_file(files, Path(namespace) / path.name, path)
+        if category == "projects" and path.name in {"match.toml", "match.md"}:
+            if path.name == "match.md":
+                try:
+                    content = matching.render_match_toml(
+                        matching.parse_legacy_match_document(
+                            path.read_text(encoding="utf-8")
+                        )
+                    ).encode("utf-8")
+                except (OSError, UnicodeError, matching.MatchError) as error:
+                    raise _UnsafeRecord(f"invalid legacy project match: {error}") from None
+                _add_content(files, Path("match.toml"), content)
+            else:
+                _add_file(files, Path("match.toml"), path)
+            continue
+        filename, content = _knowledge_content(path)
+        _add_content(files, Path(namespace) / filename, content)
+
+
+def _structural_metadata(metadata, category):
+    if category != "machines":
+        return None
+    required = ("id", "name", "display_name")
+    if any(not isinstance(metadata.get(key), str) for key in required):
+        raise _UnsafeRecord("invalid machine metadata")
+    return (
+        'type = "machine"\n'
+        f'id = {json.dumps(metadata["id"])}\n'
+        f'name = {json.dumps(metadata["name"], ensure_ascii=False)}\n'
+        f'display_name = {json.dumps(metadata["display_name"], ensure_ascii=False)}\n'
+    ).encode("utf-8")
 
 
 def _source_manifest(source, category=None):
     if source.is_symlink() or not source.is_dir():
         raise _UnsafeRecord(f"invalid source entity directory: {source}")
     metadata = source / "metadata.toml"
+    try:
+        metadata_content = metadata.read_bytes()
+        metadata_document = tomllib.loads(metadata_content.decode("utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+        raise _UnsafeRecord(f"invalid metadata {metadata}: {error}") from None
     files = {}
-    directories = {Path("local"), Path("shareable")}
-    _add_file(files, Path("metadata.toml"), metadata)
-    for namespace in _NAMESPACES:
-        _add_namespace(files, directories, source, namespace)
+    directories = {Path("general"), Path("private")}
+    structural = _structural_metadata(metadata_document, category)
+    _add_content(files, Path("metadata.toml"), structural or metadata_content)
+    context_type = {
+        "users": "user", "assistants": "assistant", "machines": "machine",
+        "projects": "project", "contacts": "contact"
+    }.get(category, metadata_document.get("role", "contact"))
+    name = metadata_document.get("name", source.name)
+    display_name = metadata_document.get("display_name", name)
+    _add_content(
+        files,
+        Path("identity.md"),
+        documents.render_identity(name, context_type, display_name).encode("utf-8")
+    )
+    _add_content(
+        files,
+        Path("relationships.toml"),
+        documents.render_relationships(
+            metadata_document.get("related_projects", ())
+        ).encode("utf-8")
+    )
+    if category == "machines":
+        portable = {
+            key: metadata_document[key]
+            for key in (*machines.PORTABLE_SCALAR_FIELDS, "cpu", "memory", "gpus")
+            if key in metadata_document
+        }
+        try:
+            machine = machines.build_machine_context(
+                name,
+                display_name,
+                portable,
+                metadata_document.get("id")
+            )
+            machine_content = machines.render_machine_facts(machine).encode("utf-8")
+        except machines.MachineContextError as error:
+            raise _UnsafeRecord(f"invalid machine facts: {error}") from None
+        _add_content(files, Path("machine.toml"), machine_content)
+    for namespace in _NAMESPACE_MAP:
+        _add_namespace(files, directories, source, namespace, category)
     try:
         entries = tuple(source.iterdir())
     except OSError as error:
         raise _UnsafeRecord(f"could not inspect {source}: {error}") from None
     for path in entries:
-        if path.name == "metadata.toml" or path.name in _NAMESPACES:
+        if path.name == "metadata.toml" or path.name in _NAMESPACE_MAP:
             continue
         if path.is_symlink() or not path.is_file():
             raise _UnsafeRecord(f"unsupported source entry: {path}")
-        relative = (
-            Path(path.name)
-            if category == "assistants" and path.name == "capabilities.toml"
-            else Path("local") / path.name
-        )
-        _add_file(files, relative, path)
+        if category == "assistants" and path.name == "capabilities.toml":
+            _add_file(files, Path(path.name), path)
+        elif category == "projects" and path.name in {"match.toml", "match.md"}:
+            if path.name == "match.md":
+                try:
+                    content = matching.render_match_toml(
+                        matching.parse_legacy_match_document(
+                            path.read_text(encoding="utf-8")
+                        )
+                    ).encode("utf-8")
+                except (OSError, UnicodeError, matching.MatchError) as error:
+                    raise _UnsafeRecord(f"invalid legacy project match: {error}") from None
+                _add_content(files, Path("match.toml"), content)
+            else:
+                _add_file(files, Path("match.toml"), path)
+        else:
+            filename, content = _knowledge_content(path)
+            _add_content(files, Path("private") / filename, content)
     return files, directories
 
 
@@ -275,18 +386,13 @@ def migrate_contexts(
                     if not _destination_matches(staging, files, directories):
                         raise _UnsafeRecord("staged copy verification failed")
                     try:
-                        destination.mkdir()
+                        os.rename(staging, destination)
+                        staging = None
                     except FileExistsError:
                         raise _UnsafeRecord("destination appeared during migration") from None
-                    try:
-                        _write_manifest(destination, files, directories)
-                        if not _destination_matches(destination, files, directories):
-                            raise _UnsafeRecord("destination verification failed")
-                    except BaseException:
-                        shutil.rmtree(destination, ignore_errors=True)
-                        raise
                 finally:
-                    shutil.rmtree(staging, ignore_errors=True)
+                    if staging is not None:
+                        shutil.rmtree(staging, ignore_errors=True)
                 if delete_source:
                     _remove_verified_source(source, files, directories, destination, category)
             except (OSError, _UnsafeRecord) as error:

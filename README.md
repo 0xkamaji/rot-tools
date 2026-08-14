@@ -122,7 +122,8 @@ the `PATH` value and refreshes naturally after `PATH` changes.
 OpenCode starts lazily on the first conversational message. Interactive Rot
 uses OpenCode's official CLI session support and reuses the returned session ID
 for later conversational turns. After `cd` or a successful context-changing Rot
-command, the next AI turn refreshes shareable Rot context in that same session.
+command, the next AI turn recompiles externally eligible Rot context in that
+same session.
 
 While a conversational request is waiting for visible output, interactive Rot
 shows an animated `rot · thinking` status. User-visible OpenCode text events are
@@ -143,7 +144,7 @@ answers use the resolved assistant identity as a quiet speaker heading:
 kamaji ❯ why is the resolver structured this way?
 
 rot [x_o]
-The resolver separates portable context from local resolution data because...
+The resolver separates durable context from installation-specific resolution data because...
 ```
 
 Shell and deterministic Rot output remain raw and unlabeled. The larger
@@ -291,7 +292,7 @@ Submitted `history` and exit commands are retained like other completed input.
 History is bounded to the most recent 5000 commands and persists locally in
 `~/.config/rotbot/history` (or the corresponding `XDG_CONFIG_HOME` location). The
 file is private local UI state, created with user-only permissions where the
-platform supports them. It is not portable RotBot context and is never included
+platform supports them. It is not Rot context and is never included
 in prompts sent to Codex, OpenCode, or another AI backend.
 
 ## Git commands
@@ -363,15 +364,16 @@ If no agent is selected, RotBot uses the first supported agent it finds.
 
 `rot ask` resolves the current assistant, user, machine, project, and runtime
 capability state, then compiles the allowlisted external context described
-below. Project vision is not included automatically.
+below. Knowledge filenames have no special disclosure semantics; their
+`general/` or `private/` namespace determines eligibility.
 
 Rot is the persistent assistant identity. Codex and OpenCode are execution
 backends operating through that identity, not replacements for it.
 
 `rot ask` and interactive AI use the same deterministic egress gate. Only safe
-entity names, permitted runtime capability state, and semantic files under
-`shareable/` are eligible. UUIDs, local paths, `local/` semantics, and machine
-configuration are excluded by construction.
+entity names, permitted runtime capability state, root `identity.md`, and
+semantic files under `general/` are externally eligible. UUIDs, local paths,
+`private/` knowledge, and machine configuration are excluded by construction.
 
 ## Contexts
 
@@ -382,60 +384,66 @@ source. It lives under `$XDG_DATA_HOME/rotbot/contexts/`, with fallback to
 
 ```text
 contexts/
-├── users/NAME/{metadata.toml,local/,shareable/}
-├── assistants/NAME/{metadata.toml,capabilities.toml,local/,shareable/}
-├── contacts/NAME/{metadata.toml,local/,shareable/}
-├── machines/NAME/{metadata.toml,local/,shareable/}
-└── projects/NAME/{metadata.toml,local/,shareable/}
+├── users/NAME/{metadata.toml,identity.md,relationships.toml,general/,private/}
+├── assistants/NAME/{metadata.toml,identity.md,relationships.toml,capabilities.toml,general/,private/}
+├── contacts/NAME/{metadata.toml,identity.md,relationships.toml,general/,private/}
+├── machines/NAME/{metadata.toml,identity.md,relationships.toml,machine.toml,general/,private/}
+└── projects/NAME/{metadata.toml,identity.md,relationships.toml,match.toml,general/,private/}
 ```
 
-Both `local/` and `shareable/` remain private local Rot data and stay outside
-Git. `shareable` does not mean public, publishable, or safe for source control.
-It means only that a semantic file is eligible for an explicitly permitted
-external AI request. Local Rot reasoning may load the union of both namespaces.
-External AI context starts empty and allowlists `shareable/` only. Unclassified
-legacy data migrates to `local/` by default.
+Every entity uses this universal root structure. `metadata.toml` stores stable
+identity, `identity.md` describes the entity, and `relationships.toml` records
+typed links to other contexts. The knowledge namespaces contain arbitrary
+Markdown category files rather than a fixed list of documents, so categories
+can be added as the context evolves.
+
+Both `general/` and `private/` remain local Rot data and stay outside Git.
+`general/` does not mean public, publishable, or safe for source control; its
+Markdown files are only eligible for an explicitly permitted external AI
+request. `private/` is deny-by-default and excluded from external AI context.
+Trusted local reasoning may load both namespaces. Legacy layouts migrate
+`local/` to `private/` and `shareable/` to `general/`.
 
 Stable UUIDs in `metadata.toml` remain entity identity; paths and display names
 are not identity. Safe outbound entity envelopes expose only type/name labels,
 not UUIDs, private paths, network identifiers, or local configuration.
 
-Machine-specific paths, identity bindings, project bindings, routing, and host
-facts remain under `$XDG_CONFIG_HOME/rotbot/`, normally `~/.config/rotbot/`.
-Configuration is not semantic context and cannot enter the cloud egress
-pipeline. The repository contains only code, schemas/templates, tests, and the
-built-in Rot definition at `builtin/assistants/rot/`.
+Machine-specific paths, identity bindings, project bindings, and routing remain
+under `$XDG_CONFIG_HOME/rotbot/`, normally `~/.config/rotbot/`. Structured host
+facts live in root `machine.toml`; they are available to trusted-private
+reasoning but excluded from cloud egress. Configuration is not semantic context
+and cannot enter the cloud egress pipeline. The repository contains only code,
+schemas/templates, tests, and the built-in Rot definition at
+`builtin/assistants/rot/`.
 
 During machine creation, choose whether to inspect the current system or leave
 the context empty for manual editing. Inspection is deterministic and local;
-detected portable and private facts are shown separately and require separate
+detected machine and private facts are shown separately and require separate
 approval. Private facts default to declined. Local records may describe
 hostnames, addresses, network interfaces, users, and SSH availability, but must
 never contain passwords, private keys, tokens, cookies, recovery codes, or
-other authentication secrets. RotBot never automatically loads local records
+other authentication secrets. RotBot never automatically loads private records
 when listing, showing, matching, or building AI prompts.
 
-Every active project, user, assistant, contact, and machine context has a portable UUID in its
+Every active project, user, assistant, contact, and machine context has a stable UUID in its
 `metadata.toml`. Names remain the human-facing CLI identifiers; local bindings
 store UUIDs so renaming a context does not change its backend identity.
 
-Project files:
+Universal root files:
 
-| File          | Purpose                                       |
-| ------------- | --------------------------------------------- |
-| `metadata.toml` | Stable UUID and display/lookup name         |
-| `identity.md` | What the project is and its stable principles |
-| `state.md`    | What currently exists                         |
-| `vision.md`   | Where the project is going                    |
-| `match.md`    | Facts used to recognize the project           |
+| File                 | Purpose                                    |
+| -------------------- | ------------------------------------------ |
+| `metadata.toml`      | Stable UUID, type, and display/lookup name |
+| `identity.md`        | Stable human-authored entity identity      |
+| `relationships.toml` | Typed relationships to other contexts      |
 
-Machine files:
+Type-specific root files:
 
-| File            | Purpose                                      |
-| --------------- | -------------------------------------------- |
-| `metadata.toml` | Portable identity and normalized hardware facts |
-| `identity.md`   | Human-authored purpose and environment context |
-| `software.toml` | Deliberately selected relevant software      |
+| Context   | File                | Purpose                                 |
+| --------- | ------------------- | --------------------------------------- |
+| Assistant | `capabilities.toml` | Intended operating policy               |
+| Project   | `match.toml`        | Deterministic project recognition facts |
+| Machine   | `machine.toml`      | Normalized machine facts                |
 
 Assistant `capabilities.toml` declares operating intent, such as a safe TALK
 default and whether project-scoped WORK may be requested. It does not grant
@@ -481,7 +489,7 @@ Archived contexts are moved beneath the hidden `contexts/.archive/` data directo
 outside RotBot's active discovery paths. Each kind has its own bucket:
 `projects/`, `machines/`, `contacts/`, `users/`, or `assistants/`. Archiving a
 project also removes its local source and production bindings so the name can
-be recreated cleanly. Archiving a portable machine context does not modify its
+be recreated cleanly. Archiving a machine context does not modify its
 installation-specific local metadata file.
 
 Rot stores this installation's active context IDs in
@@ -507,7 +515,7 @@ rot context inspect
 On first use, inspection prompts for an existing or new user and assistant, then
 inspects and registers the local machine if needed. These three selections are
 persisted locally. Projects remain directory-specific and are never saved as a
-global default. The final summary excludes local/private machine metadata.
+global default. The final summary excludes private machine metadata.
 Normal `rot ask` resolution is non-interactive and does not bootstrap missing
 bindings.
 
@@ -552,13 +560,8 @@ rot context show rotbot
 rot context show signalrot
 ```
 
-| Flag       | Purpose                                |
-| ---------- | -------------------------------------- |
-| `--vision` | Show only a project's future direction |
-
-```bash
-rot context show rotbot --vision
-```
+Saved context output includes all populated knowledge categories from both
+`general/` and `private/` because this is a local inspection command.
 
 ### Bind a project
 
@@ -585,7 +588,7 @@ Example:
 rot context bind signalrot ~/github/signalrot --as source
 ```
 
-Local paths are saved in RotBot’s local configuration rather than portable context files.
+Local paths are saved in RotBot’s local configuration rather than context files.
 
 ## SignalRot wrapper
 
@@ -630,9 +633,9 @@ This differs from:
 rot context show signalrot
 ```
 
-`rot context show signalrot` displays the portable context files.
+`rot context show signalrot` displays the context files.
 `rot sr context` provides a SignalRot-specific dashboard.
-`rot sr context --full` is a shortcut for the complete portable context display.
+`rot sr context --full` is a shortcut for the complete context display.
 
 ### Compare source and production
 

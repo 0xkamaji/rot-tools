@@ -3,7 +3,7 @@ from pathlib import Path
 import stat
 import tempfile
 
-from rotbot.contexts import entities, loader, people
+from rotbot.contexts import documents, entities, loader, people
 from rotbot.ui.terminal import rot_continue, rot_say
 
 
@@ -44,13 +44,37 @@ class PersonModificationError(Exception):
 
 
 def available_documents(person):
-    if isinstance(person, (entities.UserContext, entities.AssistantContext)):
-        return tuple(
-            filename for filename in entities._document_names(person.context_type)
-            if filename in DOCUMENTS
-        )
-    allowed = people.person_document_names(person)
-    return tuple(filename for filename in DOCUMENTS if filename in allowed)
+    if isinstance(person, entities.AssistantContext) and not entities.entity_directory(
+        person
+    ).exists():
+        return ()
+    directory = (
+        entities.entity_directory(person)
+        if isinstance(person, (entities.UserContext, entities.AssistantContext))
+        else people.person_context_directory(person)
+    )
+    try:
+        names = {path.name for path in documents.namespace_files(directory, "private")}
+    except documents.ContextDocumentError as error:
+        raise PersonModificationError(str(error)) from None
+    return tuple(sorted(names))
+
+
+def _validate_document_filename(filename):
+    if (
+        not isinstance(filename, str)
+        or Path(filename).name != filename
+        or not filename.endswith(".md")
+        or filename == ".md"
+        or any(ord(character) < 32 for character in filename)
+    ):
+        raise PersonModificationError(f"Invalid knowledge document name: {filename}")
+    return filename
+
+
+def _knowledge_template(filename):
+    title = Path(filename).stem.replace("-", " ").replace("_", " ").title()
+    return f"# {title}\n"
 
 
 def _single_line(value, label, maximum):
@@ -122,17 +146,14 @@ def _updated_document(content, category, information, category_description=None)
     return updated
 
 
-def _person_document(name, filename, people_root):
+def _person_document(name, filename, people_root, *, create=False):
     try:
         person = people.load_person_context(
             name, people_root=people_root if people_root is not None else None
         )
     except people.PersonContextError as error:
         raise PersonModificationError(str(error)) from None
-    if filename not in available_documents(person):
-        raise PersonModificationError(
-            f"Unsupported document for person context '{name}': {filename}"
-        )
+    filename = _validate_document_filename(filename)
     try:
         directory = people.person_context_directory(
             person,
@@ -140,15 +161,26 @@ def _person_document(name, filename, people_root):
         )
     except people.PersonContextError as error:
         raise PersonModificationError(str(error)) from None
-    document = directory / "local" / filename
-    if not document.exists() and people_root is not None:
-        document = directory / filename
+    try:
+        documents.ensure_structure(directory, person.role)
+    except documents.ContextDocumentError as error:
+        raise PersonModificationError(str(error)) from None
+    document = directory / "private" / filename
+    if not document.exists() and create:
+        try:
+            document.write_text(_knowledge_template(filename), encoding="utf-8")
+            if os.name != "nt":
+                os.chmod(document, 0o600)
+        except OSError as error:
+            raise PersonModificationError(
+                f"Could not create person context document: {error}"
+            ) from None
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid person context document: {filename}")
     return person, document
 
 
-def _entity_document(name, filename, context_type, root=None):
+def _entity_document(name, filename, context_type, root=None, *, create=False):
     try:
         entity = (
             entities.load_user_context(name, root=root)
@@ -157,10 +189,7 @@ def _entity_document(name, filename, context_type, root=None):
         )
     except entities.EntityContextError as error:
         raise PersonModificationError(str(error)) from None
-    if filename not in available_documents(entity):
-        raise PersonModificationError(
-            f"Unsupported document for {context_type} context '{name}': {filename}"
-        )
+    filename = _validate_document_filename(filename)
     directory = entities.entity_directory(entity, root)
     if context_type == "assistant" and root is None and not directory.exists():
         try:
@@ -171,17 +200,20 @@ def _entity_document(name, filename, context_type, root=None):
         raise PersonModificationError(
             f"Built-in {context_type} context must be overridden locally before modification."
         )
-    document = directory / "local" / filename
-    if not document.exists():
-        document.parent.mkdir(exist_ok=True)
-        template = entities.render_entity_files(entity).get(filename)
-        if template is None:
+    try:
+        documents.ensure_structure(directory, context_type)
+    except documents.ContextDocumentError as error:
+        raise PersonModificationError(str(error)) from None
+    document = directory / "private" / filename
+    if not document.exists() and create:
+        try:
+            document.write_text(_knowledge_template(filename), encoding="utf-8")
+            if os.name != "nt":
+                os.chmod(document, 0o600)
+        except OSError as error:
             raise PersonModificationError(
-                f"Invalid {context_type} context document: {filename}"
-            )
-        document.write_text(template, encoding="utf-8")
-        if os.name != "nt":
-            os.chmod(document, 0o600)
+                f"Could not create {context_type} context document: {error}"
+            ) from None
     if document.is_symlink() or not document.is_file():
         raise PersonModificationError(f"Invalid {context_type} context document: {filename}")
     return entity, document
@@ -207,7 +239,6 @@ def add_person_information(
     people_root=None
 ):
     root = Path(people_root) if people_root is not None else None
-    _person, document = _person_document(name, filename, root)
     category = _single_line(category, "person context category", 200)
     information = _single_line(information, "person context information", 10_000)
     if category_description is not None:
@@ -221,6 +252,14 @@ def add_person_information(
                 "Invalid person context category description."
             )
     try:
+        _person, existing_document = _person_document(name, filename, root)
+    except PersonModificationError as error:
+        if "Invalid person context document" not in str(error):
+            raise
+        existing_document = None
+    _person, document = _person_document(name, filename, root, create=True)
+    created_document = existing_document is None
+    try:
         original_stat = document.stat()
         original = document.read_text(encoding="utf-8")
         updated = _updated_document(
@@ -229,7 +268,13 @@ def add_person_information(
             information,
             category_description
         )
+    except PersonModificationError:
+        if created_document:
+            document.unlink(missing_ok=True)
+        raise
     except (OSError, UnicodeError) as error:
+        if created_document:
+            document.unlink(missing_ok=True)
         raise PersonModificationError(f"Could not read person context document: {error}") from None
 
     temporary_path = None
@@ -261,8 +306,12 @@ def add_person_information(
         os.replace(temporary_path, document)
         temporary_path = None
     except PersonModificationError:
+        if created_document:
+            document.unlink(missing_ok=True)
         raise
     except OSError as error:
+        if created_document:
+            document.unlink(missing_ok=True)
         raise PersonModificationError(f"Could not update person context document: {error}") from None
     finally:
         if temporary_path is not None:
@@ -309,7 +358,8 @@ def replace_person_metadata(
         original = metadata.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise PersonModificationError(f"Could not read person context metadata: {error}") from None
-    updated = people.render_person_files(updated_person)["metadata.toml"]
+    rendered = people.render_person_files(updated_person)
+    updated = rendered["metadata.toml"]
     if updated == original:
         return metadata
 
@@ -341,6 +391,14 @@ def replace_person_metadata(
             )
         os.replace(temporary_path, metadata)
         temporary_path = None
+        relationships = directory / "relationships.toml"
+        try:
+            _atomic_replace_document(
+                relationships, rendered["relationships.toml"], "context relationships"
+            )
+        except PersonModificationError:
+            metadata.write_text(original, encoding="utf-8")
+            raise
     except PersonModificationError:
         raise
     except OSError as error:
@@ -407,12 +465,23 @@ def _apply_metadata_change(person, display_name, related_projects):
         if not _confirm("Apply this metadata modification?"):
             rot_say("Context modification cancelled. No files were changed.")
             return 0
-        destination = entities.entity_directory(person) / "metadata.toml"
+        directory = entities.entity_directory(person)
+        destination = directory / "metadata.toml"
+        original_metadata = destination.read_text(encoding="utf-8")
         try:
             _atomic_replace_document(
                 destination, entities.render_metadata(proposed),
                 "context metadata"
             )
+            try:
+                _atomic_replace_document(
+                    directory / "relationships.toml",
+                    documents.render_relationships(proposed.related_projects),
+                    "context relationships"
+                )
+            except PersonModificationError:
+                destination.write_text(original_metadata, encoding="utf-8")
+                raise
         except PersonModificationError as error:
             rot_say(str(error))
             return 1
@@ -606,14 +675,21 @@ def context_mod(args):
         rot_say(str(error))
         return 1
 
-    filenames = available_documents(person)
-    file_options = filenames + ("metadata.toml",)
+    try:
+        filenames = available_documents(person)
+    except PersonModificationError as error:
+        rot_say(str(error))
+        return 1
+    file_options = filenames + ("create", "metadata.toml")
     file_choice = _choose_number(
         f"Which file would you like to modify for {person.display_name}?",
         tuple(
-            f"{filename} - {DOCUMENTS[filename]['description']}"
+            f"{filename} - Private knowledge"
             for filename in filenames
-        ) + ("metadata.toml - Change display name or related projects",)
+        ) + (
+            "Create a new private knowledge file",
+            "metadata.toml - Change display name or related projects"
+        )
     )
     if file_choice is None:
         rot_say("Context modification cancelled. No files were changed.")
@@ -621,9 +697,29 @@ def context_mod(args):
     filename = file_options[file_choice]
     if filename == "metadata.toml":
         return _modify_person_metadata(person)
-    definition = DOCUMENTS[filename]
+    creating_document = filename == "create"
+    if creating_document:
+        rot_say("Enter a knowledge filename ending in .md:")
+        filename = _read_input()
+        if filename is None:
+            rot_say("Context modification cancelled. No files were changed.")
+            return 0
+        try:
+            filename = _validate_document_filename(filename)
+        except PersonModificationError as error:
+            rot_say(str(error))
+            return 1
+        if filename in filenames:
+            rot_say(f"Knowledge document already exists: {filename}")
+            return 1
+    definition = DOCUMENTS.get(filename, {
+        "description": "Private context knowledge",
+        "subject": Path(filename).stem.replace("-", " ").replace("_", " ")
+    })
     try:
-        if isinstance(person, (entities.UserContext, entities.AssistantContext)):
+        if creating_document:
+            categories = ()
+        elif isinstance(person, (entities.UserContext, entities.AssistantContext)):
             _entity, document = _entity_document(
                 person.name, filename, person.context_type.value
             )
@@ -697,15 +793,21 @@ def context_mod(args):
     try:
         if isinstance(person, (entities.UserContext, entities.AssistantContext)):
             entity, document = _entity_document(
-                person.name, filename, person.context_type.value
+                person.name, filename, person.context_type.value,
+                create=creating_document
             )
-            original = document.read_text(encoding="utf-8")
-            updated = _updated_document(
-                original, category, information, category_description
-            )
-            destination = _atomic_replace_document(
-                document, updated, f"{person.role} context document"
-            )
+            try:
+                original = document.read_text(encoding="utf-8")
+                updated = _updated_document(
+                    original, category, information, category_description
+                )
+                destination = _atomic_replace_document(
+                    document, updated, f"{person.role} context document"
+                )
+            except BaseException:
+                if creating_document:
+                    document.unlink(missing_ok=True)
+                raise
         else:
             destination = add_person_information(
                 person.name,

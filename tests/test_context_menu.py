@@ -12,7 +12,7 @@ class ContextMenuTests(unittest.TestCase):
             ("dev", "context_develop", {"name": None, "agent": None}),
             ("list", "context_list", {}),
             ("m", "context_mod", {"name": None}),
-            ("5", "context_show", {"name": None, "vision": False}),
+            ("5", "context_show", {"name": None}),
             (
                 "bind",
                 "context_bind",
@@ -34,6 +34,8 @@ class ContextMenuTests(unittest.TestCase):
             arguments = handler.call_args.args[0]
             for name, value in expected.items():
                 self.assertEqual(getattr(arguments, name), value)
+            if handler_name == "context_show":
+                self.assertFalse(hasattr(arguments, "vision"))
 
     def test_menu_displays_descriptions_and_retries_invalid_choice(self):
         with patch("builtins.input", side_effect=("invalid", "list")), patch.object(

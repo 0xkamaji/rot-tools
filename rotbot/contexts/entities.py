@@ -32,27 +32,6 @@ CONTEXT_TYPES = {
     ContextType.PROJECT: "projects"
 }
 
-USER_DOCUMENTS = (
-    "identity.md", "preferences.md", "experience.md", "priorities.md",
-    "relationship.md", "state.md", "learned.md"
-)
-ASSISTANT_DOCUMENTS = (
-    "identity.md", "behavior.md", "relationship.md", "state.md", "learned.md"
-)
-
-BEHAVIOR_TEMPLATE = (
-    "# Behavior\n\n"
-    "<!-- Durable behavioral preferences for this assistant. -->\n\n"
-    "## Communication\n\n"
-    "<!-- Tone, level of detail, and presentation style. -->\n\n"
-    "## Collaboration\n\n"
-    "<!-- How the assistant works with users and handles uncertainty. -->\n\n"
-    "## Limitations\n\n"
-    "<!-- How the assistant communicates limits, risk, and uncertainty. -->\n\n"
-    "## Other\n\n"
-    "<!-- Other durable behavioral guidance. -->\n"
-)
-
 SAFE_CAPABILITIES = """[interaction]
 default_mode = "talk"
 
@@ -133,10 +112,6 @@ def _builtin_directory(reference, context_type):
     return None
 
 
-def _document_names(context_type):
-    return USER_DOCUMENTS if ContextType(context_type) == ContextType.USER else ASSISTANT_DOCUMENTS
-
-
 def _normalize_related_projects(projects):
     try:
         return people._normalize_related_projects(projects)
@@ -187,24 +162,18 @@ def render_metadata(entity):
 
 
 def render_entity_files(entity):
-    if isinstance(entity, UserContext):
-        templates = {
-            **people.CORE_TEMPLATES,
-            **people.USER_TEMPLATES,
-            "learned.md": "# Learned\n"
-        }
-    elif isinstance(entity, AssistantContext):
-        templates = {
-            "identity.md": people.CORE_TEMPLATES["identity.md"],
-            "behavior.md": BEHAVIOR_TEMPLATE,
-            "relationship.md": people.CORE_TEMPLATES["relationship.md"],
-            "state.md": people.CORE_TEMPLATES["state.md"],
-            "learned.md": "# Learned\n",
-            "capabilities.toml": SAFE_CAPABILITIES
-        }
-    else:
+    if not isinstance(entity, (UserContext, AssistantContext)):
         raise EntityContextError(f"Unsupported entity context: {entity!r}")
-    return {"metadata.toml": render_metadata(entity), **templates}
+    files = {
+        "metadata.toml": render_metadata(entity),
+        "identity.md": documents.render_identity(
+            entity.name, entity.context_type.value, entity.display_name
+        ),
+        "relationships.toml": documents.render_relationships(entity.related_projects)
+    }
+    if isinstance(entity, AssistantContext):
+        files["capabilities.toml"] = SAFE_CAPABILITIES
+    return files
 
 
 def entity_directory(entity, root=None):
@@ -220,11 +189,19 @@ def _canonical_directory(reference, context_type, root=None):
             f"Invalid {context_type.value} context directory: {category}"
         )
     try:
+        documents.recover_interrupted_migrations(category)
+    except documents.ContextDocumentError as error:
+        raise EntityContextError(str(error)) from None
+    try:
         uuid.UUID(str(reference))
         reference_is_id = True
     except (ValueError, TypeError, AttributeError):
         reference_is_id = False
     direct = category / str(reference)
+    try:
+        documents.recover_interrupted_migration(direct)
+    except documents.ContextDocumentError as error:
+        raise EntityContextError(str(error)) from None
     if not reference_is_id and os.path.lexists(direct):
         if direct.is_symlink() or not direct.is_dir():
             raise EntityContextError(
@@ -277,6 +254,10 @@ def _load_canonical(reference, context_type, root=None):
         directory = _builtin_directory(reference, context_type)
     if directory is None:
         return None
+    try:
+        documents.ensure_structure(directory, context_type.value)
+    except documents.ContextDocumentError as error:
+        raise EntityContextError(str(error)) from None
     metadata = _read_metadata(directory, context_type)
     builder = build_user_context if context_type == ContextType.USER else build_assistant_context
     entity = builder(
@@ -356,29 +337,21 @@ def load_entity_documents(entity, *, root=None, view="full"):
             )
 
     def load_source(source):
-        loaded = {}
-        paths = documents.semantic_files(
-            source, view, set(_document_names(entity.context_type)),
-            include_legacy_local=view == "full"
-        )
+        loaded = []
+        paths = documents.semantic_files(source, view)
         for path in paths:
             filename = path.name
             content = path.read_text(encoding="utf-8")
             sections = documents.populated_markdown_sections(content, filename)
             if sections:
-                loaded[filename] = EntityDocument(filename, sections)
+                loaded.append(EntityDocument(filename, sections))
         return loaded
 
     try:
         if entity.context_type == ContextType.ASSISTANT:
-            return entity, tuple(load_source(directory).values())
+            return entity, tuple(load_source(directory))
 
-        paths = []
-        for source in (directory,):
-            paths.extend(documents.semantic_files(
-                source, view, set(_document_names(entity.context_type)),
-                include_legacy_local=view == "full"
-            ))
+        paths = list(documents.semantic_files(directory, view))
     except (OSError, UnicodeError, documents.ContextDocumentError) as error:
         raise EntityContextError(str(error)) from None
     loaded_documents = []
@@ -422,11 +395,12 @@ def create_entity_context(entity, *, root=None):
         capabilities = files.pop("capabilities.toml", None)
         if capabilities is not None:
             people._write_document(destination / "capabilities.toml", capabilities)
-        local = destination / "local"
-        local.mkdir(mode=0o700)
-        (destination / "shareable").mkdir(mode=0o700)
-        for filename, content in files.items():
-            people._write_document(local / filename, content)
+        people._write_document(destination / "identity.md", files.pop("identity.md"))
+        people._write_document(
+            destination / "relationships.toml", files.pop("relationships.toml")
+        )
+        (destination / "general").mkdir(mode=0o700)
+        (destination / "private").mkdir(mode=0o700)
     except BaseException as error:
         shutil.rmtree(destination, ignore_errors=True)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
@@ -452,13 +426,15 @@ def materialize_builtin_assistant(reference, *, root=None):
     try:
         capability_text = capabilities.read_text(encoding="utf-8")
         tomllib.loads(capability_text)
-        builtin_documents = documents.semantic_files(
-            builtin, "full", set(_document_names(ContextType.ASSISTANT)),
-            include_legacy_local=False
-        )
+        documents.ensure_structure(builtin, "assistant")
+        identity_text = (builtin / "identity.md").read_text(encoding="utf-8")
+        relationships_text = (builtin / "relationships.toml").read_text(encoding="utf-8")
         seeded = {
-            path.name: path.read_text(encoding="utf-8")
-            for path in builtin_documents
+            namespace: {
+                path.name: path.read_text(encoding="utf-8")
+                for path in documents.namespace_files(builtin, namespace)
+            }
+            for namespace in documents.KNOWLEDGE_NAMESPACES
         }
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, documents.ContextDocumentError) as error:
         raise EntityContextError(
@@ -502,17 +478,13 @@ def materialize_builtin_assistant(reference, *, root=None):
             )
         )
         people._write_document(temporary / "capabilities.toml", capability_text)
-        local = temporary / "local"
-        shareable = temporary / "shareable"
-        local.mkdir(mode=0o700)
-        shareable.mkdir(mode=0o700)
-        templates = render_entity_files(assistant)
-        for filename in ASSISTANT_DOCUMENTS:
-            people._write_document(local / filename, templates[filename])
-        for filename, content in seeded.items():
-            source = builtin / "shareable" / filename
-            if source.is_file() and not source.is_symlink():
-                people._write_document(shareable / filename, content)
+        people._write_document(temporary / "identity.md", identity_text)
+        people._write_document(temporary / "relationships.toml", relationships_text)
+        for namespace in documents.KNOWLEDGE_NAMESPACES:
+            target = temporary / namespace
+            target.mkdir(mode=0o700)
+            for filename, content in seeded[namespace].items():
+                people._write_document(target / filename, content)
         os.rename(temporary, destination)
         temporary = None
         loaded = _load_canonical(assistant.id, ContextType.ASSISTANT, root)

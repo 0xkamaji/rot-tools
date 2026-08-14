@@ -30,15 +30,13 @@ class LearningTests(unittest.TestCase):
         self.contact = people.build_person_context("plop", "contact")
         self.contact_path = people.create_person_context("plop", "contact")
         self.project_path = self.root / "projects" / "project"
-        (self.project_path / "local").mkdir(parents=True, mode=0o700)
-        (self.project_path / "shareable").mkdir(mode=0o700)
+        (self.project_path / "general").mkdir(parents=True, mode=0o700)
+        (self.project_path / "private").mkdir(mode=0o700)
         (self.project_path / "metadata.toml").write_text(
             loader.render_project_metadata("project"), encoding="utf-8"
         )
-        for filename in ("identity.md", "state.md"):
-            (self.project_path / "local" / filename).write_text(
-                f"# {filename}\n", encoding="utf-8"
-            )
+        (self.project_path / "identity.md").write_text("# Project\n", encoding="utf-8")
+        (self.project_path / "relationships.toml").write_text("", encoding="utf-8")
         self.inspected = inspection.InspectedContext(
             "assistant", self.assistant.id, "user", self.user.id,
             "machine", machines.load_machine_context("machine").id,
@@ -60,9 +58,9 @@ class LearningTests(unittest.TestCase):
             "project": self.project_path,
             "machine": self.machine_path,
             "contact": self.contact_path
-        }[target] / "local" / "learned.md"
+        }[target] / "private" / "learned.md"
 
-    def test_all_targets_append_exact_local_entries_without_shareable_writes(self):
+    def test_all_targets_append_exact_private_entries_without_general_writes(self):
         for target in learning.TARGETS:
             path = self.target_path(target)
             path.unlink(missing_ok=True)
@@ -79,7 +77,7 @@ class LearningTests(unittest.TestCase):
                 path.read_text(encoding="utf-8"),
                 "# Learned\n\n- First line\n  second line\n\n- Exact wording.\n"
             )
-            self.assertFalse((path.parent.parent / "shareable" / "learned.md").exists())
+            self.assertFalse((path.parent.parent / "general" / "learned.md").exists())
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -204,6 +202,7 @@ class LearningTests(unittest.TestCase):
 
     def test_omitted_text_eof_or_empty_input_does_not_modify_context(self):
         path = self.target_path("assistant")
+        path.write_text("# Learned\n\n- existing\n", encoding="utf-8")
         before = path.read_text(encoding="utf-8")
         args = SimpleNamespace(
             learn_action="append", learn_target="assistant", text=[],
@@ -237,11 +236,11 @@ class TrustPreparationTests(unittest.TestCase):
         self.loader_patch.start()
         self.user = entities.build_user_context("kamaji", "Kamaji")
         destination = entities.create_entity_context(self.user, root=self.contexts)
-        (destination / "local" / "learned.md").write_text(
+        (destination / "private" / "learned.md").write_text(
             "# Learned\n\n- LOCAL SECRET TEST FACT 12345\n", encoding="utf-8"
         )
-        (destination / "shareable" / "identity.md").write_text(
-            "# Identity\n\n## Public\n\nSHAREABLE FACT 67890\n", encoding="utf-8"
+        (destination / "identity.md").write_text(
+            "# Identity\n\n## Public\n\nGENERAL IDENTITY FACT 67890\n", encoding="utf-8"
         )
         self.inspected = inspection.InspectedContext(
             None, None, self.user.name, self.user.id, None, None, None, None,
@@ -278,12 +277,12 @@ class TrustPreparationTests(unittest.TestCase):
         private = self.prepare("trusted_private")
         self.assertEqual((private.trust_level, private.context_view), ("trusted_private", "full"))
         self.assertIn("LOCAL SECRET TEST FACT 12345", private.provider_input)
-        self.assertIn("SHAREABLE FACT 67890", private.provider_input)
+        self.assertIn("GENERAL IDENTITY FACT 67890", private.provider_input)
 
         external = self.prepare("external")
         self.assertEqual((external.trust_level, external.context_view), ("external", "egress"))
         self.assertNotIn("LOCAL SECRET TEST FACT 12345", external.provider_input)
-        self.assertIn("SHAREABLE FACT 67890", external.provider_input)
+        self.assertIn("GENERAL IDENTITY FACT 67890", external.provider_input)
         self.assertNotEqual(private.context_fingerprint, external.context_fingerprint)
 
     def test_unconfigured_opencode_and_qwen_named_request_fail_closed(self):

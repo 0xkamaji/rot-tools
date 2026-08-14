@@ -49,8 +49,15 @@ class ContextMatchingTests(unittest.TestCase):
     def create_context(self, name, match=None):
         directory = self.project_context_root / name
         directory.mkdir()
+        (directory / "metadata.toml").write_text(
+            contexts.render_project_metadata(name), encoding="utf-8"
+        )
         (directory / "identity.md").write_text(f"{name} identity", encoding="utf-8")
-        (directory / "state.md").write_text(f"{name} state", encoding="utf-8")
+        (directory / "relationships.toml").write_text("", encoding="utf-8")
+        (directory / "general").mkdir()
+        private = directory / "private"
+        private.mkdir()
+        (private / "state.md").write_text(f"{name} state", encoding="utf-8")
         if match is not None:
             (directory / "match.toml").write_text(match, encoding="utf-8")
         return directory
