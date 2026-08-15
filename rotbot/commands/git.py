@@ -682,7 +682,7 @@ def _machine_git_identity():
     )
 
 
-def _github_ssh_username(host="github.com"):
+def _github_ssh_username(host="github.com", environment: dict[str, str] | None = None):
     command = [
         "ssh", "-T",
         "-o", "BatchMode=yes",
@@ -696,7 +696,8 @@ def _github_ssh_username(host="github.com"):
             capture_output=True,
             text=True,
             check=False,
-            timeout=20
+            timeout=20,
+            env=environment
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
@@ -705,7 +706,7 @@ def _github_ssh_username(host="github.com"):
     return match.group(1) if match else None
 
 
-def _git_remote_accessible(remote_url):
+def _git_remote_accessible(remote_url, environment: dict[str, str] | None = None):
     try:
         process = subprocess.run(
             ["git", "ls-remote", remote_url],
@@ -713,7 +714,7 @@ def _git_remote_accessible(remote_url):
             text=True,
             check=False,
             timeout=30,
-            env=_ssh_push_environment()
+            env=environment or _ssh_push_environment()
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
@@ -738,21 +739,23 @@ def _resolve_current_user():
     return person, entities.entity_directory(person)
 
 
-def _discover_github_ssh_hosts() -> tuple[str, ...]:
+def _discover_github_ssh_hosts() -> list[dict]:
     """
     Discover SSH aliases targeting github.com from the user's SSH config.
     
-    Returns a tuple of alias names (e.g., ("github-rotbot", "github-personal")).
-    The aliases are ordered by their appearance in the config files.
+    Returns a list of dicts with keys:
+    - alias: the Host alias (e.g., "github-rotbot")
+    - hostname: the HostName (e.g., "github.com")
+    - identity_files: list of IdentityFile paths (expanded but not read)
     
     This function is READ ONLY - it never modifies any files.
     """
     ssh_config_path = Path.home() / ".ssh" / "config"
     if not ssh_config_path.is_file():
-        return ()
+        return []
     
     visited: set[Path] = set()
-    aliases: list[tuple[str, str]] = []  # (alias, hostname)
+    aliases: list[dict] = []
     
     def parse_config_file(path: Path, depth: int = 0) -> None:
         # Safety limits
@@ -777,6 +780,7 @@ def _discover_github_ssh_hosts() -> tuple[str, ...]:
         
         current_host_patterns: list[str] = []
         current_hostname: str | None = None
+        current_identity_files: list[str] = []
         
         for line in content.splitlines():
             stripped = line.strip()
@@ -796,12 +800,21 @@ def _discover_github_ssh_hosts() -> tuple[str, ...]:
                     for pattern in current_host_patterns:
                         # Only include literal aliases (no wildcards, no negations)
                         if not _is_wildcard_pattern(pattern):
-                            aliases.append((pattern, current_hostname))
+                            aliases.append({
+                                "alias": pattern,
+                                "hostname": current_hostname,
+                                "identity_files": list(current_identity_files)
+                            })
                 # Start new Host block
                 current_host_patterns = value.split()
                 current_hostname = None
+                current_identity_files = []
             elif directive == "hostname":
                 current_hostname = value
+            elif directive == "identityfile":
+                # Expand ~ but don't read the file
+                expanded = os.path.expanduser(value)
+                current_identity_files.append(expanded)
             elif directive == "include":
                 # Process include directives
                 include_paths = _expand_include_path(value, resolved.parent)
@@ -812,19 +825,24 @@ def _discover_github_ssh_hosts() -> tuple[str, ...]:
         if current_hostname == "github.com" and current_host_patterns:
             for pattern in current_host_patterns:
                 if not _is_wildcard_pattern(pattern):
-                    aliases.append((pattern, current_hostname))
+                    aliases.append({
+                        "alias": pattern,
+                        "hostname": current_hostname,
+                        "identity_files": list(current_identity_files)
+                    })
     
     parse_config_file(ssh_config_path)
     
-    # Return just the alias names, preserving order, deduplicated
+    # Deduplicate by alias, preserving order
     seen = set()
     result = []
-    for alias, _ in aliases:
+    for entry in aliases:
+        alias = entry["alias"]
         if alias not in seen:
             seen.add(alias)
-            result.append(alias)
+            result.append(entry)
     
-    return tuple(result)
+    return result
 
 
 def _is_wildcard_pattern(pattern: str) -> bool:
@@ -862,6 +880,133 @@ def _expand_include_path(pattern: str, base_dir: Path) -> list[Path]:
     return []
 
 
+class _SshAgentContext:
+    """Manages a temporary SSH agent lifecycle for a single Rot operation."""
+    
+    def __init__(self):
+        self.agent_pid: int | None = None
+        self.auth_sock: str | None = None
+        self._owned = False
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+    
+    def start_agent(self) -> bool:
+        """Start a temporary ssh-agent and capture its environment."""
+        try:
+            result = subprocess.run(
+                ["ssh-agent", "-s"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        
+        if result.returncode != 0:
+            return False
+        
+        # Parse ssh-agent output safely (no eval, no shell=True)
+        # Expected format:
+        # SSH_AUTH_SOCK=/tmp/ssh-xxx/agent.xxx; export SSH_AUTH_SOCK;
+        # SSH_AGENT_PID=12345; export SSH_AGENT_PID;
+        # echo Agent pid 12345;
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("SSH_AUTH_SOCK="):
+                # Extract value before semicolon
+                value = line[len("SSH_AUTH_SOCK="):].split(";")[0].strip()
+                if value:
+                    self.auth_sock = value
+            elif line.startswith("SSH_AGENT_PID="):
+                value = line[len("SSH_AGENT_PID="):].split(";")[0].strip()
+                try:
+                    self.agent_pid = int(value)
+                except ValueError:
+                    pass
+        
+        if self.auth_sock and self.agent_pid:
+            self._owned = True
+            return True
+        return False
+    
+    def get_environment(self) -> dict[str, str] | None:
+        """Get the environment dict for subprocesses."""
+        if self.auth_sock:
+            env = os.environ.copy()
+            env["SSH_AUTH_SOCK"] = self.auth_sock
+            if self.agent_pid:
+                env["SSH_AGENT_PID"] = str(self.agent_pid)
+            return env
+        return None
+    
+    def cleanup(self) -> None:
+        """Kill the temporary agent if we started it."""
+        if self._owned and self.agent_pid:
+            try:
+                subprocess.run(
+                    ["kill", str(self.agent_pid)],
+                    capture_output=True,
+                    check=False,
+                    timeout=5
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+            self._owned = False
+            self.agent_pid = None
+            self.auth_sock = None
+
+
+def _has_usable_ssh_agent() -> bool:
+    """Check if SSH_AUTH_SOCK is set and ssh-add -l succeeds."""
+    if not os.environ.get("SSH_AUTH_SOCK"):
+        return False
+    try:
+        result = subprocess.run(
+            ["ssh-add", "-l"],
+            capture_output=True,
+            check=False,
+            timeout=5
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _ssh_add_key(identity_path: str, environment: dict[str, str] | None = None) -> bool:
+    """Add a key to the SSH agent. Returns True on success."""
+    if not Path(identity_path).exists():
+        return False
+    try:
+        env = environment or os.environ.copy()
+        result = subprocess.run(
+            ["ssh-add", identity_path],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _try_load_github_key(
+    identity_files: list[str],
+    environment: dict[str, str] | None = None
+) -> bool:
+    """Try to load each configured IdentityFile into the SSH agent."""
+    for identity_path in identity_files:
+        if _ssh_add_key(identity_path, environment):
+            return True
+    return False
+
+
 def _prompt(question):
     try:
         return input(f"{question}: ").strip()
@@ -884,48 +1029,89 @@ def _resolve_github_ssh_host(expected_username: str | None = None):
     """
     Resolve the GitHub SSH host for the current operation.
     
-    Returns a tuple: (host, detected_username, verified)
+    Returns a tuple: (host, detected_username, verified, ssh_environment)
     - host: the SSH host to use (e.g., "github.com" or "github-rotbot")
     - detected_username: the GitHub username from SSH auth, or None
     - verified: True if SSH authentication succeeded
+    - ssh_environment: dict with SSH_AUTH_SOCK/SSH_AGENT_PID for propagation, or None
     """
     # STEP 1: Try the normal host
     host = "github.com"
     detected = _github_ssh_username(host)
     if detected is not None:
-        return host, detected, True
+        return host, detected, True, None
     
     # STEP 2: github.com failed, discover SSH aliases
     rot_say(f"GitHub SSH authentication via {host} failed.")
     
-    # Discover candidates from SSH config
+    # Discover candidates from SSH config (now returns list of dicts with identity_files)
     candidates = _discover_github_ssh_hosts()
     
-    # STEP 3: Test discovered aliases
-    working_aliases: list[tuple[str, str]] = []  # (alias, detected_username)
+    # STEP 3: Test discovered aliases, with agent/key loading if needed
+    working_aliases: list[tuple[str, str, dict | None]] = []  # (alias, detected_username, ssh_env)
     
-    for alias in candidates:
+    for candidate in candidates:
+        alias = candidate["alias"]
+        identity_files = candidate.get("identity_files", [])
+        
+        # First try without any agent setup
         detected = _github_ssh_username(alias)
         if detected is not None:
-            working_aliases.append((alias, detected))
+            working_aliases.append((alias, detected, None))
+            continue
+        
+        # If we have configured identity files, try to load them
+        if identity_files:
+            ssh_env = None
+            agent_context = _SshAgentContext()
+            
+            try:
+                # Check for existing usable agent
+                if _has_usable_ssh_agent():
+                    # Use existing agent
+                    ssh_env = os.environ.copy()
+                else:
+                    # Start temporary agent
+                    if agent_context.start_agent():
+                        ssh_env = agent_context.get_environment()
+                    else:
+                        agent_context.cleanup()
+                        agent_context = None
+                
+                if ssh_env:
+                    # Try to load configured keys
+                    if _try_load_github_key(identity_files, ssh_env):
+                        rot_say("SSH key loaded into agent")
+                        # Retry authentication with the agent
+                        detected = _github_ssh_username(alias, ssh_env)
+                        if detected is not None:
+                            working_aliases.append((alias, detected, ssh_env))
+                            continue
+                
+                # Clean up temporary agent if we created one
+                if agent_context:
+                    agent_context.cleanup()
+            except Exception:
+                if agent_context:
+                    agent_context.cleanup()
     
     # STEP 4: Select a usable candidate
     if expected_username:
         # Filter by expected username
-        matching = [(a, u) for a, u in working_aliases if u == expected_username]
+        matching = [(a, u, e) for a, u, e in working_aliases if u == expected_username]
         if len(matching) == 1:
-            alias, detected = matching[0]
+            alias, detected, ssh_env = matching[0]
             rot_say(f"Found GitHub SSH configuration:\n  {alias} -> github.com")
-            return alias, detected, True
+            return alias, detected, True, ssh_env
         elif len(matching) > 1:
             # Multiple aliases work for the expected user - present choices
             return _prompt_for_alias_choice(matching, expected_username)
     else:
         # No expected username - check if exactly one works
         if len(working_aliases) == 1:
-            alias, detected = working_aliases[0]
+            alias, detected, ssh_env = working_aliases[0]
             rot_say(f"Found GitHub SSH configuration:\n  {alias} -> github.com")
-            return alias, detected, True
+            return alias, detected, True, ssh_env
         elif len(working_aliases) > 1:
             # Multiple aliases work for different users - present choices
             return _prompt_for_alias_choice(working_aliases, None)
@@ -934,22 +1120,22 @@ def _resolve_github_ssh_host(expected_username: str | None = None):
     host = _prompt_value("github.com", "SSH host or alias [github.com]")
     detected = _github_ssh_username(host)
     if detected is not None:
-        return host, detected, True
+        return host, detected, True, None
     
-    return host, None, False
+    return host, None, False, None
 
 
 def _prompt_for_alias_choice(
-    working_aliases: list[tuple[str, str]], 
+    working_aliases: list[tuple[str, str, dict | None]], 
     expected_username: str | None
-) -> tuple[str, str | None, bool]:
+) -> tuple[str, str | None, bool, dict | None]:
     """Present numbered choices for multiple working aliases."""
     if expected_username:
         rot_say(f"Multiple GitHub SSH configurations work for {expected_username}:")
     else:
         rot_say("Multiple GitHub SSH configurations work:")
     
-    for i, (alias, username) in enumerate(working_aliases, 1):
+    for i, (alias, username, _) in enumerate(working_aliases, 1):
         rot_say(f"  {i}. {alias} -> github.com (authenticates as {username})")
     
     prompt = "Use [1]: "
@@ -967,16 +1153,16 @@ def _prompt_for_alias_choice(
             choice = 1
     
     if 1 <= choice <= len(working_aliases):
-        alias, detected = working_aliases[choice - 1]
-        return alias, detected, True
+        alias, detected, ssh_env = working_aliases[choice - 1]
+        return alias, detected, True, ssh_env
     
     # Invalid choice, fall back
     host = _prompt_value("github.com", "SSH host or alias [github.com]")
     detected = _github_ssh_username(host)
     if detected is not None:
-        return host, detected, True
+        return host, detected, True, None
     
-    return host, None, False
+    return host, None, False, None
 
 
 def _ensure_default_branch_main():
@@ -1037,7 +1223,7 @@ def _gather_git_identity(loaded, user_name):
 
 def _github_identity(loaded):
     stored = loaded.github_username if loaded else ""
-    host, detected, verified = _resolve_github_ssh_host(stored or None)
+    host, detected, verified, ssh_env = _resolve_github_ssh_host(stored or None)
     if detected is not None:
         rot_say(f"✓ GitHub SSH authentication verified as {detected}")
         if stored and stored != detected:
@@ -1048,15 +1234,15 @@ def _github_identity(loaded):
                 "Replace the stored GitHub username with the verified value?",
                 default_yes=False
             ):
-                return detected, True, host
-            return stored, False, host
+                return detected, True, host, ssh_env
+            return stored, False, host, ssh_env
         username = stored or detected
-        return username, True, host
+        return username, True, host, ssh_env
     rot_say("GitHub SSH authentication could not be verified.")
     if stored:
         rot_say(f"  Using stored username: {stored}")
-        return stored, False, host
-    return _prompt("GitHub username"), False, host
+        return stored, False, host, ssh_env
+    return _prompt("GitHub username"), False, host, ssh_env
 
 
 def _setup_flow(person, user_directory):
@@ -1067,7 +1253,7 @@ def _setup_flow(person, user_directory):
         return 1
 
     name, email = _gather_git_identity(loaded, person.name)
-    username, github_verified, ssh_host = _github_identity(loaded)
+    username, github_verified, ssh_host, ssh_env = _github_identity(loaded)
     if not name or not email:
         rot_say("Git author identity is incomplete. No changes were made.")
         return 1
@@ -1211,7 +1397,7 @@ def git_start(args, working_directory=None):
         rot_say("Could not configure Git on this machine.\nNo Git repository was created.")
         return 1
 
-    ssh_host, detected_username, ssh_verified = _resolve_github_ssh_host(loaded.github_username)
+    ssh_host, detected_username, ssh_verified, ssh_env = _resolve_github_ssh_host(loaded.github_username)
     if not ssh_verified or detected_username is None:
         rot_say(
             "GitHub SSH authentication is not configured on this machine.\n"
@@ -1242,7 +1428,7 @@ def git_start(args, working_directory=None):
 
     remote_url = f"git@{ssh_host}:{loaded.github_username}/{repository_name}.git"
     found = False
-    if _git_remote_accessible(remote_url):
+    if _git_remote_accessible(remote_url, ssh_env):
         rot_say(
             f"✓ found existing GitHub repository "
             f"{loaded.github_username}/{repository_name}"
@@ -1262,7 +1448,7 @@ def git_start(args, working_directory=None):
         if answer in {"q", "quit", "exit", "cancel"}:
             rot_say("Cancelled. No Git repository was created.")
             return 1
-        if not _git_remote_accessible(remote_url):
+        if not _git_remote_accessible(remote_url, ssh_env):
             rot_say("Could not verify GitHub repository:")
             rot_say(f"  {remote_url}")
             return 1
@@ -1303,11 +1489,17 @@ def git_start(args, working_directory=None):
     rot_say("✓ created initial commit")
     rot_say("✓ added origin")
 
+    # Combine ssh_env with push environment for the final push
+    push_env = _ssh_push_environment()
+    if ssh_env:
+        # Preserve any existing GIT_SSH_COMMAND from push_env
+        push_env.update(ssh_env)
+    
     push_result = subprocess.run(
         ["git", "push", "-u", "origin", "main"],
         check=False,
         cwd=command_directory,
-        env=_ssh_push_environment()
+        env=push_env
     )
     if push_result.returncode != 0:
         rot_say("! push failed")

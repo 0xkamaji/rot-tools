@@ -362,7 +362,7 @@ class GitSetupCommandTests(GitSetupTests):
             stack.enter_context(
                 patch.object(
                     git_commands, "_github_identity",
-                    return_value=("0xkamaji", True, "github.com")
+                    return_value=("0xkamaji", True, "github.com", None)
                 )
             )
             stack.enter_context(patch.object(accounts, "write_accounts"))
