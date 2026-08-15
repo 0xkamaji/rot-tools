@@ -642,3 +642,139 @@ def git_push(args, working_directory=None):
 
     rot_say("Push complete.")
     return 0
+
+
+def _gh_available():
+    try:
+        version = subprocess.run(
+            ["gh", "--version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+    except FileNotFoundError:
+        return False
+    return version.returncode == 0
+
+
+def _gh_authenticated():
+    status = subprocess.run(
+        ["gh", "auth", "status"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    return status.returncode == 0
+
+
+def _create_gh_repository(repository_name, visibility, working_directory):
+    flag = "--private" if visibility == "private" else "--public"
+    command = [
+        "gh",
+        "repo",
+        "create",
+        repository_name,
+        flag,
+        "--source=.",
+        "--remote=origin",
+        "--push"
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=working_directory
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout or ""
+
+
+def _github_reference(repository_name, create_output):
+    match = re.search(r"github\.com[/:]([^/\s?#]+)/([^/\s?#]+)", create_output or "")
+    if match:
+        return f"{match.group(1)}/{match.group(2).rstrip('.git')}"
+    return repository_name
+
+
+def _prompt_value(default, prompt):
+    try:
+        return input(f"{prompt}: ").strip() or default
+    except EOFError:
+        return default
+
+
+def git_start(args, working_directory=None):
+    command_directory = working_directory or os.getcwd()
+
+    try:
+        inside = _capture_git(
+            "rev-parse",
+            "--is-inside-work-tree",
+            working_directory=command_directory
+        )
+    except FileNotFoundError:
+        rot_say("Git is not installed or is not available in PATH.")
+        return 127
+    except OSError as error:
+        rot_say(f"Could not run Git.\n{error}")
+        return 1
+
+    if inside.returncode == 0 and inside.stdout.strip() == "true":
+        rot_say("The current directory is already inside a Git repository.")
+        return 1
+
+    default_name = Path(os.path.abspath(command_directory)).name
+    repository_name = _prompt_value(default_name, f"Repository name [{default_name}]")
+    visibility = _prompt_value("private", "Visibility [private]")
+    if visibility not in {"private", "public"}:
+        rot_say(f"Invalid visibility: {visibility}")
+        return 1
+
+    commands = (
+        ["git", "init", "-b", "main"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-m", "Initial commit"]
+    )
+    try:
+        for command in commands:
+            result = subprocess.run(command, check=False, cwd=command_directory)
+            if result.returncode != 0:
+                rot_say(
+                    f"Command failed with exit code {result.returncode}:\n"
+                    f"{shlex.join(command)}"
+                )
+                return result.returncode
+    except FileNotFoundError:
+        rot_say("Git is not installed or is not available in PATH.")
+        return 127
+
+    rot_say("✓ initialized git repository")
+    rot_say("✓ created initial commit")
+
+    if not _gh_available():
+        rot_say("! GitHub CLI unavailable")
+        rot_say("  remote repository was not created")
+        return 0
+    if not _gh_authenticated():
+        rot_say("! GitHub CLI is not authenticated")
+        rot_say("  remote repository was not created")
+        return 0
+
+    create_output = _create_gh_repository(
+        repository_name, visibility, command_directory
+    )
+    if create_output is None:
+        rot_say("! GitHub remote creation failed")
+        rot_say("  remote repository was not created")
+        return 0
+
+    reference = _github_reference(repository_name, create_output)
+    rot_say(f"✓ created GitHub repository {reference}")
+    rot_say("✓ added origin")
+    rot_say("✓ pushed main")
+    return 0

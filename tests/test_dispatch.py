@@ -92,6 +92,11 @@ class ParserDispatchTests(unittest.TestCase):
             "git_push",
             {"git_command": "push", "message": "ship it"}
         ),
+        (
+            ["git", "start"],
+            "git_start",
+            {"git_command": "start"}
+        ),
         (["context"], "context_menu", {"context_command": None}),
         (["context", "list"], "context_list", {"context_command": "list"}),
         (
@@ -245,7 +250,7 @@ class ParserDispatchTests(unittest.TestCase):
 
     def test_command_groups_show_scoped_next_steps(self):
         cases = (
-            (["git"], ("pull", "push", "status")),
+            (["git"], ("pull", "push", "start", "status")),
             (["ai"], ("sessions", "session")),
             (["debug"], ("ask", "last")),
             (["ai", "session"], ("show",)),
@@ -367,7 +372,7 @@ class ParserDispatchTests(unittest.TestCase):
         self.assertNotIn("COMMAND: rotbot context", message)
         self.assertEqual(message.count("-h, --help"), 1)
         self.assertEqual(message.count("-hv, --help-verbose"), 1)
-        self.assertEqual(message.count("=" * 60), 6)
+        self.assertEqual(message.count("=" * 60), 8)
 
 
 class MainDispatchTests(unittest.TestCase):

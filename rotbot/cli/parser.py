@@ -8,7 +8,7 @@ from rotbot.commands.debug import (
     debug_last_ask,
     debug_session_register
 )
-from rotbot.commands.git import git_pull, git_push, git_status
+from rotbot.commands.git import git_pull, git_push, git_start, git_status
 from rotbot.commands.machine import machine_inspect
 from rotbot.commands.privacy import privacy_inspect
 from rotbot.contexts.binding import context_bind
@@ -300,6 +300,12 @@ def create_parser():
         help="Fetch the configured upstream remote before comparing"
     )
     git_status_parser.set_defaults(func=git_status)
+
+    git_start_parser = git_commands.add_parser(
+        "start",
+        help="Initialize a Git repository and optionally publish it to GitHub"
+    )
+    git_start_parser.set_defaults(func=git_start)
 
     machine_parser = commands.add_parser(
         "machine",
