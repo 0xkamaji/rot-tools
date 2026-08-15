@@ -571,7 +571,7 @@ class GitStartAliasTests(GitStartTests):
         hosts_tested = []
         probed_urls = []
 
-        def probe(remote_url, environment=None):
+        def probe(remote_url):
             probed_urls.append(remote_url)
             return True
 
