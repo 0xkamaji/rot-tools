@@ -4,6 +4,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from typing import Iterator
 
 from rotbot.contexts import accounts, entities
 from rotbot.contexts.config import ConfigError, get_local_context_bindings
@@ -737,6 +738,130 @@ def _resolve_current_user():
     return person, entities.entity_directory(person)
 
 
+def _discover_github_ssh_hosts() -> tuple[str, ...]:
+    """
+    Discover SSH aliases targeting github.com from the user's SSH config.
+    
+    Returns a tuple of alias names (e.g., ("github-rotbot", "github-personal")).
+    The aliases are ordered by their appearance in the config files.
+    
+    This function is READ ONLY - it never modifies any files.
+    """
+    ssh_config_path = Path.home() / ".ssh" / "config"
+    if not ssh_config_path.is_file():
+        return ()
+    
+    visited: set[Path] = set()
+    aliases: list[tuple[str, str]] = []  # (alias, hostname)
+    
+    def parse_config_file(path: Path, depth: int = 0) -> None:
+        # Safety limits
+        if depth > 10:
+            return
+        if len(visited) > 50:
+            return
+        
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError):
+            return
+        
+        if resolved in visited:
+            return
+        visited.add(resolved)
+        
+        try:
+            content = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return
+        
+        current_host_patterns: list[str] = []
+        current_hostname: str | None = None
+        
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            
+            # Split directive and value
+            parts = stripped.split(None, 1)
+            if len(parts) != 2:
+                continue
+            
+            directive, value = parts[0].lower(), parts[1].strip()
+            
+            if directive == "host":
+                # New Host block - save previous if it had github.com
+                if current_hostname == "github.com" and current_host_patterns:
+                    for pattern in current_host_patterns:
+                        # Only include literal aliases (no wildcards, no negations)
+                        if not _is_wildcard_pattern(pattern):
+                            aliases.append((pattern, current_hostname))
+                # Start new Host block
+                current_host_patterns = value.split()
+                current_hostname = None
+            elif directive == "hostname":
+                current_hostname = value
+            elif directive == "include":
+                # Process include directives
+                include_paths = _expand_include_path(value, resolved.parent)
+                for include_path in include_paths:
+                    parse_config_file(include_path, depth + 1)
+        
+        # Handle last Host block in file
+        if current_hostname == "github.com" and current_host_patterns:
+            for pattern in current_host_patterns:
+                if not _is_wildcard_pattern(pattern):
+                    aliases.append((pattern, current_hostname))
+    
+    parse_config_file(ssh_config_path)
+    
+    # Return just the alias names, preserving order, deduplicated
+    seen = set()
+    result = []
+    for alias, _ in aliases:
+        if alias not in seen:
+            seen.add(alias)
+            result.append(alias)
+    
+    return tuple(result)
+
+
+def _is_wildcard_pattern(pattern: str) -> bool:
+    """Check if a Host pattern contains wildcards or negations."""
+    return any(c in pattern for c in "*?") or pattern.startswith("!")
+
+
+def _expand_include_path(pattern: str, base_dir: Path) -> list[Path]:
+    """Expand an Include path pattern with ~ and glob support."""
+    try:
+        # Handle ~ expansion
+        expanded = os.path.expanduser(pattern)
+        path = Path(expanded)
+        
+        # If relative, make it relative to the base directory
+        if not path.is_absolute():
+            path = (base_dir / path).resolve()
+        
+        # Handle glob patterns
+        if "*" in pattern or "?" in pattern or "[" in pattern:
+            try:
+                parent = path.parent
+                if parent.is_dir():
+                    matches = list(parent.glob(path.name))
+                    return [m.resolve() for m in matches if m.is_file()]
+            except (OSError, ValueError):
+                pass
+            return []
+        
+        # Single file
+        if path.is_file():
+            return [path]
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return []
+
+
 def _prompt(question):
     try:
         return input(f"{question}: ").strip()
@@ -755,7 +880,7 @@ def _confirm(question, default_yes):
     return answer in {"y", "yes"}
 
 
-def _resolve_github_ssh_host():
+def _resolve_github_ssh_host(expected_username: str | None = None):
     """
     Resolve the GitHub SSH host for the current operation.
     
@@ -764,13 +889,88 @@ def _resolve_github_ssh_host():
     - detected_username: the GitHub username from SSH auth, or None
     - verified: True if SSH authentication succeeded
     """
+    # STEP 1: Try the normal host
     host = "github.com"
     detected = _github_ssh_username(host)
     if detected is not None:
         return host, detected, True
     
-    # github.com failed, prompt for alias
+    # STEP 2: github.com failed, discover SSH aliases
     rot_say(f"GitHub SSH authentication via {host} failed.")
+    
+    # Discover candidates from SSH config
+    candidates = _discover_github_ssh_hosts()
+    
+    # STEP 3: Test discovered aliases
+    working_aliases: list[tuple[str, str]] = []  # (alias, detected_username)
+    
+    for alias in candidates:
+        detected = _github_ssh_username(alias)
+        if detected is not None:
+            working_aliases.append((alias, detected))
+    
+    # STEP 4: Select a usable candidate
+    if expected_username:
+        # Filter by expected username
+        matching = [(a, u) for a, u in working_aliases if u == expected_username]
+        if len(matching) == 1:
+            alias, detected = matching[0]
+            rot_say(f"Found GitHub SSH configuration:\n  {alias} -> github.com")
+            return alias, detected, True
+        elif len(matching) > 1:
+            # Multiple aliases work for the expected user - present choices
+            return _prompt_for_alias_choice(matching, expected_username)
+    else:
+        # No expected username - check if exactly one works
+        if len(working_aliases) == 1:
+            alias, detected = working_aliases[0]
+            rot_say(f"Found GitHub SSH configuration:\n  {alias} -> github.com")
+            return alias, detected, True
+        elif len(working_aliases) > 1:
+            # Multiple aliases work for different users - present choices
+            return _prompt_for_alias_choice(working_aliases, None)
+    
+    # STEP 5: Fall back to manual prompt
+    host = _prompt_value("github.com", "SSH host or alias [github.com]")
+    detected = _github_ssh_username(host)
+    if detected is not None:
+        return host, detected, True
+    
+    return host, None, False
+
+
+def _prompt_for_alias_choice(
+    working_aliases: list[tuple[str, str]], 
+    expected_username: str | None
+) -> tuple[str, str | None, bool]:
+    """Present numbered choices for multiple working aliases."""
+    if expected_username:
+        rot_say(f"Multiple GitHub SSH configurations work for {expected_username}:")
+    else:
+        rot_say("Multiple GitHub SSH configurations work:")
+    
+    for i, (alias, username) in enumerate(working_aliases, 1):
+        rot_say(f"  {i}. {alias} -> github.com (authenticates as {username})")
+    
+    prompt = "Use [1]: "
+    try:
+        answer = input(prompt).strip()
+    except EOFError:
+        answer = ""
+    
+    if not answer:
+        choice = 1
+    else:
+        try:
+            choice = int(answer)
+        except ValueError:
+            choice = 1
+    
+    if 1 <= choice <= len(working_aliases):
+        alias, detected = working_aliases[choice - 1]
+        return alias, detected, True
+    
+    # Invalid choice, fall back
     host = _prompt_value("github.com", "SSH host or alias [github.com]")
     detected = _github_ssh_username(host)
     if detected is not None:
@@ -837,7 +1037,7 @@ def _gather_git_identity(loaded, user_name):
 
 def _github_identity(loaded):
     stored = loaded.github_username if loaded else ""
-    host, detected, verified = _resolve_github_ssh_host()
+    host, detected, verified = _resolve_github_ssh_host(stored or None)
     if detected is not None:
         rot_say(f"✓ GitHub SSH authentication verified as {detected}")
         if stored and stored != detected:
@@ -1011,7 +1211,7 @@ def git_start(args, working_directory=None):
         rot_say("Could not configure Git on this machine.\nNo Git repository was created.")
         return 1
 
-    ssh_host, detected_username, ssh_verified = _resolve_github_ssh_host()
+    ssh_host, detected_username, ssh_verified = _resolve_github_ssh_host(loaded.github_username)
     if not ssh_verified or detected_username is None:
         rot_say(
             "GitHub SSH authentication is not configured on this machine.\n"
