@@ -316,7 +316,7 @@ class GitStartWorkflowTests(GitStartTests):
         result, messages = self.run_start(ssh_username="someone-else")
 
         self.assertEqual(result, 1)
-        self.assertIn("GitHub identity mismatch.", messages)
+        self.assertIn("GitHub account mismatch.", messages)
         self.assertFalse((self.project_directory / ".git").exists())
 
     def test_successful_local_initialization_and_push(self):
@@ -470,6 +470,228 @@ class GitStartWorkflowTests(GitStartTests):
 
         self.assertEqual(result, 0)
         self.assertTrue(all("gh " not in message for message in messages))
+
+
+class GitStartAliasTests(GitStartTests):
+    def enter_alias_patches(
+        self,
+        stack,
+        machine,
+        ssh_host,
+        hosts_tested,
+        remote_accessible=True,
+        push_return=0
+    ):
+        stack.enter_context(
+            patch.object(
+                git_commands, "_machine_ssh_host",
+                side_effect=lambda: ssh_host
+            )
+        )
+
+        def ssh_side_effect(host="github.com"):
+            hosts_tested.append(host)
+            return "0xkamaji"
+
+        stack.enter_context(
+            patch.object(
+                git_commands, "_github_ssh_username", side_effect=ssh_side_effect
+            )
+        )
+        if isinstance(remote_accessible, list):
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_remote_accessible",
+                    side_effect=remote_accessible
+                )
+            )
+        else:
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_remote_accessible",
+                    return_value=remote_accessible
+                )
+            )
+        stack.enter_context(
+            patch.object(
+                git_commands, "_git_config_global_get", side_effect=machine.get
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                git_commands, "_git_config_global_set", side_effect=machine.set
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                git_commands,
+                "get_local_context_bindings",
+                return_value={"user": "kamaji"}
+            )
+        )
+        real_run = git_commands.subprocess.run
+
+        def guarded_run(command, *arguments, **kwargs):
+            if tuple(command) == ("git", "push", "-u", "origin", "main"):
+                return subprocess.CompletedProcess(command, push_return, "", "")
+            return real_run(command, *arguments, **kwargs)
+
+        stack.enter_context(
+            patch.object(git_commands.subprocess, "run", side_effect=guarded_run)
+        )
+        stack.enter_context(patch.dict(
+            git_commands.os.environ, self.git_environment
+        ))
+        return stack.enter_context(patch.object(git_commands, "rot_say"))
+
+    def test_alias_host_is_used_in_remote_url(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        hosts_tested = []
+
+        with ExitStack() as stack:
+            rot_say = self.enter_alias_patches(
+                stack, machine, "github-rotbot", hosts_tested, True, 0
+            )
+            stack.enter_context(
+                patch("builtins.input", side_effect=input_side_effect(("", "")))
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
+
+        self.assertEqual(result, 0)
+        self.assertEqual(hosts_tested, ["github-rotbot"])
+        self.assertNotIn("github.com", hosts_tested)
+        origin = self.git("remote", "get-url", "origin")
+        self.assertEqual(
+            origin.stdout.strip(),
+            "git@github-rotbot:0xkamaji/example-project.git"
+        )
+        self.assertIn("SSH host:\n  github-rotbot", "\n".join(messages))
+
+    def test_alias_is_used_for_ls_remote(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        hosts_tested = []
+        probed_urls = []
+
+        def probe(remote_url):
+            probed_urls.append(remote_url)
+            return True
+
+        with ExitStack() as stack:
+            rot_say = self.enter_alias_patches(
+                stack, machine, "github-rotbot", hosts_tested, remote_accessible=True, push_return=0
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_remote_accessible", side_effect=probe
+                )
+            )
+            stack.enter_context(
+                patch("builtins.input", side_effect=input_side_effect(("", "")))
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+
+        self.assertEqual(result, 0)
+        self.assertNotEqual(probed_urls, [])
+        self.assertTrue(
+            all(url.startswith("git@github-rotbot:") for url in probed_urls)
+        )
+        self.assertTrue(
+            all("github.com" not in url for url in probed_urls)
+        )
+
+    def test_code_does_not_switch_back_to_github_com(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        hosts_tested = []
+
+        with ExitStack() as stack:
+            rot_say = self.enter_alias_patches(
+                stack, machine, "github-rotbot", hosts_tested, True, 0
+            )
+            stack.enter_context(
+                patch("builtins.input", side_effect=input_side_effect(("", "")))
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
+
+        self.assertEqual(result, 0)
+        self.assertEqual(hosts_tested, ["github-rotbot"])
+        self.assertNotIn("github.com", hosts_tested)
+
+    def test_ssh_and_identity_checks_occur_before_git_init(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        hosts_tested = []
+        init_ran = []
+
+        def track_run(command, *arguments, **kwargs):
+            if tuple(command) == ("git", "init", "-b", "main"):
+                init_ran.append(True)
+            return real_run(command, *arguments, **kwargs)
+
+        real_run = git_commands.subprocess.run
+
+        def ssh_side_effect(host="github.com"):
+            hosts_tested.append(host)
+            return None
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(git_commands, "_machine_ssh_host", return_value="bad-host")
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_github_ssh_username", side_effect=ssh_side_effect
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_config_global_get", side_effect=machine.get
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_config_global_set", side_effect=machine.set
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands,
+                    "get_local_context_bindings",
+                    return_value={"user": "kamaji"}
+                )
+            )
+            stack.enter_context(
+                patch.object(git_commands.subprocess, "run", side_effect=track_run)
+            )
+            stack.enter_context(patch.dict(
+                git_commands.os.environ, self.git_environment
+            ))
+            rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
+            stack.enter_context(
+                patch("builtins.input", side_effect=input_side_effect(("", "")))
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
+
+        self.assertEqual(result, 1)
+        self.assertEqual(init_ran, [])
+        self.assertFalse((self.project_directory / ".git").exists())
+        self.assertIn(
+            "GitHub SSH authentication is not configured on this machine.",
+            "\n".join(messages)
+        )
 
 
 def origin_string(instance):

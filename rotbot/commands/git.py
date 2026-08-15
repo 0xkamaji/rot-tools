@@ -5,7 +5,7 @@ import shlex
 import shutil
 import subprocess
 
-from rotbot.contexts import accounts, entities
+from rotbot.contexts import accounts, entities, machines
 from rotbot.contexts.config import ConfigError, get_local_context_bindings
 from rotbot.ui.terminal import rot_say
 
@@ -681,13 +681,13 @@ def _machine_git_identity():
     )
 
 
-def _github_ssh_username():
+def _github_ssh_username(host="github.com"):
     command = [
         "ssh", "-T",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new",
-        "git@github.com"
+        f"git@{host}"
     ]
     try:
         process = subprocess.run(
@@ -737,9 +737,47 @@ def _resolve_current_user():
     return person, entities.entity_directory(person)
 
 
+def _current_machine_name():
+    try:
+        bindings = get_local_context_bindings()
+    except ConfigError:
+        return None
+    machine_ref = bindings.get("machine")
+    if not machine_ref:
+        return None
+    try:
+        machine = machines.load_machine_context_reference(machine_ref)
+    except machines.MachineContextError:
+        return None
+    return machine.name
+
+
+def _machine_ssh_host():
+    name = _current_machine_name()
+    if not name:
+        return None
+    try:
+        record = machines.load_local_machine_record(name)
+    except machines.MachineContextError:
+        return None
+    if not record:
+        return None
+    return record.get("connection", {}).get("ssh_host")
+
+
+def _remember_machine_ssh_host(host):
+    name = _current_machine_name()
+    if not name:
+        return
+    try:
+        machines.set_local_ssh_host(name, host)
+    except machines.MachineContextError:
+        pass
+
+
 def _prompt(question):
     try:
-        return input(f"{question} ").strip()
+        return input(f"{question}: ").strip()
     except EOFError:
         return ""
 
@@ -756,23 +794,32 @@ def _confirm(question, default_yes):
 
 
 def _ensure_default_branch_main():
-    if _git_config_global_get("init.defaultBranch") != "main":
-        _git_config_global_set("init.defaultBranch", "main")
+    if _git_config_global_get("init.defaultBranch") == "main":
+        return True
+    return _git_config_global_set("init.defaultBranch", "main")
 
 
 def _ensure_machine_identity(name, email):
     machine_name, machine_email = _machine_git_identity()
     if machine_name == name and machine_email == email:
-        return True
+        return True, True
     rot_say("Rot user Git identity:")
     rot_say(f"  {name} <{email}>")
     rot_say("Current machine Git identity:")
     rot_say(f"  {machine_name or '(unset)'} <{machine_email or '(unset)'}>")
-    if not _confirm("Replace this machine's Git identity?", default_yes=False):
-        return False
-    _git_config_global_set("user.name", name)
-    _git_config_global_set("user.email", email)
-    return True
+    unset = not machine_name and not machine_email
+    if unset:
+        if not _confirm(
+            "Configure this machine with this Git identity?", default_yes=True
+        ):
+            return False, False
+    elif not _confirm(
+        "Replace this machine's Git identity?", default_yes=False
+    ):
+        return False, False
+    name_ok = _git_config_global_set("user.name", name)
+    email_ok = _git_config_global_set("user.email", email)
+    return True, name_ok and email_ok
 
 
 def _gather_git_identity(loaded, user_name):
@@ -804,31 +851,37 @@ def _gather_git_identity(loaded, user_name):
 
 def _github_identity(loaded):
     stored = loaded.github_username if loaded else ""
-    detected = _github_ssh_username()
-    if detected:
+    host = _machine_ssh_host() or "github.com"
+    detected = _github_ssh_username(host)
+    if detected is None and host != "github.com":
+        host = "github.com"
+        detected = _github_ssh_username(host)
+    if detected is None:
+        rot_say(f"GitHub SSH authentication via {host} failed.")
+        host = _prompt_value("github.com", "SSH host or alias [github.com]")
+        detected = _github_ssh_username(host)
+        if detected is not None:
+            _remember_machine_ssh_host(host)
+    if detected is not None:
+        rot_say(f"✓ GitHub SSH authentication verified as {detected}")
         if stored and stored != detected:
-            rot_say("GitHub identity mismatch.")
-            rot_say(f"  Rot user:  {stored}")
-            rot_say(f"  This host: {detected}")
+            rot_say("GitHub account mismatch.")
+            rot_say(f"  Portable GitHub account:   {stored}")
+            rot_say(f"  This machine authenticated as: {detected}")
             if _confirm(
-                "Replace the stored username with the verified value?",
+                "Replace the stored GitHub username with the verified value?",
                 default_yes=False
             ):
-                return detected, True
-            return stored, False
+                return detected, True, host
+            return stored, False, host
         username = stored or detected
-        if stored == detected:
-            rot_say(f"✓ GitHub SSH identity verified: {username}")
-        else:
-            rot_say("GitHub SSH identity detected:")
-            rot_say(f"  {username}")
-        return username, True
+        return username, True, host
+    rot_say("GitHub SSH authentication could not be verified.")
     if stored:
-        rot_say("GitHub SSH identity could not be verified on this machine.")
-        rot_say(f"  Keeping stored username: {stored}")
-        return stored, False
-    rot_say("GitHub SSH identity could not be verified on this machine.")
-    return _prompt("GitHub username (unverified)"), False
+        rot_say(f"  Using stored username: {stored}")
+        return stored, False, host
+    rot_say("GitHub username:")
+    return _prompt("GitHub username"), False, host
 
 
 def _setup_flow(person, user_directory):
@@ -839,7 +892,7 @@ def _setup_flow(person, user_directory):
         return 1
 
     name, email = _gather_git_identity(loaded, person.name)
-    username, github_verified = _github_identity(loaded)
+    username, github_verified, ssh_host = _github_identity(loaded)
     if not name or not email:
         rot_say("Git author identity is incomplete. No changes were made.")
         return 1
@@ -857,11 +910,12 @@ def _setup_flow(person, user_directory):
         rot_say(f"Invalid visibility: {visibility}")
         return 1
 
-    rot_say("Git author identity:")
-    rot_say(f"  Name:  {name}")
-    rot_say(f"  Email: {email}")
-    rot_say("GitHub SSH identity:")
+    rot_say("Git author:")
+    rot_say(f"  {name} <{email}>")
+    rot_say("GitHub account:")
     rot_say(f"  {username}")
+    rot_say("SSH authentication:")
+    rot_say("  ✓ verified" if github_verified else "  not verified on this machine")
     if not _confirm(
         f"Save this identity for Rot user '{person.name}'?",
         default_yes=True
@@ -883,14 +937,21 @@ def _setup_flow(person, user_directory):
         rot_say(str(error))
         return 1
     rot_say("✓ saved user Git identity")
+    if not github_verified:
+        rot_say("GitHub account saved.")
+        rot_say("SSH authentication is not verified on this machine.")
 
-    if not _ensure_machine_identity(name, email):
+    agreed, configured = _ensure_machine_identity(name, email)
+    if not agreed:
         rot_say("Machine Git identity was not changed.")
         return 0
-    _ensure_default_branch_main()
+    if not configured:
+        rot_say("Could not configure Git on this machine.")
+        return 1
+    if not _ensure_default_branch_main():
+        rot_say("Could not configure Git on this machine.")
+        return 1
     rot_say("✓ configured Git on this machine")
-    if github_verified:
-        rot_say(f"✓ GitHub SSH identity verified: {username}")
     return 0
 
 
@@ -967,11 +1028,16 @@ def git_start(args, working_directory=None):
             rot_say("Git setup is still incomplete. No Git repository was created.")
             return 1
 
-    if not _ensure_machine_identity(loaded.git_name, loaded.git_email):
+    agreed, configured = _ensure_machine_identity(loaded.git_name, loaded.git_email)
+    if not agreed:
         rot_say("No Git repository was created.")
         return 1
+    if not configured:
+        rot_say("Could not configure Git on this machine.\nNo Git repository was created.")
+        return 1
 
-    detected_username = _github_ssh_username()
+    ssh_host = _machine_ssh_host() or "github.com"
+    detected_username = _github_ssh_username(ssh_host)
     if detected_username is None:
         rot_say(
             "GitHub SSH authentication is not configured on this machine.\n"
@@ -979,26 +1045,28 @@ def git_start(args, working_directory=None):
         )
         return 1
     if detected_username != loaded.github_username:
-        rot_say("GitHub identity mismatch.")
-        rot_say(f"  Rot user:  {loaded.github_username}")
-        rot_say(f"  This host: {detected_username}")
+        rot_say("GitHub account mismatch.")
+        rot_say(f"  Portable GitHub account:   {loaded.github_username}")
+        rot_say(f"  This machine authenticated as: {detected_username}")
         rot_say("No Git repository was created.")
         return 1
-    rot_say(f"✓ GitHub SSH identity verified: {detected_username}")
+    rot_say("GitHub account:")
+    rot_say(f"  {loaded.github_username}")
+    rot_say("SSH host:")
+    rot_say(f"  {ssh_host}")
+    rot_say("✓ SSH authentication verified")
 
     default_name = Path(os.path.abspath(command_directory)).name
     visibility = loaded.github_default_visibility or "private"
     rot_say("Git author:")
     rot_say(f"  {loaded.git_name} <{loaded.git_email}>")
-    rot_say("GitHub account:")
-    rot_say(f"  {loaded.github_username}")
     repository_name = _prompt_value(default_name, f"Repository name [{default_name}]")
     visibility = _prompt_value(visibility, f"Visibility [{visibility}]")
     if visibility not in {"private", "public"}:
         rot_say(f"Invalid visibility: {visibility}")
         return 1
 
-    remote_url = f"git@github.com:{loaded.github_username}/{repository_name}.git"
+    remote_url = f"git@{ssh_host}:{loaded.github_username}/{repository_name}.git"
     found = False
     if _git_remote_accessible(remote_url):
         rot_say(

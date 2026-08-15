@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import tempfile
 import tomllib
 from typing import NamedTuple
 
@@ -593,6 +594,49 @@ def _load_local_machine_record_entry(name, *, target_config=None):
 def load_local_machine_record(name, *, target_config=None):
     entry = _load_local_machine_record_entry(name, target_config=target_config)
     return entry[1] if entry is not None else None
+
+
+def set_local_ssh_host(name, ssh_host, context_id=None, *, target_config=None):
+    name = _validate_identifier(name, "name")
+    ssh_host = _validate_text(ssh_host, "connection ssh host")
+    existing = load_local_machine_record(name, target_config=target_config)
+    facts = dict(existing) if existing else {}
+    connection = dict(facts.get("connection") or {})
+    connection["ssh_host"] = ssh_host
+    facts["connection"] = connection
+    content = render_local_machine_record(name, facts, context_id)
+    path = local_machine_record_path(name, target_config=target_config)
+    if path.is_symlink():
+        raise MachineContextError(f"Invalid local machine record directory: {path.parent}")
+    temporary_path = None
+    try:
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.chmod(temporary_path, 0o600)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except OSError as error:
+        raise MachineContextError(
+            f"Could not write local machine record '{name}': {error}"
+        ) from None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+    return path
 
 
 def associated_machine_context(local_facts):

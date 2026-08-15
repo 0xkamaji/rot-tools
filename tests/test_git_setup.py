@@ -16,11 +16,14 @@ USER_ID = "00000000-0000-4000-8000-000000000001"
 class MachineConfigFake:
     def __init__(self):
         self.values = {"init.defaultBranch": "main"}
+        self.fail_set = set()
 
     def get(self, key):
         return self.values.get(key, "")
 
     def set(self, key, value):
+        if key in self.fail_set:
+            return False
         if value == "":
             self.values.pop(key, None)
         else:
@@ -208,12 +211,12 @@ class GitSetupCommandTests(GitSetupTests):
         })
 
         result, messages = self.run_setup(
-            machine, None, inputs=("y", "gh-user")
+            machine, None, inputs=("y", "", "gh-user")
         )
 
         self.assertEqual(result, 0)
         self.assertIn(
-            "GitHub SSH identity could not be verified on this machine.",
+            "GitHub SSH authentication could not be verified.",
             "\n".join(messages)
         )
         loaded = accounts.load_accounts(self.user_directory)
@@ -230,7 +233,7 @@ class GitSetupCommandTests(GitSetupTests):
         result, messages = self.run_setup(machine, "0xother", inputs=("y",))
 
         self.assertEqual(result, 0)
-        self.assertIn("GitHub identity mismatch.", messages)
+        self.assertIn("GitHub account mismatch.", messages)
         loaded = accounts.load_accounts(self.user_directory)
         self.assertEqual(loaded.github_username, "0xother")
 
@@ -359,7 +362,7 @@ class GitSetupCommandTests(GitSetupTests):
             stack.enter_context(
                 patch.object(
                     git_commands, "_github_identity",
-                    return_value=("0xkamaji", True)
+                    return_value=("0xkamaji", True, "github.com")
                 )
             )
             stack.enter_context(patch.object(accounts, "write_accounts"))
@@ -469,6 +472,370 @@ class GitIdentityHelperTests(unittest.TestCase):
             self.assertFalse(
                 git_commands._git_remote_accessible("git@github.com:user/repo.git")
             )
+
+
+class GitSetupPromptTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.context_root = self.root / "context"
+        self.user = entities.build_user_context("kamaji", context_id=USER_ID)
+        entities.create_entity_context(self.user, root=self.context_root)
+        self.user_directory = entities.entity_directory(
+            self.user, root=self.context_root
+        )
+        self.loader_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
+        self.loader_patch.start()
+        self.addCleanup(self.loader_patch.stop)
+        self.addCleanup(self.temporary_directory.cleanup)
+
+    def run_setup_collecting_prompts(self, ssh_results, inputs, machine=None):
+        prompts = []
+
+        def ssh_side_effect(host="github.com"):
+            return ssh_results.get(host)
+
+        def input_side(prompt=" "):
+            prompts.append(prompt)
+            return (inputs.pop(0) if inputs else "")
+
+        def machine_get(key):
+            return machine.values.get(key, "") if machine else ""
+
+        def machine_set(key, value):
+            if machine:
+                machine.values[key] = value
+            return True
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("builtins.input", side_effect=input_side))
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_github_ssh_username", side_effect=ssh_side_effect
+                )
+            )
+            stack.enter_context(
+                patch.object(git_commands, "_git_config_global_get", side_effect=machine_get)
+            )
+            stack.enter_context(
+                patch.object(git_commands, "_git_config_global_set", side_effect=machine_set)
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands,
+                    "get_local_context_bindings",
+                    return_value={"user": "kamaji"}
+                )
+            )
+            rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
+            result = git_commands.git_setup(argparse.Namespace())
+        messages = [item.args[0] for item in rot_say.call_args_list]
+        return result, prompts, messages
+
+    def test_github_username_prompt_contains_colon(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, prompts, messages = self.run_setup_collecting_prompts(
+            {"github.com": None}, ["", "", "0xkamaji", "", ""], machine
+        )
+
+        self.assertEqual(result, 0)
+        self.assertTrue(
+            any("GitHub username:" in prompt for prompt in prompts)
+        )
+        self.assertNotIn("GitHub username (unverified)", prompts)
+
+    def test_manually_entered_username_is_not_labeled_verified(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, prompts, messages = self.run_setup_collecting_prompts(
+            {"github.com": None}, ["", "", "gh-user", "", ""], machine
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("GitHub SSH authentication could not be verified.", messages)
+        self.assertIn("GitHub account saved.", messages)
+        self.assertIn("SSH authentication is not verified on this machine.", messages)
+        self.assertNotIn("SSH identity", prompts)
+        loaded = accounts.load_accounts(self.user_directory)
+        self.assertEqual(loaded.github_username, "gh-user")
+
+    def test_verified_state_is_displayed_accurately(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, prompts, messages = self.run_setup_collecting_prompts(
+            {"github.com": "0xkamaji"}, [], machine
+        )
+
+        self.assertEqual(result, 0)
+        joined = "\n".join(messages)
+        self.assertIn("GitHub account:\n  0xkamaji", joined)
+        self.assertIn("SSH authentication:\n  ✓ verified", joined)
+        self.assertIn("✓ GitHub SSH authentication verified as 0xkamaji", joined)
+        self.assertNotIn("SSH identity", prompts)
+
+    def test_unverified_state_is_displayed_accurately(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, prompts, messages = self.run_setup_collecting_prompts(
+            {"github.com": None}, ["", "", "0xkamaji", "", ""], machine
+        )
+
+        self.assertEqual(result, 0)
+        joined = "\n".join(messages)
+        self.assertIn("SSH authentication:\n  not verified on this machine", joined)
+
+
+class GitSetupAliasTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.context_root = self.root / "context"
+        self.user = entities.build_user_context("kamaji", context_id=USER_ID)
+        entities.create_entity_context(self.user, root=self.context_root)
+        self.user_directory = entities.entity_directory(
+            self.user, root=self.context_root
+        )
+        self.loader_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
+        self.loader_patch.start()
+        self.addCleanup(self.loader_patch.stop)
+        self.addCleanup(self.temporary_directory.cleanup)
+        accounts.write_accounts(
+            self.user_directory,
+            accounts.AccountFile(
+                git_name="Kamaji",
+                git_email="kamaji@example.invalid",
+                github_username="0xkamaji",
+                github_default_visibility="private"
+            )
+        )
+
+    def run_setup(self, ssh_callables, inputs, machine):
+        hosts_tested = []
+        remembered = []
+
+        def ssh_side_effect(host="github.com"):
+            hosts_tested.append(host)
+            return ssh_callables[host]
+
+        def machine_get(key):
+            return machine.values.get(key, "")
+
+        def machine_set(key, value):
+            if value == "":
+                machine.values.pop(key, None)
+            else:
+                machine.values[key] = value
+            return True
+
+        def remember(host):
+            remembered.append(host)
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("builtins.input", side_effect=input_side_effect(inputs))
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_github_ssh_username", side_effect=ssh_side_effect
+                )
+            )
+            stack.enter_context(
+                patch.object(git_commands, "_git_config_global_get", side_effect=machine_get)
+            )
+            stack.enter_context(
+                patch.object(git_commands, "_git_config_global_set", side_effect=machine_set)
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands,
+                    "get_local_context_bindings",
+                    return_value={"user": "kamaji"}
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_remember_machine_ssh_host", side_effect=remember
+                )
+            )
+            rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
+            result = git_commands.git_setup(argparse.Namespace())
+        messages = [item.args[0] for item in rot_say.call_args_list]
+        return result, messages, hosts_tested, remembered
+
+    def test_github_com_failure_falls_back_to_user_alias(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, messages, hosts_tested, remembered = self.run_setup(
+            {"github.com": None, "github-rotbot": "0xkamaji"},
+            ["github-rotbot"],
+            machine
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("github.com", hosts_tested)
+        self.assertIn("github-rotbot", hosts_tested)
+        self.assertEqual(remembered, ["github-rotbot"])
+        joined = "\n".join(messages)
+        self.assertIn("GitHub SSH authentication via github.com failed.", joined)
+        self.assertIn("✓ GitHub SSH authentication verified as 0xkamaji", joined)
+        loaded = accounts.load_accounts(self.user_directory)
+        self.assertEqual(loaded.github_username, "0xkamaji")
+
+    def test_failed_alias_leaves_username_stored_unverified(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, messages, hosts_tested, remembered = self.run_setup(
+            {"github.com": None, "github-rotbot": None},
+            ["github-rotbot"],
+            machine
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(remembered, [])
+        joined = "\n".join(messages)
+        self.assertIn("GitHub SSH authentication could not be verified.", joined)
+        self.assertIn("SSH authentication is not verified on this machine.", joined)
+
+
+class GitSetupMachineConfigTests(GitSetupTests):
+    def run_setup_prompts(self, machine, ssh_username, inputs):
+        prompts = []
+
+        def input_side(prompt=" "):
+            prompts.append(prompt)
+            return (list(inputs).pop(0) if inputs else "")
+
+        def ssh_side_effect(host="github.com"):
+            return ssh_username
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("builtins.input", side_effect=input_side))
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_github_ssh_username", side_effect=ssh_side_effect
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_config_global_get", side_effect=machine.get
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_config_global_set", side_effect=machine.set
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    git_commands,
+                    "get_local_context_bindings",
+                    return_value={"user": "kamaji"}
+                )
+            )
+            rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
+            result = git_commands.git_setup(argparse.Namespace())
+        messages = [item.args[0] for item in rot_say.call_args_list]
+        return result, prompts, messages
+
+    def test_machine_ssh_host_is_not_written_to_accounts_toml(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, messages = self.run_setup(machine, "0xkamaji")
+
+        self.assertEqual(result, 0)
+        content = (self.user_directory / "accounts.toml").read_text(encoding="utf-8")
+        self.assertNotIn("ssh_host", content)
+        self.assertNotIn("github-rotbot", content)
+
+    def test_failed_git_config_write_produces_failure(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Different Machine",
+            "user.email": "different@example.invalid"
+        })
+        machine.fail_set = {"user.name", "user.email"}
+
+        result, prompts, messages = self.run_setup_prompts(
+            machine, "0xkamaji", ["y"]
+        )
+
+        self.assertEqual(result, 1)
+        self.assertNotIn("✓ configured Git on this machine", messages)
+        self.assertIn("Could not configure Git on this machine.", messages)
+
+    def test_success_message_only_after_successful_writes(self):
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        })
+
+        result, messages = self.run_setup(machine, "0xkamaji")
+
+        self.assertEqual(result, 0)
+        self.assertIn("✓ configured Git on this machine", messages)
+
+    def test_unset_machine_identity_uses_configure_semantics_default_yes(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+
+        result, prompts, messages = self.run_setup_prompts(machine, "0xkamaji", [])
+
+        self.assertEqual(result, 0)
+        joined = "\n".join(messages)
+        self.assertTrue(
+            any("Configure this machine with this Git identity?" in prompt for prompt in prompts)
+        )
+        self.assertIn("✓ configured Git on this machine", joined)
+        self.assertEqual(machine.values["user.name"], "Kamaji")
+
+    def test_conflicting_identity_uses_replace_semantics_default_no(self):
+        self.write_accounts()
+        machine = MachineConfigFake()
+        machine.values.update({
+            "user.name": "Other Machine Name",
+            "user.email": "machine@example.invalid"
+        })
+
+        result, prompts, messages = self.run_setup_prompts(machine, "0xkamaji", [])
+
+        self.assertEqual(result, 0)
+        joined = "\n".join(messages)
+        self.assertTrue(
+            any("Replace this machine's Git identity?" in prompt for prompt in prompts)
+        )
+        self.assertIn("Machine Git identity was not changed.", joined)
+        self.assertNotIn("✓ configured Git on this machine", joined)
 
 
 if __name__ == "__main__":
