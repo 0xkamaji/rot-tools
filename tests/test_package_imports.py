@@ -42,6 +42,7 @@ class PackageImportTests(unittest.TestCase):
         "rotbot.contexts.deletion",
         "rotbot.contexts.machines",
         "rotbot.contexts.people",
+        "rotbot.contexts.accounts",
         "rotbot.commands.git",
         "rotbot.commands.ai",
         "rotbot.commands.machine",

@@ -1,130 +1,236 @@
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from rotbot.commands import git as git_commands
+from rotbot.contexts import accounts, entities, loader
+
+
+USER_ID = "00000000-0000-4000-8000-000000000001"
+
+
+class MachineConfigFake:
+    def __init__(self):
+        self.values = {
+            "init.defaultBranch": "main",
+            "user.name": "Kamaji",
+            "user.email": "kamaji@example.invalid"
+        }
+
+    def get(self, key):
+        return self.values.get(key, "")
+
+    def set(self, key, value):
+        if value == "":
+            self.values.pop(key, None)
+        else:
+            self.values[key] = value
+        return True
 
 
 class GitStartTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.directory = Path(self.temporary_directory.name)
-        (self.directory / "placeholder.txt").write_text(
+        self.context_root = self.directory / "context"
+        self.user = entities.build_user_context("kamaji", context_id=USER_ID)
+        entities.create_entity_context(self.user, root=self.context_root)
+        self.user_directory = entities.entity_directory(
+            self.user, root=self.context_root
+        )
+        self.loader_patch = patch.object(loader, "CONTEXT_ROOT", self.context_root)
+        self.loader_patch.start()
+        self.addCleanup(self.loader_patch.stop)
+        self.addCleanup(self.temporary_directory.cleanup)
+
+        self.project_directory = Path(self.temporary_directory.name) / "example-project"
+        self.project_directory.mkdir()
+        (self.project_directory / "placeholder.txt").write_text(
             "placeholder\n", encoding="utf-8"
         )
         self.git_environment = {
-            "GIT_AUTHOR_NAME": "Test User",
-            "GIT_AUTHOR_EMAIL": "test@example.invalid",
-            "GIT_COMMITTER_NAME": "Test User",
-            "GIT_COMMITTER_EMAIL": "test@example.invalid"
+            "GIT_AUTHOR_NAME": "Kamaji",
+            "GIT_AUTHOR_EMAIL": "kamaji@example.invalid",
+            "GIT_COMMITTER_NAME": "Kamaji",
+            "GIT_COMMITTER_EMAIL": "kamaji@example.invalid"
         }
 
     def tearDown(self):
+        self.loader_patch.stop()
         self.temporary_directory.cleanup()
 
-    def run_start(self, answers=("", ""), **patches):
-        args = argparse.Namespace()
-        environment = {**git_commands.os.environ, **self.git_environment}
-        with patch("builtins.input", side_effect=iter(answers)), patch.dict(
-            git_commands.os.environ, environment
-        ), patch.object(git_commands, "rot_say") as rot_say, patches.get(
-            "gh_available", patch.object(git_commands, "_gh_available", return_value=False)
-        ), patches.get(
-            "gh_authenticated", patch.object(git_commands, "_gh_authenticated", return_value=True)
-        ), patches.get(
-            "gh_create", patch.object(git_commands, "_create_gh_repository", return_value="")
-        ):
-            result = git_commands.git_start(args, working_directory=self.directory)
-        messages = [call.args[0] for call in rot_say.call_args_list]
-        return result, messages
+    def write_accounts(self, account=None):
+        account = account or accounts.AccountFile(
+            git_name="Kamaji",
+            git_email="kamaji@example.invalid",
+            github_username="0xkamaji",
+            github_default_visibility="private"
+        )
+        accounts.write_accounts(self.user_directory, account)
+        return account
 
-    def git(self, *arguments):
+    def git(self, *arguments, directory=None):
         return subprocess.run(
             ["git", *arguments],
-            cwd=self.directory,
+            cwd=directory or self.project_directory,
             capture_output=True,
             text=True,
             check=False
         )
 
-    def test_default_repository_name_comes_from_cwd_basename(self):
-        directory = self.directory / "example-project"
-        directory.mkdir()
-        (directory / "placeholder.txt").write_text(
-            "placeholder\n", encoding="utf-8"
+    def enter_start_patches(
+        self,
+        stack,
+        machine,
+        ssh_username,
+        remote_accessible,
+        inputs,
+        push_return=0
+    ):
+        stack.enter_context(
+            patch("builtins.input", side_effect=input_side_effect(inputs))
         )
-        self.directory = directory
-
-        captured = {}
-
-        def create(repository_name, visibility, working_directory):
-            captured["name"] = repository_name
-            captured["visibility"] = visibility
-            return "https://github.com/owner/example-project"
-
-        with patch("builtins.input", side_effect=iter(("", ""))), patch.dict(
-            git_commands.os.environ, {**git_commands.os.environ, **self.git_environment}
-        ), patch.object(
-            git_commands, "_gh_available", return_value=True
-        ), patch.object(
-            git_commands, "_gh_authenticated", return_value=True
-        ), patch.object(
-            git_commands, "_create_gh_repository", side_effect=create
-        ) as gh_create, patch.object(git_commands, "rot_say"):
-            result = git_commands.git_start(
-                argparse.Namespace(), working_directory=directory
+        stack.enter_context(
+            patch.object(
+                git_commands, "_github_ssh_username", return_value=ssh_username
             )
+        )
+        if isinstance(remote_accessible, list):
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_remote_accessible",
+                    side_effect=remote_accessible
+                )
+            )
+        else:
+            stack.enter_context(
+                patch.object(
+                    git_commands, "_git_remote_accessible",
+                    return_value=remote_accessible
+                )
+            )
+        stack.enter_context(
+            patch.object(
+                git_commands, "_git_config_global_get", side_effect=machine.get
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                git_commands, "_git_config_global_set", side_effect=machine.set
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                git_commands,
+                "get_local_context_bindings",
+                return_value={"user": "kamaji"}
+            )
+        )
+        real_run = git_commands.subprocess.run
+
+        def guarded_run(command, *arguments, **kwargs):
+            if tuple(command) == ("git", "push", "-u", "origin", "main"):
+                return subprocess.CompletedProcess(command, push_return, "", "")
+            return real_run(command, *arguments, **kwargs)
+
+        stack.enter_context(
+            patch.object(git_commands.subprocess, "run", side_effect=guarded_run)
+        )
+        stack.enter_context(patch.dict(git_commands.os.environ, self.git_environment))
+        return stack.enter_context(patch.object(git_commands, "rot_say"))
+
+    def run_start(
+        self,
+        machine=None,
+        ssh_username="0xkamaji",
+        remote_accessible=True,
+        inputs=("", ""),
+        push_return=0,
+        directory=None
+    ):
+        machine = machine or MachineConfigFake()
+        with ExitStack() as stack:
+            rot_say = self.enter_start_patches(
+                stack, machine, ssh_username, remote_accessible, inputs, push_return
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(),
+                working_directory=directory or self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
+        return result, messages
+
+
+def input_side_effect(values):
+    remaining = list(values)
+
+    def side_effect(prompt=""):
+        return remaining.pop(0) if remaining else ""
+
+    return side_effect
+
+
+class GitStartWorkflowTests(GitStartTests):
+    def test_default_repository_name_comes_from_cwd_basename(self):
+        self.write_accounts()
+
+        result, messages = self.run_start()
 
         self.assertEqual(result, 0)
-        self.assertEqual(captured["name"], "example-project")
-        self.assertEqual(captured["visibility"], "private")
-        gh_create.assert_called_once()
+        origin = self.git("remote", "get-url", "origin")
+        self.assertEqual(
+            origin.stdout.strip(),
+            "git@github.com:0xkamaji/example-project.git"
+        )
 
     def test_custom_repository_name_and_public_visibility(self):
-        captured = {}
+        self.write_accounts()
 
-        def create(repository_name, visibility, working_directory):
-            captured["name"] = repository_name
-            captured["visibility"] = visibility
-            return "https://github.com/owner/custom-name"
-
-        with patch("builtins.input", side_effect=iter(("custom-name", "public"))), patch.object(
-            git_commands, "_gh_available", return_value=True
-        ), patch.object(
-            git_commands, "_gh_authenticated", return_value=True
-        ), patch.object(
-            git_commands, "_create_gh_repository", side_effect=create
-        ), patch.object(git_commands, "rot_say"):
-            result = git_commands.git_start(
-                argparse.Namespace(), working_directory=self.directory
-            )
+        result, messages = self.run_start(
+            remote_accessible=True,
+            inputs=("custom-name", "public")
+        )
 
         self.assertEqual(result, 0)
-        self.assertEqual(captured["name"], "custom-name")
-        self.assertEqual(captured["visibility"], "public")
+        origin = self.git("remote", "get-url", "origin")
+        self.assertEqual(
+            origin.stdout.strip(),
+            "git@github.com:0xkamaji/custom-name.git"
+        )
 
     def test_private_is_the_default_visibility(self):
-        captured = {}
-
-        def create(repository_name, visibility, working_directory):
-            captured["visibility"] = visibility
-            return "https://github.com/owner/repo"
-
-        with patch("builtins.input", side_effect=iter(("", ""))), patch.object(
-            git_commands, "_gh_available", return_value=True
-        ), patch.object(
-            git_commands, "_gh_authenticated", return_value=True
-        ), patch.object(
-            git_commands, "_create_gh_repository", side_effect=create
-        ), patch.object(git_commands, "rot_say"):
-            git_commands.git_start(
-                argparse.Namespace(), working_directory=self.directory
+        self.write_accounts(
+            accounts.AccountFile(
+                git_name="Kamaji",
+                git_email="kamaji@example.invalid",
+                github_username="0xkamaji",
+                github_default_visibility=""
             )
+        )
 
-        self.assertEqual(captured["visibility"], "private")
+        result, messages = self.run_start(
+            remote_accessible=[False, True],
+            inputs=("", "", "")
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("Visibility:  private", "\n".join(messages))
+
+    def test_author_and_username_come_from_user_context(self):
+        self.write_accounts()
+
+        result, messages = self.run_start()
+
+        self.assertEqual(result, 0)
+        index = messages.index("Git author:")
+        self.assertEqual(messages[index + 1], "  Kamaji <kamaji@example.invalid>")
+        github_index = messages.index("GitHub account:")
+        self.assertEqual(messages[github_index + 1], "  0xkamaji")
+        self.assertNotEqual("Kamaji", "0xkamaji")
 
     def test_refusal_when_cwd_is_already_in_a_git_repository(self):
         self.git("init", "-q")
@@ -133,7 +239,7 @@ class GitStartTests(unittest.TestCase):
             git_commands, "rot_say"
         ) as rot_say:
             result = git_commands.git_start(
-                argparse.Namespace(), working_directory=self.directory
+                argparse.Namespace(), working_directory=self.project_directory
             )
 
         self.assertEqual(result, 1)
@@ -143,149 +249,232 @@ class GitStartTests(unittest.TestCase):
             rot_say.call_args.args[0]
         )
 
-    def test_successful_local_initialization_without_gh(self):
-        result, messages = self.run_start()
+    def test_incomplete_accounts_prompt_and_configure(self):
+        setup_written = False
+
+        def fake_setup(person, user_directory):
+            nonlocal setup_written
+            accounts.write_accounts(
+                user_directory,
+                accounts.AccountFile(
+                    git_name="Kamaji",
+                    git_email="kamaji@example.invalid",
+                    github_username="0xkamaji",
+                    github_default_visibility="private"
+                )
+            )
+            setup_written = True
+            return 0
+
+        with ExitStack() as stack:
+            machine = MachineConfigFake()
+            rot_say = self.enter_start_patches(
+                stack, machine, "0xkamaji", True,
+                ("y", "", ""), push_return=0
+            )
+            stack.enter_context(
+                patch.object(git_commands, "_setup_flow", side_effect=fake_setup)
+            )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
 
         self.assertEqual(result, 0)
-        self.assertEqual(messages[0], "✓ initialized git repository")
-        self.assertEqual(messages[1], "✓ created initial commit")
+        self.assertTrue(setup_written)
+        self.assertIn("Git setup is incomplete for this Rot user.", messages)
 
-        branch = self.git("branch", "--show-current")
-        self.assertEqual(branch.stdout.strip(), "main")
-        log = self.git("log", "--oneline")
-        self.assertIn("Initial commit", log.stdout)
-
-    def test_invalid_visibility_is_rejected(self):
-        with patch("builtins.input", side_effect=iter(("", "secret"))), patch.object(
-            git_commands, "rot_say"
-        ) as rot_say:
-            result = git_commands.git_start(
-                argparse.Namespace(), working_directory=self.directory
+    def test_incomplete_accounts_declined_stops_before_init(self):
+        with ExitStack() as stack:
+            rot_say = self.enter_start_patches(
+                stack, MachineConfigFake(), "0xkamaji", True, ("n",)
             )
+            result = git_commands.git_start(
+                argparse.Namespace(), working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
 
         self.assertEqual(result, 1)
-        self.assertIn("Invalid visibility", rot_say.call_args.args[0])
+        self.assertIn("No Git repository was created.", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
 
-    def test_gh_unavailable_keeps_local_repository(self):
+    def test_ssh_missing_stops_before_init(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(ssh_username=None)
+
+        self.assertEqual(result, 1)
+        self.assertIn(
+            "GitHub SSH authentication is not configured on this machine.",
+            "\n".join(messages)
+        )
+        self.assertFalse((self.project_directory / ".git").exists())
+
+    def test_ssh_username_mismatch_stops_before_init(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(ssh_username="someone-else")
+
+        self.assertEqual(result, 1)
+        self.assertIn("GitHub identity mismatch.", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
+
+    def test_successful_local_initialization_and_push(self):
+        self.write_accounts()
+
         result, messages = self.run_start()
-
-        self.assertEqual(result, 0)
-        self.assertEqual(messages[0], "✓ initialized git repository")
-        self.assertIn("! GitHub CLI unavailable", messages)
-        self.assertIn("  remote repository was not created", messages)
-
-        log = self.git("log", "--oneline")
-        self.assertIn("Initial commit", log.stdout)
-
-    def test_gh_unauthenticated_keeps_local_repository(self):
-        result, messages = self.run_start(
-            gh_available=patch.object(git_commands, "_gh_available", return_value=True),
-            gh_authenticated=patch.object(git_commands, "_gh_authenticated", return_value=False)
-        )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(messages[0], "✓ initialized git repository")
-        self.assertIn("! GitHub CLI is not authenticated", messages)
-        self.assertIn("  remote repository was not created", messages)
-
-        log = self.git("log", "--oneline")
-        self.assertIn("Initial commit", log.stdout)
-
-    def test_gh_remote_creation_failure_does_not_undo_local_repo(self):
-        result, messages = self.run_start(
-            gh_available=patch.object(git_commands, "_gh_available", return_value=True),
-            gh_authenticated=patch.object(git_commands, "_gh_authenticated", return_value=True),
-            gh_create=patch.object(git_commands, "_create_gh_repository", return_value=None)
-        )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(messages[0], "✓ initialized git repository")
-        self.assertIn("! GitHub remote creation failed", messages)
-        self.assertIn("  remote repository was not created", messages)
-
-        log = self.git("log", "--oneline")
-        self.assertIn("Initial commit", log.stdout)
-
-    def test_mocked_successful_gh_repo_create(self):
-        result, messages = self.run_start(
-            gh_available=patch.object(git_commands, "_gh_available", return_value=True),
-            gh_authenticated=patch.object(git_commands, "_gh_authenticated", return_value=True),
-            gh_create=patch.object(
-                git_commands,
-                "_create_gh_repository",
-                return_value="https://github.com/0xkamaji/example"
-            )
-        )
 
         self.assertEqual(result, 0)
         self.assertIn("✓ initialized git repository", messages)
         self.assertIn("✓ created initial commit", messages)
-        self.assertIn("✓ created GitHub repository 0xkamaji/example", messages)
         self.assertIn("✓ added origin", messages)
         self.assertIn("✓ pushed main", messages)
+        branch = self.git("branch", "--show-current")
+        self.assertEqual(branch.stdout.strip(), "main")
+        log = self.git("log", "--oneline")
+        self.assertIn("Initial commit", log.stdout)
+        self.assertIn("0xkamaji/example-project", origin_string(self))
 
-    def test_gh_repo_create_uses_private_flag_by_default(self):
-        with patch.object(
-            git_commands.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, stdout="")
-        ) as run:
-            output = git_commands._create_gh_repository(
-                "repo-name", "private", self.directory
+    def test_existing_github_repository_is_detected(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(remote_accessible=True)
+
+        self.assertEqual(result, 0)
+        self.assertIn(
+            "✓ found existing GitHub repository 0xkamaji/example-project",
+            messages
+        )
+
+    def test_manual_creation_prompt_waits_for_enter(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(
+            remote_accessible=[False, True],
+            inputs=("", "", "")
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("Do not initialize it with a README", "\n".join(messages))
+        self.assertIn(
+            "✓ found GitHub repository 0xkamaji/example-project", "\n".join(messages)
+        )
+
+    def test_manual_creation_cancel_leaves_no_repository(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(
+            remote_accessible=False,
+            inputs=("", "", "q")
+        )
+
+        self.assertEqual(result, 1)
+        self.assertIn("Cancelled. No Git repository was created.", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
+
+    def test_manual_creation_failure_leaves_no_repository(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(
+            remote_accessible=False,
+            inputs=("", "", "")
+        )
+
+        self.assertEqual(result, 1)
+        self.assertIn("Could not verify GitHub repository:", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
+
+    def test_local_initialization_failure_rolls_back_only_git(self):
+        self.write_accounts()
+
+        with ExitStack() as stack:
+            machine = MachineConfigFake()
+            rot_say = self.enter_start_patches(
+                stack, machine, "0xkamaji", True, ("", ""), push_return=0
             )
+            real_run = git_commands.subprocess.run
 
-        self.assertEqual(output, "")
-        command = run.call_args.args[0]
-        self.assertIn("--private", command)
-        self.assertNotIn("--public", command)
+            def failing_commit(command, *arguments, **kwargs):
+                if tuple(command) == ("git", "commit", "-m", "Initial commit"):
+                    return subprocess.CompletedProcess(command, 128, "", "")
+                return real_run(command, *arguments, **kwargs)
 
-    def test_gh_unavailable_helper_detects_missing_binary(self):
-        with patch.object(git_commands.subprocess, "run", side_effect=FileNotFoundError):
-            self.assertFalse(git_commands._gh_available())
-
-    def test_gh_available_helper_and_auth_use_the_cli(self):
-        with patch.object(
-            git_commands.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, stdout="gh version 2.x")
-        ):
-            self.assertTrue(git_commands._gh_available())
-        with patch.object(
-            git_commands.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, stdout="logged in")
-        ):
-            self.assertTrue(git_commands._gh_authenticated())
-
-    def test_gh_create_failure_returns_none(self):
-        with patch.object(
-            git_commands.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="error")
-        ):
-            self.assertIsNone(
-                git_commands._create_gh_repository(
-                    "repo-name", "private", self.directory
+            stack.enter_context(
+                patch.object(
+                    git_commands.subprocess, "run", side_effect=failing_commit
                 )
             )
+            result = git_commands.git_start(
+                argparse.Namespace(),
+                working_directory=self.project_directory
+            )
+        messages = [item.args[0] for item in rot_say.call_args_list]
+
+        self.assertEqual(result, 128)
+        self.assertIn("! local initialization failed and was rolled back", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
+        self.assertTrue((self.project_directory / "placeholder.txt").exists())
+        self.assertTrue(
+            len(list(self.project_directory.iterdir())) == 1
+        )
+
+    def test_push_failure_keeps_local_repository(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(push_return=5)
+
+        self.assertEqual(result, 5)
+        self.assertIn("! push failed", messages)
+        self.assertIn("  local repository retained", messages)
+        self.assertIn(
+            "  remote: git@github.com:0xkamaji/example-project.git", messages
+        )
+        self.assertTrue((self.project_directory / ".git").exists())
+        origin = self.git("remote", "get-url", "origin")
+        self.assertIn("0xkamaji/example-project.git", origin.stdout)
+
+    def test_invalid_visibility_is_rejected(self):
+        self.write_accounts()
+
+        result, messages = self.run_start(
+            inputs=("", "secret")
+        )
+
+        self.assertEqual(result, 1)
+        self.assertIn("Invalid visibility: secret", messages)
+        self.assertFalse((self.project_directory / ".git").exists())
 
     def test_command_does_not_invoke_ai_functionality(self):
+        self.write_accounts()
         from rotbot.agents import invocation
 
-        with patch.object(invocation, "invoke") as invoke, patch.object(
-            invocation, "execute"
-        ) as execute, patch.object(git_commands, "_gh_available", return_value=False), patch(
-            "builtins.input", side_effect=iter(("", ""))
-        ), patch.dict(git_commands.os.environ, self.git_environment), patch.object(
-            git_commands, "rot_say"
-        ):
+        with ExitStack() as stack:
+            machine = MachineConfigFake()
+            self.enter_start_patches(
+                stack, machine, "0xkamaji", True, ("", "")
+            )
+            invoke = stack.enter_context(patch.object(invocation, "invoke"))
+            execute = stack.enter_context(patch.object(invocation, "execute"))
             result = git_commands.git_start(
-                argparse.Namespace(), working_directory=self.directory
+                argparse.Namespace(), working_directory=self.project_directory
             )
 
         self.assertEqual(result, 0)
         invoke.assert_not_called()
         execute.assert_not_called()
+
+    def test_initialization_does_not_touch_github_cli(self):
+        self.write_accounts()
+
+        result, messages = self.run_start()
+
+        self.assertEqual(result, 0)
+        self.assertTrue(all("gh " not in message for message in messages))
+
+
+def origin_string(instance):
+    origin = instance.git("remote", "get-url", "origin")
+    return origin.stdout.strip()
 
 
 if __name__ == "__main__":

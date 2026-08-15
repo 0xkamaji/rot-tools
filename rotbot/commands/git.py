@@ -2,8 +2,11 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 
+from rotbot.contexts import accounts, entities
+from rotbot.contexts.config import ConfigError, get_local_context_bindings
 from rotbot.ui.terminal import rot_say
 
 
@@ -644,61 +647,260 @@ def git_push(args, working_directory=None):
     return 0
 
 
-def _gh_available():
+class GitStartError(Exception):
+    pass
+
+
+def _git_config_global_get(key):
     try:
-        version = subprocess.run(
-            ["gh", "--version"],
+        result = _capture_git("config", "--global", "--get", key)
+    except FileNotFoundError:
+        raise GitStartError("Git is not installed or is not available in PATH.")
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _git_config_global_set(key, value):
+    try:
+        result = subprocess.run(
+            ["git", "config", "--global", key, value],
             capture_output=True,
             text=True,
             check=False
         )
     except FileNotFoundError:
         return False
-    return version.returncode == 0
+    return result.returncode == 0
 
 
-def _gh_authenticated():
-    status = subprocess.run(
-        ["gh", "auth", "status"],
-        capture_output=True,
-        text=True,
-        check=False
+def _machine_git_identity():
+    return (
+        _git_config_global_get("user.name"),
+        _git_config_global_get("user.email")
     )
-    return status.returncode == 0
 
 
-def _create_gh_repository(repository_name, visibility, working_directory):
-    flag = "--private" if visibility == "private" else "--public"
+def _github_ssh_username():
     command = [
-        "gh",
-        "repo",
-        "create",
-        repository_name,
-        flag,
-        "--source=.",
-        "--remote=origin",
-        "--push"
+        "ssh", "-T",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "git@github.com"
     ]
     try:
-        result = subprocess.run(
+        process = subprocess.run(
             command,
             capture_output=True,
             text=True,
             check=False,
-            cwd=working_directory
+            timeout=20
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
-    if result.returncode != 0:
-        return None
-    return result.stdout or ""
+    combined = (process.stdout or "") + (process.stderr or "")
+    match = re.search(r"Hi ([^\s!]+)! You've successfully authenticated", combined)
+    return match.group(1) if match else None
 
 
-def _github_reference(repository_name, create_output):
-    match = re.search(r"github\.com[/:]([^/\s?#]+)/([^/\s?#]+)", create_output or "")
-    if match:
-        return f"{match.group(1)}/{match.group(2).rstrip('.git')}"
-    return repository_name
+def _git_remote_accessible(remote_url):
+    try:
+        process = subprocess.run(
+            ["git", "ls-remote", remote_url],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=_ssh_push_environment()
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    return process.returncode == 0
+
+
+def _resolve_current_user():
+    try:
+        bindings = get_local_context_bindings()
+    except ConfigError as error:
+        raise GitStartError(str(error)) from None
+    user = bindings.get("user")
+    if user is None:
+        raise GitStartError(
+            "No Rot user is configured.\n"
+            "Configure a user context before running Git setup."
+        )
+    try:
+        person = entities.load_user_context(user)
+    except entities.EntityContextError as error:
+        raise GitStartError(str(error)) from None
+    return person, entities.entity_directory(person)
+
+
+def _prompt(question):
+    try:
+        return input(f"{question} ").strip()
+    except EOFError:
+        return ""
+
+
+def _confirm(question, default_yes):
+    suffix = "Y/n" if default_yes else "y/N"
+    try:
+        answer = input(f"{question} [{suffix}] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if not answer:
+        return default_yes
+    return answer in {"y", "yes"}
+
+
+def _ensure_default_branch_main():
+    if _git_config_global_get("init.defaultBranch") != "main":
+        _git_config_global_set("init.defaultBranch", "main")
+
+
+def _ensure_machine_identity(name, email):
+    machine_name, machine_email = _machine_git_identity()
+    if machine_name == name and machine_email == email:
+        return True
+    rot_say("Rot user Git identity:")
+    rot_say(f"  {name} <{email}>")
+    rot_say("Current machine Git identity:")
+    rot_say(f"  {machine_name or '(unset)'} <{machine_email or '(unset)'}>")
+    if not _confirm("Replace this machine's Git identity?", default_yes=False):
+        return False
+    _git_config_global_set("user.name", name)
+    _git_config_global_set("user.email", email)
+    return True
+
+
+def _gather_git_identity(loaded, user_name):
+    stored_name = loaded.git_name if loaded else ""
+    stored_email = loaded.git_email if loaded else ""
+    if stored_name and stored_email:
+        return stored_name, stored_email
+    machine_name, machine_email = _machine_git_identity()
+    if not stored_name and not stored_email and machine_name and machine_email:
+        rot_say("Existing Git identity detected:")
+        rot_say(f"  Name:  {machine_name}")
+        rot_say(f"  Email: {machine_email}")
+        if _confirm(f"Save this identity to Rot user '{user_name}'?", default_yes=True):
+            return machine_name, machine_email
+        machine_name, machine_email = "", ""
+    name = stored_name or machine_name
+    email = stored_email or machine_email
+    if not name:
+        rot_say(
+            "Git author name (the name written into commits, "
+            "not the GitHub username):"
+        )
+        name = _prompt("Git author name")
+    if not email:
+        rot_say("Git author email:")
+        email = _prompt("Git author email")
+    return name or machine_name, email or machine_email
+
+
+def _github_identity(loaded):
+    stored = loaded.github_username if loaded else ""
+    detected = _github_ssh_username()
+    if detected:
+        if stored and stored != detected:
+            rot_say("GitHub identity mismatch.")
+            rot_say(f"  Rot user:  {stored}")
+            rot_say(f"  This host: {detected}")
+            if _confirm(
+                "Replace the stored username with the verified value?",
+                default_yes=False
+            ):
+                return detected, True
+            return stored, False
+        username = stored or detected
+        if stored == detected:
+            rot_say(f"✓ GitHub SSH identity verified: {username}")
+        else:
+            rot_say("GitHub SSH identity detected:")
+            rot_say(f"  {username}")
+        return username, True
+    if stored:
+        rot_say("GitHub SSH identity could not be verified on this machine.")
+        rot_say(f"  Keeping stored username: {stored}")
+        return stored, False
+    rot_say("GitHub SSH identity could not be verified on this machine.")
+    return _prompt("GitHub username (unverified)"), False
+
+
+def _setup_flow(person, user_directory):
+    try:
+        loaded = accounts.load_accounts(user_directory)
+    except accounts.AccountError as error:
+        rot_say(str(error))
+        return 1
+
+    name, email = _gather_git_identity(loaded, person.name)
+    username, github_verified = _github_identity(loaded)
+    if not name or not email:
+        rot_say("Git author identity is incomplete. No changes were made.")
+        return 1
+    if not username:
+        rot_say("A GitHub username is required. No changes were made.")
+        return 1
+
+    if loaded and loaded.github_default_visibility:
+        visibility = loaded.github_default_visibility
+    else:
+        visibility = _prompt_value(
+            "private", "Default GitHub visibility [private]"
+        )
+    if visibility not in {"private", "public"}:
+        rot_say(f"Invalid visibility: {visibility}")
+        return 1
+
+    rot_say("Git author identity:")
+    rot_say(f"  Name:  {name}")
+    rot_say(f"  Email: {email}")
+    rot_say("GitHub SSH identity:")
+    rot_say(f"  {username}")
+    if not _confirm(
+        f"Save this identity for Rot user '{person.name}'?",
+        default_yes=True
+    ):
+        rot_say("Git setup cancelled. No changes were made.")
+        return 1
+
+    try:
+        accounts.write_accounts(
+            user_directory,
+            accounts.AccountFile(
+                git_name=name,
+                git_email=email,
+                github_username=username,
+                github_default_visibility=visibility
+            )
+        )
+    except accounts.AccountError as error:
+        rot_say(str(error))
+        return 1
+    rot_say("✓ saved user Git identity")
+
+    if not _ensure_machine_identity(name, email):
+        rot_say("Machine Git identity was not changed.")
+        return 0
+    _ensure_default_branch_main()
+    rot_say("✓ configured Git on this machine")
+    if github_verified:
+        rot_say(f"✓ GitHub SSH identity verified: {username}")
+    return 0
+
+
+def git_setup(args):
+    try:
+        person, user_directory = _resolve_current_user()
+    except GitStartError as error:
+        rot_say(str(error))
+        return 1
+    return _setup_flow(person, user_directory)
 
 
 def _prompt_value(default, prompt):
@@ -706,6 +908,15 @@ def _prompt_value(default, prompt):
         return input(f"{prompt}: ").strip() or default
     except EOFError:
         return default
+
+
+def _accounts_complete(loaded):
+    return (
+        loaded is not None
+        and loaded.git_name
+        and loaded.git_email
+        and loaded.github_username
+    )
 
 
 def git_start(args, working_directory=None):
@@ -728,26 +939,119 @@ def git_start(args, working_directory=None):
         rot_say("The current directory is already inside a Git repository.")
         return 1
 
+    try:
+        person, user_directory = _resolve_current_user()
+    except GitStartError as error:
+        rot_say(str(error))
+        return 1
+
+    try:
+        loaded = accounts.load_accounts(user_directory)
+    except accounts.AccountError as error:
+        rot_say(str(error))
+        return 1
+
+    if not _accounts_complete(loaded):
+        rot_say("Git setup is incomplete for this Rot user.")
+        if not _confirm("Configure it now?", default_yes=True):
+            rot_say("No Git repository was created.")
+            return 1
+        if _setup_flow(person, user_directory) != 0:
+            return 1
+        try:
+            loaded = accounts.load_accounts(user_directory)
+        except accounts.AccountError as error:
+            rot_say(str(error))
+            return 1
+        if not _accounts_complete(loaded):
+            rot_say("Git setup is still incomplete. No Git repository was created.")
+            return 1
+
+    if not _ensure_machine_identity(loaded.git_name, loaded.git_email):
+        rot_say("No Git repository was created.")
+        return 1
+
+    detected_username = _github_ssh_username()
+    if detected_username is None:
+        rot_say(
+            "GitHub SSH authentication is not configured on this machine.\n"
+            "No Git repository was created."
+        )
+        return 1
+    if detected_username != loaded.github_username:
+        rot_say("GitHub identity mismatch.")
+        rot_say(f"  Rot user:  {loaded.github_username}")
+        rot_say(f"  This host: {detected_username}")
+        rot_say("No Git repository was created.")
+        return 1
+    rot_say(f"✓ GitHub SSH identity verified: {detected_username}")
+
     default_name = Path(os.path.abspath(command_directory)).name
+    visibility = loaded.github_default_visibility or "private"
+    rot_say("Git author:")
+    rot_say(f"  {loaded.git_name} <{loaded.git_email}>")
+    rot_say("GitHub account:")
+    rot_say(f"  {loaded.github_username}")
     repository_name = _prompt_value(default_name, f"Repository name [{default_name}]")
-    visibility = _prompt_value("private", "Visibility [private]")
+    visibility = _prompt_value(visibility, f"Visibility [{visibility}]")
     if visibility not in {"private", "public"}:
         rot_say(f"Invalid visibility: {visibility}")
         return 1
 
-    commands = (
+    remote_url = f"git@github.com:{loaded.github_username}/{repository_name}.git"
+    found = False
+    if _git_remote_accessible(remote_url):
+        rot_say(
+            f"✓ found existing GitHub repository "
+            f"{loaded.github_username}/{repository_name}"
+        )
+        found = True
+    else:
+        rot_say("Create an EMPTY GitHub repository:")
+        rot_say(f"  Owner:       {loaded.github_username}")
+        rot_say(f"  Repository:  {repository_name}")
+        rot_say(f"  Visibility:  {visibility}")
+        rot_say("")
+        rot_say("Do not initialize it with a README, .gitignore, or license.")
+        rot_say("")
+        rot_say("Press Enter when the repository exists.")
+        rot_say("Type q to cancel.")
+        answer = _read_input().strip().lower()
+        if answer in {"q", "quit", "exit", "cancel"}:
+            rot_say("Cancelled. No Git repository was created.")
+            return 1
+        if not _git_remote_accessible(remote_url):
+            rot_say("Could not verify GitHub repository:")
+            rot_say(f"  {remote_url}")
+            return 1
+        rot_say(
+            f"✓ found GitHub repository {loaded.github_username}/{repository_name}"
+        )
+        found = True
+
+    if not found:
+        return 1
+
+    git_directory = Path(command_directory) / ".git"
+    created_git = not git_directory.exists()
+    local_commands = (
         ["git", "init", "-b", "main"],
         ["git", "add", "-A"],
-        ["git", "commit", "-m", "Initial commit"]
+        ["git", "commit", "-m", "Initial commit"],
+        ["git", "remote", "add", "origin", remote_url]
     )
     try:
-        for command in commands:
+        for command in local_commands:
             result = subprocess.run(command, check=False, cwd=command_directory)
             if result.returncode != 0:
-                rot_say(
-                    f"Command failed with exit code {result.returncode}:\n"
-                    f"{shlex.join(command)}"
-                )
+                if created_git and git_directory.exists():
+                    shutil.rmtree(git_directory, ignore_errors=True)
+                    rot_say("! local initialization failed and was rolled back")
+                else:
+                    rot_say(
+                        f"Command failed with exit code {result.returncode}:\n"
+                        f"{shlex.join(command)}"
+                    )
                 return result.returncode
     except FileNotFoundError:
         rot_say("Git is not installed or is not available in PATH.")
@@ -755,26 +1059,19 @@ def git_start(args, working_directory=None):
 
     rot_say("✓ initialized git repository")
     rot_say("✓ created initial commit")
-
-    if not _gh_available():
-        rot_say("! GitHub CLI unavailable")
-        rot_say("  remote repository was not created")
-        return 0
-    if not _gh_authenticated():
-        rot_say("! GitHub CLI is not authenticated")
-        rot_say("  remote repository was not created")
-        return 0
-
-    create_output = _create_gh_repository(
-        repository_name, visibility, command_directory
-    )
-    if create_output is None:
-        rot_say("! GitHub remote creation failed")
-        rot_say("  remote repository was not created")
-        return 0
-
-    reference = _github_reference(repository_name, create_output)
-    rot_say(f"✓ created GitHub repository {reference}")
     rot_say("✓ added origin")
+
+    push_result = subprocess.run(
+        ["git", "push", "-u", "origin", "main"],
+        check=False,
+        cwd=command_directory,
+        env=_ssh_push_environment()
+    )
+    if push_result.returncode != 0:
+        rot_say("! push failed")
+        rot_say("  local repository retained")
+        rot_say(f"  remote: {remote_url}")
+        return push_result.returncode
+
     rot_say("✓ pushed main")
     return 0
