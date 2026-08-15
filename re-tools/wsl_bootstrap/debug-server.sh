@@ -42,6 +42,10 @@ WINDOWS_ARCH="${ROT_DEBUG_WINDOWS_ARCH:-amd64}"
 # (used by the automated test suite with fake package managers).
 ROT_SUDO="${ROT_DEBUG_SUDO-sudo}"
 
+# Graceful shutdown window (seconds) before SIGKILL on Linux stop. Bounded and
+# configurable so tests can stay fast without weakening the real behavior.
+TERM_WAIT_SECS="${ROT_DEBUG_TERM_WAIT:-2}"
+
 # Resolved lldb-server (filled by resolve_lldb_server).
 LLDB_PATH=""
 LLDB_SOURCE=""
@@ -111,7 +115,12 @@ detect_pkg_manager() {
 # ---------------------------------------------------------------------------
 # lldb-server resolution
 #
-# Order: 1) LLDB_SERVER  2) managed Binary Ninja  3) system PATH
+# Order:
+#   1) explicit LLDB_SERVER
+#   2) managed Binary Ninja debugger package:
+#        $BN_LLDB_DIR/plugins/lldb/lldb-server
+#      then any intentionally-supported legacy managed layouts, then
+#   3) system lldb-server from PATH
 # ---------------------------------------------------------------------------
 resolve_lldb_server() {
     LLDB_PATH=""
@@ -127,7 +136,8 @@ resolve_lldb_server() {
     fi
 
     local cand
-    for cand in "$BN_LLDB_DIR/lldb-server" \
+    for cand in "$BN_LLDB_DIR/plugins/lldb/lldb-server" \
+                "$BN_LLDB_DIR/lldb-server" \
                 "$BN_LLDB_DIR/bin/lldb-server" \
                 "$BN_LLDB_DIR/usr/bin/lldb-server"; do
         if [[ -x "$cand" ]]; then
@@ -150,22 +160,33 @@ resolve_lldb_server() {
 # Process identity validation
 #
 # A recorded PID is considered Rot-owned only when the live process still
-# resolves to the recorded executable (via /proc/<pid>/exe) or its cmdline
-# still contains the recorded executable path. Anything else is refused.
+# resolves to the recorded executable (via /proc/<pid>/exe) or, as a fallback,
+# one of its argv entries (from /proc/<pid>/cmdline) is exactly the recorded
+# executable path. A loose substring scan is deliberately NOT used, so a
+# different command that merely mentions the path as unrelated text is never
+# accepted. Anything else is refused.
 # ---------------------------------------------------------------------------
 pid_belongs_to_exe() {
-    local pid="$1" exe="$2" pexe cmdline
+    local pid="$1" exe="$2" pexe token rex rtoken
     [[ -r "/proc/$pid/cmdline" ]] || return 1
 
     pexe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    rex="$(realpath "$exe" 2>/dev/null || printf '%s' "$exe")"
     if [[ -n "$pexe" ]]; then
-        if [[ "$(realpath "$exe" 2>/dev/null || printf '%s' "$exe")" == "$pexe" ]]; then
+        if [[ "$rex" == "$pexe" ]]; then
             return 0
         fi
     fi
 
-    cmdline="$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    [[ "$cmdline" == *"$exe"* ]]
+    while IFS= read -r -d '' token; do
+        [[ -z "$token" ]] && continue
+        rtoken="$(realpath "$token" 2>/dev/null || printf '%s' "$token")"
+        if [[ "$rtoken" == "$rex" ]]; then
+            return 0
+        fi
+    done < "/proc/$pid/cmdline"
+
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -280,8 +301,9 @@ stop_linux() {
     printf 'Stopping Linux debug server (PID %s)...\n' "$LINUX_PID"
     kill "$LINUX_PID" 2>/dev/null || true
 
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10; do
+    local i attempts
+    attempts=$(( TERM_WAIT_SECS * 10 ))
+    for (( i = 0; i < attempts; i++ )); do
         kill -0 "$LINUX_PID" 2>/dev/null || break
         sleep 0.1
     done
@@ -325,7 +347,8 @@ run_windows_script() {
         -Action "$action" \
         -BindAddress "$WINDOWS_BIND" \
         -Port "$WINDOWS_PORT" \
-        -Arch "$WINDOWS_ARCH"
+        -Arch "$WINDOWS_ARCH" \
+        -MachineReadable
 }
 
 windows_status() {
@@ -337,18 +360,29 @@ windows_status() {
         return 1
     fi
 
-    local out
+    local out status
     out="$(run_windows_script Status 2>&1 || true)"
 
-    if printf '%s' "$out" | grep -q 'Windows debug server: running'; then
-        WIN_STATUS="running"
-        WIN_PID="$(printf '%s' "$out" | sed -n 's/^[[:space:]]*PID:[[:space:]]*//p' | head -n1)"
-        WIN_LISTEN="$(printf '%s' "$out" | sed -n 's/^[[:space:]]*Listen:[[:space:]]*//p' | head -n1)"
-        return 0
-    fi
+    status="$(printf '%s\n' "$out" | sed -n 's/^status=//p' | head -n1 | tr -d '\r')"
 
-    WIN_STATUS="stopped"
-    return 0
+    case "$status" in
+        running)
+            WIN_STATUS="running"
+            WIN_PID="$(printf '%s\n' "$out" | sed -n 's/^pid=//p' | head -n1 | tr -d '\r')"
+            WIN_LISTEN="$(printf '%s\n' "$out" | sed -n 's/^listen=//p' | head -n1 | tr -d '\r')"
+            WIN_LISTEN="${WIN_LISTEN:-$WINDOWS_BIND:$WINDOWS_PORT}"
+            return 0
+            ;;
+        unverifiable)
+            WIN_STATUS="unverifiable"
+            WIN_PID="$(printf '%s\n' "$out" | sed -n 's/^pid=//p' | head -n1 | tr -d '\r')"
+            return 2
+            ;;
+        *)
+            WIN_STATUS="stopped"
+            return 0
+            ;;
+    esac
 }
 
 start_windows() {
@@ -426,12 +460,16 @@ stop_server() {
     if [[ "$LINUX_STATUS" == "running" ]]; then
         stop_linux
         did=1
+    elif [[ "$LINUX_STATUS" == "unverifiable" ]]; then
+        printf 'Warning: refusing to stop unverifiable Linux process (PID %s).\n' "$LINUX_PID" >&2
     fi
 
     windows_status
     if [[ "$WIN_STATUS" == "running" ]]; then
         stop_windows
         did=1
+    elif [[ "$WIN_STATUS" == "unverifiable" ]]; then
+        printf 'Warning: refusing to stop unverifiable Windows process (PID %s).\n' "$WIN_PID" >&2
     fi
 
     [[ "$did" -eq 1 ]] || printf 'No debug server is running.\n'
@@ -542,8 +580,14 @@ render_menu() {
     fi
 
     # Nothing is running.
+    local any_unverifiable=0
     if [[ "$LINUX_STATUS" == "unverifiable" ]]; then
         printf '\nWarning: recorded Linux server (PID %s) could not be verified.\n' "$LINUX_PID" >&2
+        any_unverifiable=1
+    fi
+    if [[ "$WIN_STATUS" == "unverifiable" ]]; then
+        printf '\nWarning: recorded Windows server (PID %s) could not be verified.\n' "$WIN_PID" >&2
+        any_unverifiable=1
     fi
 
     printf '\n'
@@ -554,7 +598,7 @@ render_menu() {
     printf 'No debug server is running.\n'
     printf '\n'
 
-    if [[ "$LINUX_STATUS" == "unverifiable" ]]; then
+    if [[ "$any_unverifiable" -eq 1 ]]; then
         printf '1) Start Linux server\n'
         if windows_available; then
             printf '2) Start Windows server\n'
@@ -583,7 +627,7 @@ render_menu() {
 handle_idle_choice() {
     local choice="$1"
 
-    if [[ "$LINUX_STATUS" == "unverifiable" ]]; then
+    if [[ "$LINUX_STATUS" == "unverifiable" || "$WIN_STATUS" == "unverifiable" ]]; then
         case "$choice" in
             1) start_linux ;;
             2) if windows_available; then start_windows; else setup_tools; fi ;;

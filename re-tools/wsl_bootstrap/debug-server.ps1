@@ -7,14 +7,22 @@ param(
     [int]$Port = 31338,
 
     [ValidateSet("amd64", "x86")]
-    [string]$Arch = "amd64"
+    [string]$Arch = "amd64",
+
+    # Emit stable key=value lines instead of human prose for Status.
+    [switch]$MachineReadable
 )
 
 $ErrorActionPreference = "Stop"
 
-# Windows per-user state location.
-$StateDir = Join-Path $env:LOCALAPPDATA "rot-tools\debug-server"
-$PidFile = Join-Path $StateDir "dbgsrv.pid"
+# Windows per-user state location. ROT_DEBUG_WIN_STATE_DIR is a test-only
+# override so the automated suite can run against a throwaway directory.
+$StateDir = if ($env:ROT_DEBUG_WIN_STATE_DIR) {
+    $env:ROT_DEBUG_WIN_STATE_DIR
+} else {
+    Join-Path $env:LOCALAPPDATA "rot-tools\debug-server"
+}
+$StateFile = Join-Path $StateDir "dbgsrv.state"
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 
@@ -84,58 +92,203 @@ For Binary Ninja's debugger package the expected layout is:
 }
 
 
-# Returns the recorded process only when its identity is positively verified
-# as dbgsrv.exe. Stale or unverifiable state is handled per the rules below.
-function Get-RecordedProcess {
-    if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
-        return $null
+function Read-State {
+    $state = @{}
+    if (Test-Path -LiteralPath $StateFile -PathType Leaf) {
+        foreach ($line in Get-Content -LiteralPath $StateFile) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                $state[$Matches[1]] = $Matches[2]
+            }
+        }
+    }
+    return $state
+}
+
+function Write-State {
+    param(
+        [int]$ProcessId,
+        [string]$ExecutablePath,
+        [string]$Started,
+        [string]$Listen
+    )
+    Set-Content -LiteralPath $StateFile -Value @(
+        "pid=$ProcessId",
+        "path=$ExecutablePath",
+        "started=$Started",
+        "listen=$Listen"
+    )
+}
+
+
+# Ownerhip validation. Returns a hashtable:
+#
+#   Status  = 'ok' | 'nostate' | 'stale' | 'mismatch' | 'unverifiable'
+#   Process = live System.Diagnostics.Process when found
+#   Pid     = recorded/live PID
+#
+# Rules:
+#   * malformed PID or dead PID -> remove stale state ('stale')
+#   * live PID whose name/path/start time disagrees with recorded state
+#     -> 'mismatch' (state preserved, never killed)
+#   * live dbgsrv whose identity cannot be queried (e.g. access denied)
+#     -> 'unverifiable' (state preserved, never killed)
+#
+# The state is only removed for malformed/dead entries; a positive
+# identification is required before anything is killed.
+function Test-RecordedProcess {
+    $state = Read-State
+
+    if (-not $state) {
+        return @{ Status = 'nostate'; Pid = 0 }
     }
 
-    $text = (Get-Content -LiteralPath $PidFile -Raw).Trim()
-
     $pidValue = 0
-    if (-not [int]::TryParse($text, [ref]$pidValue)) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        return $null
+    if (-not [int]::TryParse($state['pid'], [ref]$pidValue) -or $pidValue -le 0) {
+        Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+        return @{ Status = 'stale'; Pid = 0 }
     }
 
     $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
     if (-not $process) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        return $null
+        Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+        return @{ Status = 'stale'; Pid = $pidValue }
     }
 
-    # Identity check: the recorded PID must still be dbgsrv.exe.
     if ($process.ProcessName -ne $DbgSrvName) {
-        Write-Warning "Recorded PID $pidValue is $($process.ProcessName), not dbgsrv.exe. Refusing to act on it."
-        return $null
+        return @{ Status = 'mismatch'; Process = $process; Pid = $pidValue }
     }
 
-    return $process
+    # Query the executable path and creation time via WMI/CIM; this works where
+    # Process.MainModule is inaccessible (e.g. elevated processes).
+    $executablePath = $null
+    $creationDate = $null
+    try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop
+        if ($cim) {
+            $executablePath = $cim.ExecutablePath
+            $creationDate = $cim.CreationDate
+        }
+    } catch {
+        $executablePath = $null
+        $creationDate = $null
+    }
+
+    $recordedPath = $state['path']
+    $recordedStarted = $state['started']
+
+    if ($executablePath -and $recordedPath) {
+        $pathOk = [string]::Equals(
+            ([string]$executablePath).Trim(),
+            ([string]$recordedPath).Trim(),
+            [System.StringComparison]::OrdinalIgnoreCase)
+        if (-not $pathOk) {
+            return @{ Status = 'mismatch'; Process = $process; Pid = $pidValue }
+        }
+    } else {
+        # Windows denied the query: do not silently weaken ownership validation.
+        return @{ Status = 'unverifiable'; Process = $process; Pid = $pidValue }
+    }
+
+    $recordedDate = [datetime]::MinValue
+    if ($creationDate -and $recordedStarted -and [datetime]::TryParse($recordedStarted, [ref]$recordedDate)) {
+        $deltaSec = [math]::Abs(([datetime]$creationDate - $recordedDate).TotalSeconds)
+        if ($deltaSec -gt 2) {
+            # A live dbgsrv.exe with a different start time is almost certainly a
+            # reused PID; treat it as identity mismatch and refuse to act.
+            return @{ Status = 'mismatch'; Process = $process; Pid = $pidValue }
+        }
+    } else {
+        return @{ Status = 'unverifiable'; Process = $process; Pid = $pidValue }
+    }
+
+    return @{ Status = 'ok'; Process = $process; Pid = $pidValue }
+}
+
+# Wraps Test-RecordedProcess with the side effects callers need:
+# stale-state cleanup and a warning stream explaining refusals.
+function Resolve-RecordedProcess {
+    $result = Test-RecordedProcess
+
+    switch ($result.Status) {
+        'stale' {
+            if ($result.Pid -gt 0) {
+                Write-Warning "Recorded PID $($result.Pid) no longer exists; stale state removed."
+            } else {
+                Write-Warning "Malformed dbgsrv state removed."
+            }
+        }
+        'mismatch' {
+            Write-Warning "Recorded PID $($result.Pid) ($($result.Process.ProcessName)) does not match the recorded dbgsrv identity. Refusing to act on it."
+        }
+        'unverifiable' {
+            Write-Warning "PID $($result.Pid) is dbgsrv.exe but its identity could not be verified against recorded state. Refusing to act on it."
+        }
+    }
+
+    return $result
 }
 
 
 function Show-Status {
-    $process = Get-RecordedProcess
+    $result = Resolve-RecordedProcess
 
-    if ($process) {
-        Write-Host "Windows debug server: running"
-        Write-Host "  PID:    $($process.Id)"
-        Write-Host "  Listen: ${BindAddress}:$Port"
-        Write-Host "  Arch:   $Arch"
+    if ($MachineReadable) {
+        switch ($result.Status) {
+            'ok' {
+                "status=running"
+                "pid=$($result.Process.Id)"
+                "listen=${BindAddress}:$Port"
+            }
+            'mismatch' {
+                "status=unverifiable"
+                "pid=$($result.Pid)"
+            }
+            'unverifiable' {
+                "status=unverifiable"
+                "pid=$($result.Pid)"
+            }
+            default {
+                "status=stopped"
+            }
+        }
         return
     }
 
-    Write-Host "Windows debug server: stopped"
+    switch ($result.Status) {
+        'ok' {
+            Write-Host "Windows debug server: running"
+            Write-Host "  PID:    $($result.Process.Id)"
+            Write-Host "  Listen: ${BindAddress}:$Port"
+            Write-Host "  Arch:   $Arch"
+        }
+        'mismatch' {
+            Write-Host "Windows debug server: RUNNING (unverifiable)"
+            Write-Host "  PID:    $($result.Pid)"
+            Write-Host "  WARNING: recorded process identity does not match; refusing to act on it."
+        }
+        'unverifiable' {
+            Write-Host "Windows debug server: RUNNING (unverifiable)"
+            Write-Host "  PID:    $($result.Pid)"
+            Write-Host "  WARNING: recorded process identity could not be verified; refusing to act on it."
+        }
+        default {
+            Write-Host "Windows debug server: stopped"
+        }
+    }
 }
 
 
 function Start-DebugServer {
-    $existing = Get-RecordedProcess
+    $existing = Resolve-RecordedProcess
 
-    if ($existing) {
+    if ($existing.Status -eq 'ok') {
         Write-Host "Windows debug server is already running."
-        Write-Host "  PID: $($existing.Id)"
+        Write-Host "  PID: $($existing.Process.Id)"
+        return
+    }
+
+    if ($existing.Status -eq 'mismatch' -or $existing.Status -eq 'unverifiable') {
+        Write-Warning "Refusing to start: PID $($existing.Pid) is live but could not be verified as the recorded dbgsrv. Inspect and remove '$StateFile' manually if you are certain it is stale."
         return
     }
 
@@ -164,10 +317,28 @@ function Start-DebugServer {
         throw "dbgsrv.exe exited during startup."
     }
 
-    Set-Content `
-        -LiteralPath $PidFile `
-        -Value $process.Id `
-        -NoNewline
+    # Record enough identity to positively recognize this process later.
+    $executablePath = $null
+    $creationDate = $null
+    try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($process.Id)" -ErrorAction Stop
+        if ($cim) {
+            $executablePath = $cim.ExecutablePath
+            $creationDate = $cim.CreationDate
+        }
+    } catch {
+        $executablePath = $null
+        $creationDate = $null
+    }
+    if (-not $executablePath) { $executablePath = $dbgSrv }
+    if (-not $creationDate) { $creationDate = Get-Date }
+    $startedString = ([datetime]$creationDate).ToString("o")
+
+    Write-State `
+        -ProcessId $process.Id `
+        -ExecutablePath $executablePath `
+        -Started $startedString `
+        -Listen "${BindAddress}:$Port"
 
     Write-Host ""
     Write-Host "Windows debug server started."
@@ -177,24 +348,32 @@ function Start-DebugServer {
 
 
 function Stop-DebugServer {
-    $process = Get-RecordedProcess
+    $result = Resolve-RecordedProcess
 
-    if (-not $process) {
-        Write-Host "Windows debug server is not running."
-        return
+    switch ($result.Status) {
+        'ok' {
+            Write-Host "Stopping Windows debug server (PID $($result.Process.Id))..."
+
+            Stop-Process -Id $result.Process.Id -ErrorAction Stop
+            Wait-Process -Id $result.Process.Id -ErrorAction SilentlyContinue
+
+            Remove-Item `
+                -LiteralPath $StateFile `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+            Write-Host "Windows debug server stopped."
+        }
+        'mismatch' {
+            Write-Warning "Refusing to stop PID $($result.Pid): process identity does not match recorded state."
+        }
+        'unverifiable' {
+            Write-Warning "Refusing to stop PID $($result.Pid): process identity could not be verified."
+        }
+        default {
+            Write-Host "Windows debug server is not running."
+        }
     }
-
-    Write-Host "Stopping Windows debug server (PID $($process.Id))..."
-
-    Stop-Process -Id $process.Id -ErrorAction Stop
-    Wait-Process -Id $process.Id -ErrorAction SilentlyContinue
-
-    Remove-Item `
-        -LiteralPath $PidFile `
-        -Force `
-        -ErrorAction SilentlyContinue
-
-    Write-Host "Windows debug server stopped."
 }
 
 
@@ -208,6 +387,7 @@ switch ($Action) {
     }
 
     "StopAll" {
+        Write-Host "Stopping all Rot Windows debug servers..."
         Stop-DebugServer
     }
 

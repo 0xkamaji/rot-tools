@@ -5,14 +5,18 @@ set -euo pipefail
 #
 # Menu:
 #   1) Install/bootstrap the WSL RE environment
-#   2) Start gdbserver for a Linux binary
+#   2) Debug server: launch debug-server.sh (persistent lldb-server / dbgsrv)
+#   3) Show OpenCode MCP setup command
+#   4) Exit
 #
 # The bootstrap deliberately does NOT write OpenCode's MCP config.
 # It launches OpenCode's own `mcp add` wizard instead.
+#
+# Debugging uses the persistent debugger-server workflow in debug-server.sh,
+# not the old one-shot gdbserver GDB RSP flow.
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MCP_COMMAND='npx -y binary-ninja-mcp --host localhost --port 9009'
-GDB_HOST='127.0.0.1'
-GDB_PORT='31337'
 
 log()  { printf '\n[*] %s\n' "$*"; }
 ok()   { printf '[+] %s\n' "$*"; }
@@ -109,8 +113,7 @@ bootstrap() {
         curl \
         ca-certificates \
         python3 \
-        git \
-        gdbserver
+        git
 
     load_nvm
 
@@ -151,7 +154,6 @@ bootstrap() {
     printf 'npm:       %s\n' "$(npm --version)"
     printf 'npx:       %s\n' "$(npx --version)"
     printf 'OpenCode:  %s\n' "$(opencode --version)"
-    printf 'gdbserver: %s\n' "$(gdbserver --version | head -n1)"
 
     echo
     echo "Binary Ninja MCP setup"
@@ -196,67 +198,22 @@ bootstrap() {
     echo "  opencode mcp list"
 }
 
-normalize_target() {
-    local target="$1"
+debug_server() {
+    is_wsl || die "Run the debug server from inside WSL."
 
-    # Expand a leading ~/ without eval.
-    if [[ "$target" == "~/"* ]]; then
-        target="$HOME/${target#~/}"
+    local dbg="$SCRIPT_DIR/debug-server.sh"
+    if [[ -f "$dbg" ]]; then
+        echo
+        echo "Launching the persistent Rot debug server menu."
+        echo "  Linux:   lldb-server (persistent, default port 31337)"
+        echo "  Windows: dbgsrv.exe via PowerShell interop (default port 31338)"
+        echo
+        exec "$dbg"
     fi
 
-    printf '%s' "$target"
-}
-
-start_gdbserver() {
-    is_wsl || die "Run gdbserver from inside WSL."
-
-    if ! command -v gdbserver >/dev/null 2>&1; then
-        warn "gdbserver is not installed."
-        read -r -p "Install it now? [Y/n] " answer
-        case "${answer:-Y}" in
-            [Yy]|[Yy][Ee][Ss])
-                sudo apt update
-                sudo apt install -y gdbserver
-                ;;
-            *)
-                return
-                ;;
-        esac
-    fi
-
-    echo
-    echo "Select the Linux binary you want Binary Ninja to debug."
-    echo "Tip: tab completion works at this prompt."
-    echo
-
-    local target
-    read -e -r -p "Binary path: " target
-    target="$(normalize_target "$target")"
-
-    [ -n "$target" ] || {
-        warn "No file selected."
-        return
-    }
-
-    [ -f "$target" ] || {
-        warn "Not a file: $target"
-        return
-    }
-
-    chmod u+x "$target"
-
-    echo
-    ok "Target: $target"
-    echo "Binary Ninja connection:"
-    echo "  Debugger -> Connect to Remote Process"
-    echo "  Adapter:  GDB RSP"
-    echo "  Address:  localhost"
-    echo "  Port:     $GDB_PORT"
-    echo
-    warn "gdbserver is one-shot; start this option again after the target exits."
-    echo
-
-    exec gdbserver "${GDB_HOST}:${GDB_PORT}" -- "$target"
+    warn "debug-server.sh was not found next to this script."
+    echo "Run it from its own location:"
+    echo "  ./debug-server.sh"
 }
 
 show_menu() {
@@ -266,7 +223,7 @@ RE WSL
 ======
 
 1) Install / bootstrap RE environment
-2) Start gdbserver for a binary
+2) Debug server (debug-server.sh)
 3) Show MCP setup command
 4) Exit
 
@@ -297,7 +254,9 @@ main() {
                 read -r -p "Press Enter to return to menu..." _
                 ;;
             2)
-                start_gdbserver
+                debug_server
+                echo
+                read -r -p "Press Enter to return to menu..." _
                 ;;
             3)
                 show_mcp_command

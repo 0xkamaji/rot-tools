@@ -17,3 +17,16 @@ jobs:
           python-version: "3.11"
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+  debugger-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax check
+        run: |
+          bash -n re-tools/wsl_bootstrap/debug-server.sh
+          bash -n re-tools/wsl_bootstrap/re-wsl.sh
+      - name: Run debug-server fake-tool test suite
+        run: bash re-tools/wsl_bootstrap/tests/test-debug-server.sh
+      - name: PowerShell syntax + ownership tests
+        run: pwsh -NoProfile -File re-tools/wsl_bootstrap/tests/test-windows-ownership.ps1

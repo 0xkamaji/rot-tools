@@ -3,21 +3,42 @@ set -u
 
 # Test suite for debug-server.sh
 #
-# Uses temporary XDG_DATA_HOME / XDG_STATE_HOME and fake tools
-# (pacman, apt-get, lldb-server, powershell.exe, wslpath) so the
-# real machine is never modified.
+# Uses temporary XDG_DATA_HOME / XDG_STATE_HOME and a FULLY ISOLATED test
+# PATH so the host machine's real package managers, sudo, powershell.exe, and
+# lldb-server can never be discovered by accident.
+#
+# Isolation strategy: the debug-server.sh subprocess runs with PATH pointing
+# ONLY at the sandbox bin directory. That directory contains:
+#   * fake tools for the scenario under test (pacman / apt-get / lldb-server /
+#     powershell.exe / wslpath)
+#   * symlinks to a small set of safe system utilities the script itself needs
+#     (bash, grep, sed, head, tr, readlink, realpath, date, mkdir, rm, sleep,
+#     kill, nohup, id, tail, dirname)
+#
+# No host directory is ever on the test PATH, so a fake-apt test can never see
+# the host's pacman and vice versa, and no real package manager can ever run.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEBUG_SERVER="$SCRIPT_DIR/../debug-server.sh"
 DEBUG_PS1="$SCRIPT_DIR/../debug-server.ps1"
+WINDOWS_OWNERSHIP_TEST="$SCRIPT_DIR/test-windows-ownership.ps1"
+HARNESS_BASH="$(command -v bash)"
 
 PASS=0
 FAIL=0
 FAILED_TESTS=""
 
+# All fake PIDs we spawn, plus every sandbox bin dir, so cleanup never leaks.
+ALL_PIDS=()
+ALL_BINS=()
+
 say()   { printf '\n== %s\n' "$*"; }
 ok()    { PASS=$((PASS+1)); printf '   ok   %s\n' "$*"; }
 fail()  { FAIL=$((FAIL+1)); FAILED_TESTS="$FAILED_TESTS $*"; printf '   FAIL %s\n' "$*"; }
+
+# Safe system utilities the script genuinely relies on, symlinked into the
+# sandbox bin dir. This is a curated allow-list, not a copy of the OS.
+SAFE_TOOLS=(bash grep sed head tr readlink realpath date mkdir rm sleep kill nohup id tail dirname)
 
 # ---------------------------------------------------------------------------
 # Test harness helpers
@@ -29,21 +50,62 @@ new_sandbox() {
     XDG_STATE="$TMP/state"
     BIN="$TMP/bin"
     mkdir -p "$XDG_DATA" "$XDG_STATE" "$BIN"
+    ALL_BINS+=( "$BIN" )
+
+    # Link the safe system utilities into the sandbox bin dir.
+    local t src
+    for t in "${SAFE_TOOLS[@]}"; do
+        src="$(command -v "$t")"
+        if [[ -z "$src" ]]; then
+            printf '   ERROR: cannot locate required safe tool %s on host\n' "$t" >&2
+            exit 1
+        fi
+        ln -s "$src" "$BIN/$t"
+    done
+}
+
+track_pid() {
+    local pid="$1"
+    [[ -n "$pid" ]] && ALL_PIDS+=( "$pid" )
+}
+
+kill_tracked() {
+    local pid
+    for pid in "${ALL_PIDS[@]:-}"; do
+        kill -9 "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    done
+    ALL_PIDS=()
 }
 
 destroy_sandbox() {
-    # Kill any fake lldb-server processes we may have left behind.
-    if [[ -n "${PID1:-}" ]]; then
-        kill -9 "$PID1" 2>/dev/null
-        wait "$PID1" 2>/dev/null
-    fi
-    if [[ -n "${PID2:-}" ]]; then
-        kill -9 "$PID2" 2>/dev/null
-        wait "$PID2" 2>/dev/null
-    fi
-    PID1=""; PID2=""
+    kill_tracked
     rm -rf "$TMP"
+    TMP=""
+    XDG_DATA=""
+    XDG_STATE=""
+    BIN=""
 }
+
+# Catch any fake lldb-server still running under any test bin dir (even if the
+# test failed before its PID was captured).
+cleanup_all() {
+    kill_tracked
+    local bin p pid cmd
+    for bin in "${ALL_BINS[@]:-}"; do
+        for p in /proc/[0-9]*; do
+            [[ -r "$p/cmdline" ]] || continue
+            pid="${p#/proc/}"
+            cmd="$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)"
+            case "$cmd" in
+                *"$bin/lldb-server"*)
+                    kill -9 "$pid" 2>/dev/null
+                    ;;
+            esac
+        done
+    done
+}
+trap cleanup_all EXIT INT TERM
 
 # Write a fake executable.
 make_fake() {
@@ -54,7 +116,7 @@ make_fake() {
 
 # Build the standard fake toolset. `has_lldb` controls whether a fake
 # lldb-server lands on PATH. `pm` selects which package manager fakes to
-# install (pacman | apt | both).
+# install (pacman | apt | both | none).
 install_fakes() {
     local has_lldb="$1" pm="$2"
 
@@ -81,11 +143,16 @@ exit "${APTGET_EXIT:-0}"
     fi
 
     # Fake Windows interop so the real powershell.exe is never reached.
+    # Honors FAKE_WIN_STATUS so tests can simulate a running Windows server.
     make_fake "$BIN/powershell.exe" '
 printf "POWERSHELL:%s\n" "$*" >> "$FAKE_LOG"
 case " $* " in
     *" -Action Status "*)
-        printf "Windows debug server: stopped\n"
+        if [ "${FAKE_WIN_STATUS:-stopped}" = "running" ]; then
+            printf "status=running\npid=12345\nlisten=127.0.0.1:31338\n"
+        else
+            printf "status=stopped\n"
+        fi
         ;;
     *" -Action StopAll "* | *" -Action Stop "*)
         printf "Windows debug server stopped.\n"
@@ -100,7 +167,8 @@ printf "%s\n" "Z:\\\\fake\\\\debug-server.ps1"
 '
 }
 
-# Run the debug server script non-interactively with given stdin.
+# Run the debug server script non-interactively with given stdin, using the
+# fully isolated PATH (sandbox bin dir only -- no host directories).
 run_script() {
     local stdin="$1"
     shift
@@ -109,9 +177,11 @@ run_script() {
     XDG_DATA_HOME="$XDG_DATA" \
     XDG_STATE_HOME="$XDG_STATE" \
     FAKE_LOG="$TMP/fake.log" \
+    FAKE_WIN_STATUS="${FAKE_WIN_STATUS:-}" \
     ROT_DEBUG_SUDO="" \
-    PATH="$BIN:$PATH" \
-    bash "$DEBUG_SERVER" <<< "$stdin" "$@"
+    ROT_DEBUG_TERM_WAIT="${ROT_DEBUG_TERM_WAIT:-}" \
+    PATH="$BIN" \
+    "$HARNESS_BASH" "$DEBUG_SERVER" "$@" <<< "$stdin"
 }
 
 # ---------------------------------------------------------------------------
@@ -119,7 +189,7 @@ run_script() {
 # ---------------------------------------------------------------------------
 test_bash_syntax() {
     say "bash -n $DEBUG_SERVER"
-    if bash -n "$DEBUG_SERVER" 2>"$TMP/syntax.err"; then
+    if "$HARNESS_BASH" -n "$DEBUG_SERVER" 2>"$TMP/syntax.err"; then
         ok "bash syntax"
     else
         fail "bash syntax: $(cat "$TMP/syntax.err")"
@@ -163,6 +233,8 @@ test_pwsh_syntax() {
 
 # ---------------------------------------------------------------------------
 # 3. Package manager detection
+#    The isolated PATH guarantees a fake-apt test cannot see the host's pacman
+#    and vice versa, because no host directory is on the test PATH at all.
 # ---------------------------------------------------------------------------
 test_pacman_detection() {
     say "Arch/pacman detection"
@@ -175,6 +247,11 @@ test_pacman_detection() {
         ok "pacman selected"
     else
         fail "pacman not selected; log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    if grep -q 'APTGET:' "$TMP/fake.log" 2>/dev/null; then
+        fail "host apt-get leaked into pacman test"
+    else
+        ok "apt-get not visible in pacman test"
     fi
     destroy_sandbox
 }
@@ -190,6 +267,51 @@ test_apt_detection() {
         ok "apt selected"
     else
         fail "apt not selected; log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    if grep -q 'PACMAN:' "$TMP/fake.log" 2>/dev/null || grep -q 'package manager: pacman' "$TMP/out"; then
+        fail "host pacman leaked into apt test"
+    else
+        ok "pacman not visible in apt test"
+    fi
+    destroy_sandbox
+}
+
+test_both_pm_precedence() {
+    say "both package managers -> deterministic pacman precedence"
+    new_sandbox
+    install_fakes no both
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+    if grep -q 'package manager: pacman' "$TMP/out" && grep -q 'PACMAN:-S --needed --noconfirm lldb' "$TMP/fake.log"; then
+        ok "pacman wins over apt"
+    else
+        fail "pacman did not win; out=$(cat "$TMP/out") log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    if grep -q 'APTGET:' "$TMP/fake.log" 2>/dev/null; then
+        fail "apt-get was also invoked"
+    else
+        ok "apt-get not invoked when pacman present"
+    fi
+    destroy_sandbox
+}
+
+test_unsupported_pm() {
+    say "no package manager -> unsupported"
+    new_sandbox
+    install_fakes no none
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+    if grep -q 'Unsupported package manager' "$TMP/out"; then
+        ok "reported unsupported"
+    else
+        fail "did not report unsupported; out=$(cat "$TMP/out")"
+    fi
+    if grep -qE 'PACMAN:|APTGET:' "$TMP/fake.log" 2>/dev/null; then
+        fail "a package manager was invoked with no fakes"
+    else
+        ok "no package manager invoked"
     fi
     destroy_sandbox
 }
@@ -259,7 +381,7 @@ test_explicit_lldb_server_precedence() {
     LLDB_SERVER="$BIN/extra/lldb-server" \
     XDG_DATA_HOME="$XDG_DATA" XDG_STATE_HOME="$XDG_STATE" \
     FAKE_LOG="$TMP/fake.log" ROT_DEBUG_SUDO="" \
-    PATH="$BIN:$PATH" bash "$DEBUG_SERVER" <<< "1
+    PATH="$BIN" "$HARNESS_BASH" "$DEBUG_SERVER" <<< "1
 3
 " >"$TMP/out" 2>&1
 
@@ -267,6 +389,7 @@ test_explicit_lldb_server_precedence() {
     if [[ -f "$state" ]] && grep -q 'exe='"$BIN/extra/lldb-server" "$state"; then
         ok "explicit LLDB_SERVER used"
         PID1="$(sed -n 's/^pid=//p' "$state")"
+        track_pid "$PID1"
     else
         fail "explicit LLDB_SERVER not used; state=$(cat "$state" 2>/dev/null)"
     fi
@@ -274,10 +397,12 @@ test_explicit_lldb_server_precedence() {
 }
 
 test_bn_managed_precedence() {
-    say "Binary Ninja managed-server precedence"
+    say "Binary Ninja managed-server precedence (plugins/lldb/lldb-server wins over PATH)"
     new_sandbox
     install_fakes yes both
-    local bn="$XDG_DATA/rot-tools/debuggers/binary-ninja/linux/lldb-server"
+    # The current managed Binary Ninja package layout:
+    #   $XDG_DATA_HOME/rot-tools/debuggers/binary-ninja/linux/plugins/lldb/lldb-server
+    local bn="$XDG_DATA/rot-tools/debuggers/binary-ninja/linux/plugins/lldb/lldb-server"
     mkdir -p "$(dirname "$bn")"
     cp "$BIN/lldb-server" "$bn"
     run_script "1
@@ -288,8 +413,33 @@ test_bn_managed_precedence() {
     if [[ -f "$state" ]] && grep -q 'exe='"$bn" "$state"; then
         ok "Binary Ninja managed server used"
         PID1="$(sed -n 's/^pid=//p' "$state")"
+        track_pid "$PID1"
     else
         fail "BN managed server not used; state=$(cat "$state" 2>/dev/null)"
+    fi
+    destroy_sandbox
+}
+
+test_bn_new_layout_over_legacy() {
+    say "plugins/lldb/lldb-server wins over legacy managed layouts"
+    new_sandbox
+    install_fakes yes both
+    local bn_new="$XDG_DATA/rot-tools/debuggers/binary-ninja/linux/plugins/lldb/lldb-server"
+    local bn_legacy="$XDG_DATA/rot-tools/debuggers/binary-ninja/linux/lldb-server"
+    mkdir -p "$(dirname "$bn_new")"
+    cp "$BIN/lldb-server" "$bn_new"
+    cp "$BIN/lldb-server" "$bn_legacy"
+    run_script "1
+3
+" >"$TMP/out" 2>&1
+
+    local state="$XDG_STATE/rot-tools/debug-server/linux.state"
+    if [[ -f "$state" ]] && grep -q 'exe='"$bn_new" "$state"; then
+        ok "new plugins layout preferred"
+        PID1="$(sed -n 's/^pid=//p' "$state")"
+        track_pid "$PID1"
+    else
+        fail "new plugins layout not preferred; state=$(cat "$state" 2>/dev/null)"
     fi
     destroy_sandbox
 }
@@ -306,6 +456,7 @@ test_path_fallback() {
     if [[ -f "$state" ]] && grep -q 'exe='"$BIN/lldb-server" "$state"; then
         ok "PATH lldb-server used"
         PID1="$(sed -n 's/^pid=//p' "$state")"
+        track_pid "$PID1"
     else
         fail "PATH lldb-server not used; state=$(cat "$state" 2>/dev/null)"
     fi
@@ -332,6 +483,7 @@ test_start_records_state() {
         && grep -q '^pid=[0-9]' "$state"; then
         ok "state recorded"
         PID1="$(sed -n 's/^pid=//p' "$state")"
+        track_pid "$PID1"
     else
         fail "state not recorded; state=$(cat "$state" 2>/dev/null)"
     fi
@@ -351,6 +503,7 @@ test_restart_detects_running() {
 
     local state="$XDG_STATE/rot-tools/debug-server/linux.state"
     PID1="$(sed -n 's/^pid=//p' "$state")"
+    track_pid "$PID1"
 
     run_script "3
 " >"$TMP/out2" 2>&1
@@ -374,8 +527,10 @@ test_normal_stop_owned_only() {
     # Start two fake lldb-server processes directly. Record only one.
     "$BIN/lldb-server" >/dev/null 2>&1 &
     PID1=$!
+    track_pid "$PID1"
     "$BIN/lldb-server" >/dev/null 2>&1 &
     PID2=$!
+    track_pid "$PID2"
 
     local state="$XDG_STATE/rot-tools/debug-server"
     mkdir -p "$state"
@@ -439,8 +594,10 @@ test_stop_all_owned() {
 
     "$BIN/lldb-server" >/dev/null 2>&1 &
     PID1=$!
+    track_pid "$PID1"
     "$BIN/lldb-server" >/dev/null 2>&1 &
     PID2=$!
+    track_pid "$PID2"
 
     local state="$XDG_STATE/rot-tools/debug-server"
     mkdir -p "$state"
@@ -480,6 +637,7 @@ test_stop_all_unverifiable() {
     # A live process that is NOT the recorded lldb-server.
     sleep 1000 &
     PID1=$!
+    track_pid "$PID1"
 
     local state="$XDG_STATE/rot-tools/debug-server"
     mkdir -p "$state"
@@ -504,6 +662,53 @@ test_stop_all_unverifiable() {
 }
 
 # ---------------------------------------------------------------------------
+# 13. Windows machine-readable status is parsed and rendered by the menu
+# ---------------------------------------------------------------------------
+test_windows_machine_readable_status() {
+    say "windows machine-readable status parsed and rendered"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=running
+    run_script "3
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows debug server' "$TMP/out" \
+        && grep -q 'Status: RUNNING' "$TMP/out" \
+        && grep -q 'PID:    12345' "$TMP/out" \
+        && grep -q 'Listen: 127.0.0.1:31338' "$TMP/out"; then
+        ok "windows running status rendered from machine-readable output"
+    else
+        fail "windows running status not rendered; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 14. PowerShell ownership tests (run when a PowerShell host exists)
+# ---------------------------------------------------------------------------
+test_windows_ownership() {
+    if command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+        say "PowerShell ownership tests (powershell.exe)"
+        local win_script
+        win_script="$(wslpath -w "$WINDOWS_OWNERSHIP_TEST")"
+        if timeout 300 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$win_script"; then
+            ok "windows ownership tests (powershell.exe)"
+        else
+            fail "windows ownership tests (powershell.exe) failed"
+        fi
+    elif command -v pwsh >/dev/null 2>&1; then
+        say "PowerShell ownership tests (pwsh, Linux: windows-only cases skip)"
+        if timeout 120 pwsh -NoProfile -File "$WINDOWS_OWNERSHIP_TEST"; then
+            ok "windows ownership tests (pwsh)"
+        else
+            fail "windows ownership tests (pwsh) failed"
+        fi
+    else
+        printf '   skip windows ownership tests (no PowerShell host available)\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 main() {
@@ -516,11 +721,14 @@ main() {
 
     test_pacman_detection
     test_apt_detection
+    test_both_pm_precedence
+    test_unsupported_pm
     test_installed_skips_install
     test_missing_invokes_pm
     test_pm_success_but_missing
     test_explicit_lldb_server_precedence
     test_bn_managed_precedence
+    test_bn_new_layout_over_legacy
     test_path_fallback
     test_start_records_state
     test_restart_detects_running
@@ -528,6 +736,26 @@ main() {
     test_stale_state_cleaned
     test_stop_all_owned
     test_stop_all_unverifiable
+    test_windows_machine_readable_status
+    test_windows_ownership
+
+    # Make sure cleanup did not leave fake servers behind.
+    local leftover=0
+    for bin in "${ALL_BINS[@]:-}"; do
+        for p in /proc/[0-9]*; do
+            [[ -r "$p/cmdline" ]] || continue
+            case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)" in
+                *"$bin/lldb-server"*)
+                    leftover=$((leftover+1))
+                    ;;
+            esac
+        done
+    done
+    if [[ "$leftover" -eq 0 ]]; then
+        ok "no fake lldb-server processes left behind"
+    else
+        fail "leftover fake lldb-server processes: $leftover"
+    fi
 
     printf '\n'
     printf 'Results: %d passed, %d failed\n' "$PASS" "$FAIL"
