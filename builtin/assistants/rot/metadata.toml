@@ -1,5 +1,0 @@
-type = "assistant"
-id = "37afbc72-8f56-4fed-90a3-eaead836e13e"
-name = "rot"
-display_name = "rot"
-related_projects = ["rotbot"]
