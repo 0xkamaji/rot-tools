@@ -267,52 +267,6 @@ class MachineContextTests(unittest.TestCase):
 
         self.assertIn("desktop-host", destination.read_text(encoding="utf-8"))
 
-    def test_set_local_ssh_host_creates_a_private_record(self):
-        destination = machines.set_local_ssh_host(
-            "desktop", "github-rotbot", target_config=self.config
-        )
-
-        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
-        document = tomllib.loads(destination.read_text(encoding="utf-8"))
-        self.assertEqual(
-            document["connection"]["ssh_host"], "github-rotbot"
-        )
-        loaded = machines.load_local_machine_record(
-            "desktop", target_config=self.config
-        )
-        self.assertEqual(
-            loaded["connection"]["ssh_host"], "github-rotbot"
-        )
-
-    def test_set_local_ssh_host_updates_existing_record(self):
-        destination = machines.create_local_machine_record(
-            "desktop",
-            {"connection": {"hostname": "desktop-host"}},
-            target_config=self.config
-        )
-
-        updated = machines.set_local_ssh_host(
-            "desktop", "github-rotbot", target_config=self.config
-        )
-
-        self.assertEqual(updated, destination)
-        loaded = machines.load_local_machine_record(
-            "desktop", target_config=self.config
-        )
-        self.assertEqual(
-            loaded["connection"]["ssh_host"], "github-rotbot"
-        )
-        self.assertEqual(
-            loaded["connection"]["hostname"], "desktop-host"
-        )
-        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
-
-    def test_set_local_ssh_host_rejects_invalid_host(self):
-        with self.assertRaises(machines.MachineContextError):
-            machines.set_local_ssh_host(
-                "desktop", "bad\nhost", target_config=self.config
-            )
-
     def test_missing_local_record_is_not_configured(self):
         self.assertIsNone(
             machines.load_local_machine_record(

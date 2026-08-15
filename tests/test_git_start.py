@@ -477,21 +477,15 @@ class GitStartAliasTests(GitStartTests):
         self,
         stack,
         machine,
-        ssh_host,
         hosts_tested,
         remote_accessible=True,
         push_return=0
     ):
-        stack.enter_context(
-            patch.object(
-                git_commands, "_machine_ssh_host",
-                side_effect=lambda: ssh_host
-            )
-        )
-
         def ssh_side_effect(host="github.com"):
             hosts_tested.append(host)
-            return "0xkamaji"
+            if host == "github.com":
+                return None  # Simulate failure on default host
+            return "0xkamaji"  # Success on alias
 
         stack.enter_context(
             patch.object(
@@ -551,10 +545,10 @@ class GitStartAliasTests(GitStartTests):
 
         with ExitStack() as stack:
             rot_say = self.enter_alias_patches(
-                stack, machine, "github-rotbot", hosts_tested, True, 0
+                stack, machine, hosts_tested, True, 0
             )
             stack.enter_context(
-                patch("builtins.input", side_effect=input_side_effect(("", "")))
+                patch("builtins.input", side_effect=input_side_effect(("github-rotbot", "", "")))
             )
             result = git_commands.git_start(
                 argparse.Namespace(), working_directory=self.project_directory
@@ -562,8 +556,8 @@ class GitStartAliasTests(GitStartTests):
         messages = [item.args[0] for item in rot_say.call_args_list]
 
         self.assertEqual(result, 0)
-        self.assertEqual(hosts_tested, ["github-rotbot"])
-        self.assertNotIn("github.com", hosts_tested)
+        self.assertIn("github.com", hosts_tested)
+        self.assertIn("github-rotbot", hosts_tested)
         origin = self.git("remote", "get-url", "origin")
         self.assertEqual(
             origin.stdout.strip(),
@@ -583,7 +577,7 @@ class GitStartAliasTests(GitStartTests):
 
         with ExitStack() as stack:
             rot_say = self.enter_alias_patches(
-                stack, machine, "github-rotbot", hosts_tested, remote_accessible=True, push_return=0
+                stack, machine, hosts_tested, remote_accessible=True, push_return=0
             )
             stack.enter_context(
                 patch.object(
@@ -591,7 +585,7 @@ class GitStartAliasTests(GitStartTests):
                 )
             )
             stack.enter_context(
-                patch("builtins.input", side_effect=input_side_effect(("", "")))
+                patch("builtins.input", side_effect=input_side_effect(("github-rotbot", "", "")))
             )
             result = git_commands.git_start(
                 argparse.Namespace(), working_directory=self.project_directory
@@ -613,10 +607,10 @@ class GitStartAliasTests(GitStartTests):
 
         with ExitStack() as stack:
             rot_say = self.enter_alias_patches(
-                stack, machine, "github-rotbot", hosts_tested, True, 0
+                stack, machine, hosts_tested, True, 0
             )
             stack.enter_context(
-                patch("builtins.input", side_effect=input_side_effect(("", "")))
+                patch("builtins.input", side_effect=input_side_effect(("github-rotbot", "", "")))
             )
             result = git_commands.git_start(
                 argparse.Namespace(), working_directory=self.project_directory
@@ -624,8 +618,10 @@ class GitStartAliasTests(GitStartTests):
         messages = [item.args[0] for item in rot_say.call_args_list]
 
         self.assertEqual(result, 0)
-        self.assertEqual(hosts_tested, ["github-rotbot"])
-        self.assertNotIn("github.com", hosts_tested)
+        self.assertIn("github.com", hosts_tested)
+        self.assertIn("github-rotbot", hosts_tested)
+        # The alias should be used consistently, not fall back to github.com
+        self.assertEqual(hosts_tested.count("github-rotbot"), 1)
 
     def test_ssh_and_identity_checks_occur_before_git_init(self):
         self.write_accounts()
@@ -645,9 +641,6 @@ class GitStartAliasTests(GitStartTests):
             return None
 
         with ExitStack() as stack:
-            stack.enter_context(
-                patch.object(git_commands, "_machine_ssh_host", return_value="bad-host")
-            )
             stack.enter_context(
                 patch.object(
                     git_commands, "_github_ssh_username", side_effect=ssh_side_effect
@@ -678,7 +671,7 @@ class GitStartAliasTests(GitStartTests):
             ))
             rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
             stack.enter_context(
-                patch("builtins.input", side_effect=input_side_effect(("", "")))
+                patch("builtins.input", side_effect=input_side_effect(("bad-alias", "")))
             )
             result = git_commands.git_start(
                 argparse.Namespace(), working_directory=self.project_directory

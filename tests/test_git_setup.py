@@ -628,11 +628,10 @@ class GitSetupAliasTests(unittest.TestCase):
 
     def run_setup(self, ssh_callables, inputs, machine):
         hosts_tested = []
-        remembered = []
 
         def ssh_side_effect(host="github.com"):
             hosts_tested.append(host)
-            return ssh_callables[host]
+            return ssh_callables.get(host)
 
         def machine_get(key):
             return machine.values.get(key, "")
@@ -643,9 +642,6 @@ class GitSetupAliasTests(unittest.TestCase):
             else:
                 machine.values[key] = value
             return True
-
-        def remember(host):
-            remembered.append(host)
 
         with ExitStack() as stack:
             stack.enter_context(
@@ -669,15 +665,10 @@ class GitSetupAliasTests(unittest.TestCase):
                     return_value={"user": "kamaji"}
                 )
             )
-            stack.enter_context(
-                patch.object(
-                    git_commands, "_remember_machine_ssh_host", side_effect=remember
-                )
-            )
             rot_say = stack.enter_context(patch.object(git_commands, "rot_say"))
             result = git_commands.git_setup(argparse.Namespace())
         messages = [item.args[0] for item in rot_say.call_args_list]
-        return result, messages, hosts_tested, remembered
+        return result, messages, hosts_tested
 
     def test_github_com_failure_falls_back_to_user_alias(self):
         machine = MachineConfigFake()
@@ -686,7 +677,7 @@ class GitSetupAliasTests(unittest.TestCase):
             "user.email": "kamaji@example.invalid"
         })
 
-        result, messages, hosts_tested, remembered = self.run_setup(
+        result, messages, hosts_tested = self.run_setup(
             {"github.com": None, "github-rotbot": "0xkamaji"},
             ["github-rotbot"],
             machine
@@ -695,7 +686,6 @@ class GitSetupAliasTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("github.com", hosts_tested)
         self.assertIn("github-rotbot", hosts_tested)
-        self.assertEqual(remembered, ["github-rotbot"])
         joined = "\n".join(messages)
         self.assertIn("GitHub SSH authentication via github.com failed.", joined)
         self.assertIn("✓ GitHub SSH authentication verified as 0xkamaji", joined)
@@ -709,14 +699,13 @@ class GitSetupAliasTests(unittest.TestCase):
             "user.email": "kamaji@example.invalid"
         })
 
-        result, messages, hosts_tested, remembered = self.run_setup(
+        result, messages, hosts_tested = self.run_setup(
             {"github.com": None, "github-rotbot": None},
             ["github-rotbot"],
             machine
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(remembered, [])
         joined = "\n".join(messages)
         self.assertIn("GitHub SSH authentication could not be verified.", joined)
         self.assertIn("SSH authentication is not verified on this machine.", joined)

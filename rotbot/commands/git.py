@@ -5,7 +5,7 @@ import shlex
 import shutil
 import subprocess
 
-from rotbot.contexts import accounts, entities, machines
+from rotbot.contexts import accounts, entities
 from rotbot.contexts.config import ConfigError, get_local_context_bindings
 from rotbot.ui.terminal import rot_say
 
@@ -737,44 +737,6 @@ def _resolve_current_user():
     return person, entities.entity_directory(person)
 
 
-def _current_machine_name():
-    try:
-        bindings = get_local_context_bindings()
-    except ConfigError:
-        return None
-    machine_ref = bindings.get("machine")
-    if not machine_ref:
-        return None
-    try:
-        machine = machines.load_machine_context_reference(machine_ref)
-    except machines.MachineContextError:
-        return None
-    return machine.name
-
-
-def _machine_ssh_host():
-    name = _current_machine_name()
-    if not name:
-        return None
-    try:
-        record = machines.load_local_machine_record(name)
-    except machines.MachineContextError:
-        return None
-    if not record:
-        return None
-    return record.get("connection", {}).get("ssh_host")
-
-
-def _remember_machine_ssh_host(host):
-    name = _current_machine_name()
-    if not name:
-        return
-    try:
-        machines.set_local_ssh_host(name, host)
-    except machines.MachineContextError:
-        pass
-
-
 def _prompt(question):
     try:
         return input(f"{question}: ").strip()
@@ -791,6 +753,30 @@ def _confirm(question, default_yes):
     if not answer:
         return default_yes
     return answer in {"y", "yes"}
+
+
+def _resolve_github_ssh_host():
+    """
+    Resolve the GitHub SSH host for the current operation.
+    
+    Returns a tuple: (host, detected_username, verified)
+    - host: the SSH host to use (e.g., "github.com" or "github-rotbot")
+    - detected_username: the GitHub username from SSH auth, or None
+    - verified: True if SSH authentication succeeded
+    """
+    host = "github.com"
+    detected = _github_ssh_username(host)
+    if detected is not None:
+        return host, detected, True
+    
+    # github.com failed, prompt for alias
+    rot_say(f"GitHub SSH authentication via {host} failed.")
+    host = _prompt_value("github.com", "SSH host or alias [github.com]")
+    detected = _github_ssh_username(host)
+    if detected is not None:
+        return host, detected, True
+    
+    return host, None, False
 
 
 def _ensure_default_branch_main():
@@ -851,17 +837,7 @@ def _gather_git_identity(loaded, user_name):
 
 def _github_identity(loaded):
     stored = loaded.github_username if loaded else ""
-    host = _machine_ssh_host() or "github.com"
-    detected = _github_ssh_username(host)
-    if detected is None and host != "github.com":
-        host = "github.com"
-        detected = _github_ssh_username(host)
-    if detected is None:
-        rot_say(f"GitHub SSH authentication via {host} failed.")
-        host = _prompt_value("github.com", "SSH host or alias [github.com]")
-        detected = _github_ssh_username(host)
-        if detected is not None:
-            _remember_machine_ssh_host(host)
+    host, detected, verified = _resolve_github_ssh_host()
     if detected is not None:
         rot_say(f"✓ GitHub SSH authentication verified as {detected}")
         if stored and stored != detected:
@@ -880,7 +856,6 @@ def _github_identity(loaded):
     if stored:
         rot_say(f"  Using stored username: {stored}")
         return stored, False, host
-    rot_say("GitHub username:")
     return _prompt("GitHub username"), False, host
 
 
@@ -1036,9 +1011,8 @@ def git_start(args, working_directory=None):
         rot_say("Could not configure Git on this machine.\nNo Git repository was created.")
         return 1
 
-    ssh_host = _machine_ssh_host() or "github.com"
-    detected_username = _github_ssh_username(ssh_host)
-    if detected_username is None:
+    ssh_host, detected_username, ssh_verified = _resolve_github_ssh_host()
+    if not ssh_verified or detected_username is None:
         rot_say(
             "GitHub SSH authentication is not configured on this machine.\n"
             "No Git repository was created."
