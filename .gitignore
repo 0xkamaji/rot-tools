@@ -1,3 +1,8 @@
 __pycache__/
 *.py[cod]
 context/
+
+# Debugger binaries are never committed (downloaded/extracted locally).
+re-tools/wsl_bootstrap/debugger-win32/
+re-tools/wsl_bootstrap/debugger-linux/
+**/debuggers/

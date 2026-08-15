@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("Start", "Stop", "Status")]
-    [string]$Action = "Start",
+    [ValidateSet("Start", "Stop", "Status", "StopAll")]
+    [string]$Action = "Status",
 
     [string]$BindAddress = "127.0.0.1",
 
@@ -12,10 +12,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Windows per-user state location.
 $StateDir = Join-Path $env:LOCALAPPDATA "rot-tools\debug-server"
 $PidFile = Join-Path $StateDir "dbgsrv.pid"
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+
+$DbgSrvName = "dbgsrv"
 
 
 function Resolve-DbgSrv {
@@ -24,7 +27,6 @@ function Resolve-DbgSrv {
         if (Test-Path -LiteralPath $env:DBGSRV_PATH -PathType Leaf) {
             return (Resolve-Path -LiteralPath $env:DBGSRV_PATH).Path
         }
-
         throw "DBGSRV_PATH does not exist: $env:DBGSRV_PATH"
     }
 
@@ -82,6 +84,8 @@ For Binary Ninja's debugger package the expected layout is:
 }
 
 
+# Returns the recorded process only when its identity is positively verified
+# as dbgsrv.exe. Stale or unverifiable state is handled per the rules below.
 function Get-RecordedProcess {
     if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
         return $null
@@ -90,16 +94,20 @@ function Get-RecordedProcess {
     $text = (Get-Content -LiteralPath $PidFile -Raw).Trim()
 
     $pidValue = 0
-
     if (-not [int]::TryParse($text, [ref]$pidValue)) {
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
         return $null
     }
 
     $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-
     if (-not $process) {
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+
+    # Identity check: the recorded PID must still be dbgsrv.exe.
+    if ($process.ProcessName -ne $DbgSrvName) {
+        Write-Warning "Recorded PID $pidValue is $($process.ProcessName), not dbgsrv.exe. Refusing to act on it."
         return $null
     }
 
@@ -196,6 +204,10 @@ switch ($Action) {
     }
 
     "Stop" {
+        Stop-DebugServer
+    }
+
+    "StopAll" {
         Stop-DebugServer
     }
 
