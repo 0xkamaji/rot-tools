@@ -65,10 +65,13 @@ try {
 
     # --- missing state ----------------------------------------------------
     $out = Invoke-DbgPs1 -Action Status -MachineReadable
-    if ((Get-StateLine $out "status=") -eq "stopped") {
-        Ok "missing state reports stopped"
+    $missingWarned = $out | Where-Object { $_ -like "*Malformed dbgsrv state removed*" }
+    if ((Get-StateLine $out "status=") -eq "stopped" `
+        -and -not $missingWarned `
+        -and -not (Test-Path -LiteralPath $StateFile)) {
+        Ok "missing state reports stopped (no warning, no state file created)"
     } else {
-        Fail "missing state reports stopped" "got: $($out -join ' | ')"
+        Fail "missing state reports stopped (no warning, no state file created)" "status=$(Get-StateLine $out 'status=') warned=$([bool]$missingWarned) exists=$(Test-Path -LiteralPath $StateFile)"
     }
 
     # --- malformed PID ----------------------------------------------------

@@ -138,7 +138,7 @@ function Write-State {
 function Test-RecordedProcess {
     $state = Read-State
 
-    if (-not $state) {
+    if (-not $state -or $state.Count -eq 0) {
         return @{ Status = 'nostate'; Pid = 0 }
     }
 
