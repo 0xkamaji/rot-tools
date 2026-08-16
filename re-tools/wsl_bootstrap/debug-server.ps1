@@ -444,10 +444,12 @@ function Install-DbgSrv {
             # Not found; fall through to installation.
         }
 
-        # Phase 2: obtain the official Microsoft Windows SDK installer.
-        # The fwlink is Microsoft's current Windows SDK installer download
-        # (verified July 2026 against learn.microsoft.com/windows/apps/windows-sdk/downloads);
-        # it can be redirected with ROT_DEBUG_WIN_INSTALL_URL.
+        # Phase 2: obtain the Microsoft Windows SDK installer. The default fwlink
+        # (linkid=2372509) is pinned to a specific release -- Windows SDK for
+        # Windows 11 (10.0.26100.8876), July 2026, per
+        # learn.microsoft.com/windows/apps/windows-sdk/downloads. It does NOT
+        # automatically track newer SDK releases; update the link (or set
+        # ROT_DEBUG_WIN_INSTALL_URL) to point at another official installer.
         $installerUrl = if ($env:ROT_DEBUG_WIN_INSTALL_URL) {
             $env:ROT_DEBUG_WIN_INSTALL_URL
         } else {
@@ -493,8 +495,19 @@ function Install-DbgSrv {
         $installerExit = $process.ExitCode
         Write-Host "  installer exit code: $installerExit"
 
-        # Phase 4: the installer exit code alone is never proof of success.
-        # Resolve dbgsrv.exe again and only report success when it is found.
+        # Phase 4: success requires BOTH an acceptable installer result (0 or
+        # 3010) AND a subsequent Resolve-DbgSrv hit. A lucky resolve never
+        # masks a failed installer, and the exit code alone is never proof of
+        # success.
+        $installerSucceeded = ($installerExit -eq 0 -or $installerExit -eq 3010)
+
+        if (-not $installerSucceeded) {
+            Write-Host "ERROR: the Windows SDK installer exited with code $installerExit; dbgsrv.exe was not installed."
+            "installed=false"
+            "error=installer-failed"
+            return
+        }
+
         $resolvedPath = $null
         try {
             $resolvedPath = Resolve-DbgSrv
@@ -508,16 +521,9 @@ function Install-DbgSrv {
             return
         }
 
-        $installerSucceeded = ($installerExit -eq 0 -or $installerExit -eq 3010)
-        if ($installerSucceeded) {
-            Write-Host "ERROR: the installer reported success but dbgsrv.exe still cannot be resolved."
-            "installed=false"
-            "error=dbgsrv-not-found-after-install"
-        } else {
-            Write-Host "ERROR: the Windows SDK installer exited with code $installerExit and dbgsrv.exe still cannot be resolved."
-            "installed=false"
-            "error=installer-failed"
-        }
+        Write-Host "ERROR: the installer reported success but dbgsrv.exe still cannot be resolved."
+        "installed=false"
+        "error=dbgsrv-not-found-after-install"
     } finally {
         if ($downloaded) {
             Remove-Item -LiteralPath $installerExe -Force -ErrorAction SilentlyContinue
