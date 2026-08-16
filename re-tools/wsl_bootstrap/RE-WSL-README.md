@@ -105,11 +105,16 @@ Typical direct use:
 .\debug-server.ps1 -Action Status
 .\debug-server.ps1 -Action Start -Port 31338
 .\debug-server.ps1 -Action Stop
+.\debug-server.ps1 -Action Probe   # read-only: reports whether dbgsrv.exe can be located
 ```
 
 `dbgsrv.exe` is located via `DBGSRV_PATH`, `BN_DEBUGGER_WIN32`, a local `debugger-win32` package next to the script, or the Windows SDK Debugging Tools installation.
 
-The Windows side records the PID, the resolved executable path, and the process start time in per-user state under `%LOCALAPPDATA%\rot-tools\debug-server`. A process is only stopped when all recorded identity fields still match; stale or unverifiable PIDs are never killed.
+The Windows side records the PID, the resolved executable path, the process start time, and the listen address in per-user state under `%LOCALAPPDATA%\rot-tools\debug-server`. `Status` reports the recorded listen address rather than the current defaults. A process is only stopped when all recorded identity fields still match; stale or unverifiable PIDs are never killed.
+
+Startup captures the executable path and start time of the just-launched process before writing any state. If that identity cannot be captured, the process is terminated and startup fails — no state is written from a guess.
+
+The WSL menu reports `Windows interop: available/unavailable` (whether `powershell.exe`/`wslpath` work) separately from `Windows debugger: found (path)/missing` (whether `dbgsrv.exe` resolves).
 
 #### Stop safety
 

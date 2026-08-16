@@ -61,6 +61,9 @@ WIN_STATUS="unavailable"
 WIN_PID=""
 WIN_LISTEN=""
 
+# Resolved Windows dbgsrv.exe (filled by windows_debugger_probe).
+WIN_DEBUGGER_PATH=""
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -385,11 +388,46 @@ windows_status() {
     esac
 }
 
+# Read-only availability check for dbgsrv.exe. Never starts the server.
+# Returns 0 when found (fills WIN_DEBUGGER_PATH), 1 when not found,
+# 2 when inconclusive (e.g. PowerShell itself failed).
+windows_debugger_probe() {
+    WIN_DEBUGGER_PATH=""
+    if ! windows_available; then
+        return 1
+    fi
+
+    local out avail path
+    out="$(run_windows_script Probe 2>&1 || true)"
+
+    avail="$(printf '%s\n' "$out" | sed -n 's/^available=//p' | head -n1 | tr -d '\r')"
+    if [[ "$avail" == "true" ]]; then
+        path="$(printf '%s\n' "$out" | sed -n 's/^path=//p' | head -n1 | tr -d '\r')"
+        if [[ -n "$path" ]]; then
+            WIN_DEBUGGER_PATH="$path"
+            return 0
+        fi
+        return 2
+    fi
+    return 1
+}
+
 start_windows() {
     if ! windows_available; then
         printf 'Windows debug server is unavailable from this environment.\n' >&2
         return 1
     fi
+
+    if ! windows_debugger_probe; then
+        printf 'ERROR: dbgsrv.exe could not be found.\n' >&2
+        printf 'Provide it via one of:\n' >&2
+        printf '  - DBGSRV_PATH (full path to dbgsrv.exe)\n' >&2
+        printf '  - BN_DEBUGGER_WIN32 (root of Binary Ninja'\''s debugger-win32 package)\n' >&2
+        printf '  - a debugger-win32 package beside debug-server.ps1\n' >&2
+        printf '  - the Windows SDK Debugging Tools installation\n' >&2
+        return 1
+    fi
+
     run_windows_script Start
 }
 
@@ -543,10 +581,16 @@ print_linux_debugger_line() {
 }
 
 print_windows_debugger_line() {
-    if windows_available; then
-        printf 'Windows debugger: available\n'
+    if ! windows_available; then
+        printf 'Windows interop: unavailable\n'
+        return
+    fi
+
+    printf 'Windows interop: available\n'
+    if windows_debugger_probe; then
+        printf 'Windows debugger: found (%s)\n' "$WIN_DEBUGGER_PATH"
     else
-        printf 'Windows debugger: unavailable\n'
+        printf 'Windows debugger: missing\n'
     fi
 }
 

@@ -28,7 +28,11 @@ function Invoke-DbgPs1 {
     $exe = if ($env:OS -eq "Windows_NT") { "powershell.exe" } else { "pwsh" }
     $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ps1, "-Action", $Action)
     if ($MachineReadable) { $args += "-MachineReadable" }
-    $out = & $exe @args 2>&1 | ForEach-Object { "$_" }
+    # Note: native stderr is deliberately NOT merged (2>&1). Under
+    # $ErrorActionPreference=Stop, Windows PowerShell 5.1 turns merged native
+    # stderr into terminating errors, which would abort this suite when the
+    # child intentionally fails (identity-capture failure test).
+    $out = & $exe @args
     return ,$out
 }
 
@@ -41,12 +45,12 @@ function Get-StateLine {
 }
 
 function Set-TestState {
-    param([int]$ProcessId, [string]$Path, [string]$Started)
+    param([int]$ProcessId, [string]$Path, [string]$Started, [string]$Listen = "127.0.0.1:31338")
     Set-Content -LiteralPath $StateFile -Value @(
         "pid=$ProcessId",
         "path=$Path",
         "started=$Started",
-        "listen=127.0.0.1:31338"
+        "listen=$Listen"
     )
 }
 
@@ -83,6 +87,33 @@ try {
         Ok "dead PID treated as stale and removed"
     } else {
         Fail "dead PID treated as stale and removed" "status=$(Get-StateLine $out 'status=') exists=$(Test-Path -LiteralPath $StateFile)"
+    }
+
+    # --- Probe: dbgsrv.exe resolvable via DBGSRV_PATH ---------------------
+    $probePath = Join-Path $StateDir "dbgsrv.probe.exe"
+    Set-Content -LiteralPath $probePath -Value "placeholder"
+    $oldDbgSrvPath = $env:DBGSRV_PATH
+    try {
+        $env:DBGSRV_PATH = $probePath
+        $out = Invoke-DbgPs1 -Action Probe -MachineReadable
+        $avail = Get-StateLine $out "available="
+        $gotPath = Get-StateLine $out "path="
+        if ($avail -eq "true" -and $gotPath) {
+            Ok "Probe reports available with path when dbgsrv.exe resolves"
+        } else {
+            Fail "Probe reports available with path" "available=$avail path=$gotPath out=$($out -join ' | ')"
+        }
+
+        $env:DBGSRV_PATH = Join-Path $StateDir "does-not-exist.exe"
+        $out = Invoke-DbgPs1 -Action Probe -MachineReadable
+        if ((Get-StateLine $out "available=") -eq "false") {
+            Ok "Probe reports unavailable when dbgsrv.exe is missing"
+        } else {
+            Fail "Probe reports unavailable when dbgsrv.exe is missing" "out=$($out -join ' | ')"
+        }
+    } finally {
+        if ($null -eq $oldDbgSrvPath) { Remove-Item Env:DBGSRV_PATH -ErrorAction SilentlyContinue }
+        else { $env:DBGSRV_PATH = $oldDbgSrvPath }
     }
 
     if ($env:OS -eq "Windows_NT") {
@@ -135,6 +166,16 @@ try {
                     Fail "correct dbgsrv identity reported running" "status=$(Get-StateLine $out 'status=') pid=$(Get-StateLine $out 'pid=')"
                 }
 
+                # Recorded listen value must be reported even when it differs
+                # from the current default BindAddress/Port (31338).
+                Set-TestState -ProcessId $standin.Id -Path $cim.ExecutablePath -Started ([datetime]$cim.CreationDate).ToString("o") -Listen "127.0.0.1:31999"
+                $out = Invoke-DbgPs1 -Action Status -MachineReadable
+                if ((Get-StateLine $out "listen=") -eq "127.0.0.1:31999") {
+                    Ok "Status reports recorded listen address, not current args"
+                } else {
+                    Fail "Status reports recorded listen address" "listen=$(Get-StateLine $out 'listen=')"
+                }
+
                 $null = Invoke-DbgPs1 -Action Stop | Out-String
                 Start-Sleep -Milliseconds 300
                 $gone = (Get-Process -Id $standin.Id -ErrorAction SilentlyContinue) -eq $null
@@ -154,6 +195,35 @@ try {
                 Stop-Process -Id $standin.Id -Force -ErrorAction SilentlyContinue
                 Remove-Item -LiteralPath (Join-Path $StateDir "dbgsrv.exe") -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        # --- startup fails safely when process identity cannot be captured ---
+        $fakeExe2 = Join-Path $StateDir "dbgsrv.exe"
+        Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+        $oldPath2 = $env:DBGSRV_PATH
+        $env:DBGSRV_PATH = $fakeExe2
+        $env:ROT_DEBUG_WIN_FORCE_NO_IDENTITY = "1"
+        try {
+            Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32\cmd.exe") -Destination $fakeExe2 -Force
+            $before = @(Get-Process -Name "dbgsrv" -ErrorAction SilentlyContinue).Count
+            $null = Invoke-DbgPs1 -Action Start | Out-String
+            $exitCode = $LASTEXITCODE
+            Start-Sleep -Milliseconds 300
+            $after = @(Get-Process -Name "dbgsrv" -ErrorAction SilentlyContinue).Count
+            $stateCreated = Test-Path -LiteralPath $StateFile
+            if ($exitCode -ne 0 -and $after -eq $before -and -not $stateCreated) {
+                Ok "startup fails safely when identity capture fails (process cleaned up, no state)"
+            } else {
+                Fail "startup fails safely when identity capture fails" "exit=$exitCode before=$before after=$after stateCreated=$stateCreated"
+            }
+        } catch {
+            Skip "identity-capture failure (could not launch stand-in: $($_.Exception.Message))"
+        } finally {
+            Remove-Item Env:ROT_DEBUG_WIN_FORCE_NO_IDENTITY -ErrorAction SilentlyContinue
+            if ($null -eq $oldPath2) { Remove-Item Env:DBGSRV_PATH -ErrorAction SilentlyContinue }
+            else { $env:DBGSRV_PATH = $oldPath2 }
+            Remove-Item -LiteralPath $fakeExe2 -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
         }
     } else {
         Skip "live-process identity tests (Windows only)"

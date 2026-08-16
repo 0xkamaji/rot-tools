@@ -143,7 +143,8 @@ exit "${APTGET_EXIT:-0}"
     fi
 
     # Fake Windows interop so the real powershell.exe is never reached.
-    # Honors FAKE_WIN_STATUS so tests can simulate a running Windows server.
+    # Honors FAKE_WIN_STATUS (running/stopped) and FAKE_WIN_PROBE
+    # (found/missing) so tests can simulate each Windows scenario.
     make_fake "$BIN/powershell.exe" '
 printf "POWERSHELL:%s\n" "$*" >> "$FAKE_LOG"
 case " $* " in
@@ -152,6 +153,13 @@ case " $* " in
             printf "status=running\npid=12345\nlisten=127.0.0.1:31338\n"
         else
             printf "status=stopped\n"
+        fi
+        ;;
+    *" -Action Probe "*)
+        if [ "${FAKE_WIN_PROBE:-missing}" = "found" ]; then
+            printf "available=true\npath=Z:\\\\fake\\\\dbgsrv.exe\n"
+        else
+            printf "available=false\n"
         fi
         ;;
     *" -Action StopAll "* | *" -Action Stop "*)
@@ -178,10 +186,18 @@ run_script() {
     XDG_STATE_HOME="$XDG_STATE" \
     FAKE_LOG="$TMP/fake.log" \
     FAKE_WIN_STATUS="${FAKE_WIN_STATUS:-}" \
+    FAKE_WIN_PROBE="${FAKE_WIN_PROBE:-}" \
     ROT_DEBUG_SUDO="" \
     ROT_DEBUG_TERM_WAIT="${ROT_DEBUG_TERM_WAIT:-}" \
     PATH="$BIN" \
     "$HARNESS_BASH" "$DEBUG_SERVER" "$@" <<< "$stdin"
+
+    local rc=$?
+    # Reset fake-scenario variables so a test can never leak its Windows
+    # scenario into a later test.
+    FAKE_WIN_STATUS=""
+    FAKE_WIN_PROBE=""
+    return $rc
 }
 
 # ---------------------------------------------------------------------------
@@ -684,6 +700,84 @@ test_windows_machine_readable_status() {
 }
 
 # ---------------------------------------------------------------------------
+# 13b. Windows debugger availability probe
+# ---------------------------------------------------------------------------
+test_windows_probe_found() {
+    say "windows probe: dbgsrv.exe found"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=found
+    run_script "4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows interop: available' "$TMP/out" \
+        && grep -q 'Windows debugger: found (Z:\\fake\\dbgsrv.exe)' "$TMP/out"; then
+        ok "probe found rendered with path"
+    else
+        fail "probe found not rendered; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+test_windows_probe_missing() {
+    say "windows probe: dbgsrv.exe missing"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=missing
+    run_script "4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows interop: available' "$TMP/out" \
+        && grep -q 'Windows debugger: missing' "$TMP/out"; then
+        ok "probe missing rendered as missing"
+    else
+        fail "probe missing not rendered; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+test_windows_interop_unavailable() {
+    say "no powershell.exe / wslpath -> interop unavailable"
+    new_sandbox
+    install_fakes yes both
+    rm -f "$BIN/powershell.exe" "$BIN/wslpath"
+    run_script "3
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows interop: unavailable' "$TMP/out" \
+        && ! grep -q 'Start Windows server' "$TMP/out"; then
+        ok "interop unavailable rendered without Windows start option"
+    else
+        fail "interop unavailable not rendered; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+test_start_windows_dbg_missing() {
+    say "start windows with dbgsrv.exe missing shows sources and does not start"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=missing
+    run_script "2
+4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'ERROR: dbgsrv.exe could not be found.' "$TMP/out" \
+        && grep -q 'DBGSRV_PATH' "$TMP/out" \
+        && grep -q 'BN_DEBUGGER_WIN32' "$TMP/out" \
+        && grep -q 'Windows SDK Debugging Tools' "$TMP/out" \
+        && ! grep -q 'Windows debug server started.' "$TMP/out"; then
+        ok "start refused with source hints"
+    else
+        fail "start not refused with hints; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
 # 14. PowerShell ownership tests (run when a PowerShell host exists)
 # ---------------------------------------------------------------------------
 test_windows_ownership() {
@@ -737,6 +831,10 @@ main() {
     test_stop_all_owned
     test_stop_all_unverifiable
     test_windows_machine_readable_status
+    test_windows_probe_found
+    test_windows_probe_missing
+    test_windows_interop_unavailable
+    test_start_windows_dbg_missing
     test_windows_ownership
 
     # Make sure cleanup did not leave fake servers behind.

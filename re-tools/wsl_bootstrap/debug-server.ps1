@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Start", "Stop", "Status", "StopAll")]
+    [ValidateSet("Start", "Stop", "Status", "StopAll", "Probe")]
     [string]$Action = "Status",
 
     [string]$BindAddress = "127.0.0.1",
@@ -201,7 +201,12 @@ function Test-RecordedProcess {
         return @{ Status = 'unverifiable'; Process = $process; Pid = $pidValue }
     }
 
-    return @{ Status = 'ok'; Process = $process; Pid = $pidValue }
+    return @{
+        Status  = 'ok'
+        Process = $process
+        Pid     = $pidValue
+        Listen  = $state['listen']
+    }
 }
 
 # Wraps Test-RecordedProcess with the side effects callers need:
@@ -235,9 +240,10 @@ function Show-Status {
     if ($MachineReadable) {
         switch ($result.Status) {
             'ok' {
+                $listen = if ($result.Listen) { $result.Listen } else { "${BindAddress}:$Port" }
                 "status=running"
                 "pid=$($result.Process.Id)"
-                "listen=${BindAddress}:$Port"
+                "listen=$listen"
             }
             'mismatch' {
                 "status=unverifiable"
@@ -256,9 +262,10 @@ function Show-Status {
 
     switch ($result.Status) {
         'ok' {
+            $listen = if ($result.Listen) { $result.Listen } else { "${BindAddress}:$Port" }
             Write-Host "Windows debug server: running"
             Write-Host "  PID:    $($result.Process.Id)"
-            Write-Host "  Listen: ${BindAddress}:$Port"
+            Write-Host "  Listen: $listen"
             Write-Host "  Arch:   $Arch"
         }
         'mismatch' {
@@ -317,21 +324,32 @@ function Start-DebugServer {
         throw "dbgsrv.exe exited during startup."
     }
 
-    # Record enough identity to positively recognize this process later.
+    # Record enough identity to positively recognize this process later. If the
+    # executable path or creation time cannot be captured, terminate only the
+    # process just launched and fail: ownership state must never be written
+    # from a guess.
+    #
+    # ROT_DEBUG_WIN_FORCE_NO_IDENTITY is a test-only override that skips the
+    # CIM query so the fail-safe path can be exercised without a real dbgsrv.
     $executablePath = $null
     $creationDate = $null
-    try {
-        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($process.Id)" -ErrorAction Stop
-        if ($cim) {
-            $executablePath = $cim.ExecutablePath
-            $creationDate = $cim.CreationDate
+    if (-not $env:ROT_DEBUG_WIN_FORCE_NO_IDENTITY) {
+        try {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($process.Id)" -ErrorAction Stop
+            if ($cim) {
+                $executablePath = $cim.ExecutablePath
+                $creationDate = $cim.CreationDate
+            }
+        } catch {
+            $executablePath = $null
+            $creationDate = $null
         }
-    } catch {
-        $executablePath = $null
-        $creationDate = $null
     }
-    if (-not $executablePath) { $executablePath = $dbgSrv }
-    if (-not $creationDate) { $creationDate = Get-Date }
+    if (-not $executablePath -or -not $creationDate) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $process.Id -ErrorAction SilentlyContinue
+        throw "Could not capture dbgsrv.exe identity (executable path or start time) after launch; terminated the process and wrote no state."
+    }
     $startedString = ([datetime]$creationDate).ToString("o")
 
     Write-State `
@@ -377,6 +395,20 @@ function Stop-DebugServer {
 }
 
 
+# Read-only check that dbgsrv.exe can be located without starting anything.
+# Emits machine-readable lines so a shell can distinguish "Windows interop
+# works but dbgsrv.exe is missing" from "dbgsrv.exe is present".
+function Probe-DbgSrv {
+    try {
+        $path = Resolve-DbgSrv
+        "available=true"
+        "path=$path"
+    } catch {
+        "available=false"
+    }
+}
+
+
 switch ($Action) {
     "Start" {
         Start-DebugServer
@@ -393,5 +425,9 @@ switch ($Action) {
 
     "Status" {
         Show-Status
+    }
+
+    "Probe" {
+        Probe-DbgSrv
     }
 }
