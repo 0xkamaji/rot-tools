@@ -31,7 +31,8 @@ Run it:
 Environment:   OS, WSL yes/no
 Dependencies:  Node, npm, npx, OpenCode (found/missing)
 Binary Ninja:  localhost:9009 (reachable/unreachable)
-OpenCode MCP:  binary-ninja (configured/missing, connected/disconnected/unknown)
+OpenCode MCP:  found via its `binary-ninja-mcp` backend under any entry name
+               (found yes/no, name, backend, host/port, connected/disconnected/unknown)
 ```
 
 ## Platform behavior
@@ -105,7 +106,30 @@ The wizard is interactive (OpenCode exposes no documented non-interactive
 flags for a local server's type/command). After the wizard finishes, the setup
 tool verifies the result with `opencode mcp list`.
 
+The MCP entry is detected by its command/backend (`binary-ninja-mcp`), not by
+its name, so OpenCode users may name the entry anything (e.g. `binja`); the
+tool then reports the actual discovered name. `binary-ninja` remains the
+suggested name for new entries. A differently-named entry is never duplicated
+by Setup / repair.
+
 ## Menu
+
+```text
+Binary Ninja MCP
+================
+
+1) Setup / repair
+2) Show status
+3) Configure OpenCode MCP
+4) Test Binary Ninja connection
+5) Exit
+```
+
+The interactive menu appears immediately without running the (slower) status
+scan; the full scan runs only when an action needs it — "Show status",
+Setup / repair, Configure OpenCode MCP, or Test Binary Ninja connection.
+
+"Show status" (or `./setup.sh status`) renders:
 
 ```text
 Binary Ninja MCP
@@ -125,22 +149,19 @@ Binary Ninja:
   localhost:9009: reachable/unreachable
 
 OpenCode MCP:
-  binary-ninja: configured/missing
-  status: connected/disconnected/unknown
-
-Menu:
-1) Setup / repair
-2) Show status
-3) Configure OpenCode MCP
-4) Test Binary Ninja connection
-5) Exit
+  found:   yes/no
+  name:    <discovered entry name>
+  backend: binary-ninja-mcp
+  host:    <configured host>
+  port:    <configured port>
+  status:  connected/disconnected/unknown
 ```
 
 ## Environment overrides (test- / integration-oriented)
 
 | Variable        | Default      | Purpose                        |
 | --------------- | ------------ | ------------------------------ |
-| `ROT_MCP_NAME`  | `binary-ninja` | MCP server name to check/add |
+| `ROT_MCP_NAME`  | `binary-ninja` | Preferred MCP server name for new entries; detection never requires it |
 | `ROT_MCP_HOST`  | `localhost`  | Binary Ninja MCP host          |
 | `ROT_MCP_PORT`  | `9009`       | Binary Ninja MCP port          |
 | `ROT_MCP_SUDO`  | `sudo`       | Elevation command for package installs |

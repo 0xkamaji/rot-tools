@@ -63,16 +63,16 @@ install_fakes() {
     make_fake "$BIN/npm" 'printf "10.0.0\n"'
     make_fake "$BIN/npx" 'printf "10.0.0\n"'
 
-    # Fake OpenCode. `list` output is controlled by FAKE_MCP_LIST; the command
-    # line is always shown so the "equivalent server under another name" note
-    # is exercised.
+    # Fake OpenCode. `list` output is controlled by FAKE_MCP_LIST (the entry
+    # header line: name + status) and FAKE_MCP_CMD (the command line). %b turns
+    # the \033 escapes into real ANSI codes, matching real `opencode` output.
     make_fake "$BIN/opencode" '
 case "$1" in
     mcp)
         if [ "$2" = "list" ]; then
             printf "MCP Servers\n"
-            printf "%s\n" "${FAKE_MCP_LIST:-binary-ninja \033[90mconnected}"
-            printf "  npx -y binary-ninja-mcp --host localhost --port 9009\n"
+            printf "%b\n" "${FAKE_MCP_LIST:-binary-ninja \033[90mconnected}"
+            printf "%b\n" "${FAKE_MCP_CMD:-  \033[90mnpx -y binary-ninja-mcp --host localhost --port 9009}"
         fi
         ;;
     --version)
@@ -103,6 +103,7 @@ run_script() {
     shift
     FAKE_BN="${FAKE_BN:-reachable}" \
     FAKE_MCP_LIST="${FAKE_MCP_LIST:-}" \
+    FAKE_MCP_CMD="${FAKE_MCP_CMD:-}" \
     PATH="$BIN" \
     "$HARNESS_BASH" "$SETUP" "$@" <<< "$stdin"
 }
@@ -148,8 +149,12 @@ test_status_all_found() {
         && grep -q 'npx:        found' "$TMP/out" \
         && grep -q 'OpenCode:   found' "$TMP/out" \
         && grep -q 'localhost:9009: reachable' "$TMP/out" \
-        && grep -q 'binary-ninja: configured' "$TMP/out" \
-        && grep -q 'status: connected' "$TMP/out"; then
+        && grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binary-ninja' "$TMP/out" \
+        && grep -q 'backend: binary-ninja-mcp' "$TMP/out" \
+        && grep -q 'host:    localhost' "$TMP/out" \
+        && grep -q 'port:    9009' "$TMP/out" \
+        && grep -q 'status:  connected' "$TMP/out"; then
         ok "full status report rendered correctly"
     else
         fail "status report wrong; out=$(cat "$TMP/out")"
@@ -172,8 +177,8 @@ test_status_missing() {
         && grep -q 'npx:        missing' "$TMP/out" \
         && grep -q 'OpenCode:   missing' "$TMP/out" \
         && grep -q 'localhost:9009: unreachable' "$TMP/out" \
-        && grep -q 'binary-ninja: missing' "$TMP/out" \
-        && grep -q 'status: unknown' "$TMP/out"; then
+        && grep -q 'found:   no' "$TMP/out" \
+        && grep -q 'status:  unknown' "$TMP/out"; then
         ok "missing state rendered correctly"
     else
         fail "missing state wrong; out=$(cat "$TMP/out")"
@@ -182,50 +187,171 @@ test_status_missing() {
 }
 
 # ---------------------------------------------------------------------------
-# 5. A differently-named server with the same command is not claimed
+# 5. A differently-named server using binary-ninja-mcp IS detected
 # ---------------------------------------------------------------------------
-test_underscore_server_not_claimed() {
-    say "binary_ninja_poncho_mcp is not claimed as the binary-ninja server"
+test_underscore_name_detected() {
+    say "binary_ninja_poncho_mcp using binary-ninja-mcp is detected"
     new_sandbox
     install_fakes all
     FAKE_BN=reachable
     FAKE_MCP_LIST="binary_ninja_poncho_mcp \033[90mconnected"
     run_script "" status >"$TMP/out" 2>&1
 
-    if grep -q 'binary-ninja: missing' "$TMP/out" \
-        && grep -q 'status: unknown' "$TMP/out" \
-        && grep -q 'an equivalent server using binary-ninja-mcp' "$TMP/out"; then
-        ok "underscore server reported as missing with a note"
+    if grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binary_ninja_poncho_mcp' "$TMP/out" \
+        && grep -q 'backend: binary-ninja-mcp' "$TMP/out" \
+        && grep -q 'status:  connected' "$TMP/out"; then
+        ok "underscore-named binary-ninja-mcp server detected"
     else
-        fail "underscore server mishandled; out=$(cat "$TMP/out")"
+        fail "underscore-named server not detected; out=$(cat "$TMP/out")"
     fi
     destroy_sandbox
 }
 
 # ---------------------------------------------------------------------------
-# 6. Interactive menu renders the report and honors Exit
+# 6. An arbitrary MCP name (binja) using binary-ninja-mcp is detected
 # ---------------------------------------------------------------------------
-test_menu_exit() {
-    say "interactive menu renders report and exits"
+test_binja_name_detected() {
+    say "binja using binary-ninja-mcp is detected"
     new_sandbox
     install_fakes all
     FAKE_BN=reachable
+    FAKE_MCP_LIST="binja \033[90mconnected"
+    run_script "" status >"$TMP/out" 2>&1
+
+    if grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binja' "$TMP/out" \
+        && grep -q 'backend: binary-ninja-mcp' "$TMP/out" \
+        && grep -q 'status:  connected' "$TMP/out"; then
+        ok "binja-named binary-ninja-mcp server detected"
+    else
+        fail "binja-named server not detected; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 7. An unrelated MCP is NOT mistaken for the Binary Ninja MCP
+# ---------------------------------------------------------------------------
+test_unrelated_not_mistaken() {
+    say "a server with a different backend is not detected as Binary Ninja MCP"
+    new_sandbox
+    install_fakes all
+    FAKE_BN=reachable
+    FAKE_MCP_LIST="github \033[90mconnected"
+    FAKE_MCP_CMD="  \033[90mnpx -y @modelcontextprotocol/server-github"
+    run_script "" status >"$TMP/out" 2>&1
+
+    if grep -q 'found:   no' "$TMP/out" \
+        && grep -q 'status:  unknown' "$TMP/out" \
+        && ! grep -q 'backend: binary-ninja-mcp' "$TMP/out"; then
+        ok "unrelated MCP not mistaken for Binary Ninja MCP"
+    else
+        fail "unrelated MCP misdetected; out=$(cat "$TMP/out")"
+    fi
+    unset FAKE_MCP_CMD
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 8. A detected differently-named server does not trigger a duplicate setup
+# ---------------------------------------------------------------------------
+test_no_duplicate_setup() {
+    say "differently-named binary-ninja-mcp server is not duplicated by setup"
+    new_sandbox
+    install_fakes all
+    FAKE_BN=reachable
+    FAKE_MCP_LIST="binja \033[90mconnected"
+    run_script "" --setup >"$TMP/out" 2>&1
+    local rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && ! grep -q 'is not configured in OpenCode' "$TMP/out" \
+        && ! grep -q 'Configure it now' "$TMP/out" \
+        && grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binja' "$TMP/out"; then
+        ok "setup left the existing differently-named server alone"
+    else
+        fail "setup offered a duplicate entry; rc=$rc out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 9. Connected/disconnected status detection
+# ---------------------------------------------------------------------------
+test_disconnected_status() {
+    say "disconnected status is reported"
+    new_sandbox
+    install_fakes all
+    FAKE_BN=reachable
+    FAKE_MCP_LIST="binja \033[90mdisconnected"
+    run_script "" status >"$TMP/out" 2>&1
+
+    if grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binja' "$TMP/out" \
+        && grep -q 'status:  disconnected' "$TMP/out"; then
+        ok "disconnected status detected"
+    else
+        fail "disconnected status wrong; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 10. Interactive menu renders immediately WITHOUT the full status scan
+# ---------------------------------------------------------------------------
+test_menu_no_full_scan() {
+    say "interactive menu appears without running the full status scan"
+    new_sandbox
+    install_fakes all
+    FAKE_BN=unreachable
     FAKE_MCP_LIST="binary-ninja \033[90mconnected"
     run_script "5
 " >"$TMP/out" 2>&1
     local rc=$?
 
     if [[ "$rc" -eq 0 ]] && grep -q 'Binary Ninja MCP' "$TMP/out" \
-        && grep -q '5) Exit' "$TMP/out"; then
-        ok "menu rendered and exited cleanly"
+        && grep -q '1) Setup / repair' "$TMP/out" \
+        && grep -q '5) Exit' "$TMP/out" \
+        && ! grep -q 'localhost:9009' "$TMP/out" \
+        && ! grep -q 'Node:' "$TMP/out" \
+        && ! grep -q 'OpenCode MCP:' "$TMP/out" \
+        && ! grep -q 'found:' "$TMP/out"; then
+        ok "menu rendered without a full status/network scan"
     else
-        fail "menu behavior wrong; rc=$rc out=$(cat "$TMP/out")"
+        fail "menu triggered a full status scan; rc=$rc out=$(cat "$TMP/out")"
     fi
     destroy_sandbox
 }
 
 # ---------------------------------------------------------------------------
-# 7. Connection test subcommand
+# 11. Menu "Show status" performs the full scan on demand
+# ---------------------------------------------------------------------------
+test_menu_show_status() {
+    say "menu Show status (2) performs the full scan"
+    new_sandbox
+    install_fakes all
+    FAKE_BN=reachable
+    FAKE_MCP_LIST="binary-ninja \033[90mconnected"
+    run_script "2
+5
+" >"$TMP/out" 2>&1
+    local rc=$?
+
+    if [[ "$rc" -eq 0 ]] && grep -q 'localhost:9009: reachable' "$TMP/out" \
+        && grep -q 'found:   yes' "$TMP/out" \
+        && grep -q 'name:    binary-ninja' "$TMP/out" \
+        && grep -q 'status:  connected' "$TMP/out"; then
+        ok "Show status ran the full scan"
+    else
+        fail "Show status did not run the full scan; rc=$rc out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
+# 12. Connection test subcommand
 # ---------------------------------------------------------------------------
 test_connection_subcommand() {
     say "--test-connection reports reachability"
@@ -255,8 +381,13 @@ main() {
 
     test_status_all_found
     test_status_missing
-    test_underscore_server_not_claimed
-    test_menu_exit
+    test_underscore_name_detected
+    test_binja_name_detected
+    test_unrelated_not_mistaken
+    test_no_duplicate_setup
+    test_disconnected_status
+    test_menu_no_full_scan
+    test_menu_show_status
     test_connection_subcommand
 
     printf '\n'

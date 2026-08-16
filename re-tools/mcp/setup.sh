@@ -7,7 +7,8 @@ set -o pipefail
 # This tool ONLY prepares and checks the AI <-> Binary Ninja MCP integration:
 #   * Node/npm/npx and OpenCode availability
 #   * the Binary Ninja MCP server on localhost:9009
-#   * OpenCode's MCP configuration for the `binary-ninja` server
+#   * OpenCode's MCP configuration for the Binary Ninja MCP server
+#     (identified by its `binary-ninja-mcp` command, under any entry name)
 #
 # It does NOT manage debugger servers (see re-tools/debug/debug-server.sh).
 #
@@ -49,6 +50,10 @@ BN_NOTE=""
 MCP_CONFIGURED="missing"
 MCP_STATUS="unknown"
 MCP_NOTE=""
+MCP_FOUND_NAME=""
+MCP_FOUND_BACKEND=""
+MCP_FOUND_HOST=""
+MCP_FOUND_PORT=""
 MIRRORED_STATUS="unknown"
 INTEROP_STATUS="unavailable"
 
@@ -341,42 +346,126 @@ PY
 # ---------------------------------------------------------------------------
 # OpenCode MCP configuration / status
 # ---------------------------------------------------------------------------
-# Uses `opencode mcp list` to determine whether the desired server is
+# Uses `opencode mcp list` to determine whether a Binary Ninja MCP server is
 # configured and whether it reports connected / disconnected / unknown.
+#
+# The integration is identified by its command/backend (`binary-ninja-mcp`),
+# NOT by the entry name: users may name the MCP entry anything they like. The
+# default/suggested name (MCP_NAME / ROT_MCP_NAME) is preferred when a matching
+# entry uses it, but is never required for detection.
+
+# Strip ANSI escapes, CRs, and the leading box-drawing/whitespace that
+# `opencode mcp list` uses, leaving a plain line.
+strip_list_formatting() {
+    printf '%s\n' "$1" | sed -r 's/\x1B\[[0-9;]*[mK]//g' | tr -d '\r' | sed -r 's/^[^[:alnum:]_]*//'
+}
+
+# Is $1 a command launcher (first token of a command line) rather than an MCP
+# server name?
+is_command_starter() {
+    case "$1" in
+        npx|npx.cmd|npx.exe|npm|npm.cmd|bun|bunx|node|node.exe|deno|python|python3)
+            return 0 ;;
+    esac
+    [[ "$1" == */* ]] && return 0
+    return 1
+}
+
+# Connected / disconnected / unknown for an entry header line.
+list_entry_status() {
+    local norm="$1"
+    case " $norm " in
+        *" disconnected "*) printf 'disconnected' ;;
+        *" connected "*)    printf 'connected' ;;
+        *)                  printf 'unknown' ;;
+    esac
+}
+
+# Name from an entry header line: drop a trailing status keyword (and, when
+# name + command share a line, the command itself) so multi-word names are kept.
+list_entry_name() {
+    local norm="$1"
+    norm="$(printf '%s\n' "$norm" | sed -r 's/[[:space:]]+(connected|disconnected|pending|failed|disabled|needs[_-]?auth)[[:space:]]*$//I')"
+    printf '%s\n' "$norm" | sed -r 's/[[:space:]]+(npx|npx\.cmd|npx\.exe|npm|npm\.cmd|bun|bunx|node|node\.exe|deno|python|python3)([[:space:]].*)?$//'
+}
+
+# Extract the --host / --port value from an MCP command line, if present.
+command_host_port() {
+    local cmdline="$1" which="$2"
+    case "$which" in
+        host)
+            printf '%s\n' "$cmdline" | sed -n -r 's/.*--host[= ][[:space:]]*([^[:space:]]+).*/\1/p' | head -n1
+            ;;
+        port)
+            printf '%s\n' "$cmdline" | sed -n -r 's/.*--port[= ][[:space:]]*([^[:space:]]+).*/\1/p' | head -n1
+            ;;
+    esac
+}
+
 check_opencode_mcp() {
     MCP_CONFIGURED="missing"
     MCP_STATUS="unknown"
     MCP_NOTE=""
+    MCP_FOUND_NAME=""
+    MCP_FOUND_BACKEND=""
+    MCP_FOUND_HOST=""
+    MCP_FOUND_PORT=""
 
     command -v opencode >/dev/null 2>&1 || return 1
 
-    local out list line
+    local out list line norm first
+    local entry_name="" entry_status=""
+    local match_name="" match_status=""
+    local cmdline=""
+    local found="" named_seen=""
+
     out="$(opencode mcp list 2>&1 || true)"
     list="$(printf '%s\n' "$out" | sed -r 's/\x1B\[[0-9;]*[mK]//g' | tr -d '\r')"
 
-    # Match the server name as a standalone token, not as part of the command
-    # line (e.g. `binary-ninja-mcp` must not match a server named `binary-ninja`).
-    local name_re="(^|[^a-zA-Z0-9_-])${MCP_NAME}([^a-zA-Z0-9_-]|\$)"
-    local found=""
     while IFS= read -r line; do
-        if printf '%s\n' "$line" | grep -Eq "$name_re"; then
-            found="1"
-            if [[ "$line" == *connected* ]]; then
-                MCP_STATUS="connected"
-            elif [[ "$line" == *disconnected* ]]; then
-                MCP_STATUS="disconnected"
-            else
-                MCP_STATUS="unknown"
+        norm="$(strip_list_formatting "$line")"
+        [[ -z "$norm" ]] && continue
+
+        if [[ "$norm" == *"binary-ninja-mcp"* ]]; then
+            # Command line for the Binary Ninja MCP backend.
+            cmdline="$norm"
+            first="${norm%% *}"
+            if ! is_command_starter "$first"; then
+                # Name and command share the same line.
+                entry_name="$(list_entry_name "$norm")"
+                entry_status="$(list_entry_status "$norm")"
             fi
+            if [[ -n "$entry_name" ]]; then
+                found="1"
+                if [[ -z "$match_name" || "$entry_name" == "$MCP_NAME" ]]; then
+                    match_name="$entry_name"
+                    match_status="$entry_status"
+                fi
+            fi
+            continue
         fi
+
+        first="${norm%% *}"
+        if is_command_starter "$first"; then
+            continue
+        fi
+        [[ "$norm" == "MCP Servers" ]] && continue
+        [[ "$norm" =~ ^[0-9]+[[:space:]]+server\(s\)$ ]] && continue
+
+        entry_name="$(list_entry_name "$norm")"
+        entry_status="$(list_entry_status "$norm")"
+        [[ "$entry_name" == "$MCP_NAME" ]] && named_seen="1"
     done <<< "$list"
 
     if [[ -n "$found" ]]; then
         MCP_CONFIGURED="configured"
-    fi
-
-    if [[ "$list" == *"binary-ninja-mcp"* && "$MCP_CONFIGURED" == "missing" ]]; then
-        MCP_NOTE="an equivalent server using binary-ninja-mcp exists under another name"
+        MCP_STATUS="${match_status:-unknown}"
+        MCP_FOUND_NAME="$match_name"
+        MCP_FOUND_BACKEND="binary-ninja-mcp"
+        MCP_FOUND_HOST="$(command_host_port "$cmdline" host)"
+        MCP_FOUND_PORT="$(command_host_port "$cmdline" port)"
+    elif [[ -n "$named_seen" ]]; then
+        MCP_NOTE="a server named '$MCP_NAME' exists but does not use binary-ninja-mcp"
     fi
 }
 
@@ -443,8 +532,18 @@ render_status() {
     fi
     printf '\n'
     printf 'OpenCode MCP:\n'
-    printf '  %s: %s\n' "$MCP_NAME" "$MCP_CONFIGURED"
-    printf '  status: %s\n' "$MCP_STATUS"
+    if [[ "$MCP_CONFIGURED" == "configured" ]]; then
+        printf '  found:   yes\n'
+        printf '  name:    %s\n' "$MCP_FOUND_NAME"
+        printf '  backend: %s\n' "$MCP_FOUND_BACKEND"
+        if [[ -n "$MCP_FOUND_HOST" ]]; then
+            printf '  host:    %s\n' "$MCP_FOUND_HOST"
+            printf '  port:    %s\n' "$MCP_FOUND_PORT"
+        fi
+    else
+        printf '  found:   no\n'
+    fi
+    printf '  status:  %s\n' "$MCP_STATUS"
     if [[ -n "$MCP_NOTE" ]]; then
         printf '    %s\n' "$MCP_NOTE"
     fi
@@ -549,6 +648,9 @@ test_connection() {
 # Menu
 # ---------------------------------------------------------------------------
 show_menu() {
+    printf 'Binary Ninja MCP\n'
+    printf '================\n'
+    printf '\n'
     printf '1) Setup / repair\n'
     printf '2) Show status\n'
     printf '3) Configure OpenCode MCP\n'
@@ -572,7 +674,6 @@ main_loop() {
     local choice
 
     while true; do
-        render_status
         show_menu
         printf '\n'
         read -rp '> ' choice || { printf '\n'; exit 0; }
