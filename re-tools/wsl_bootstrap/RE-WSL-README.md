@@ -110,6 +110,12 @@ Typical direct use:
 
 `dbgsrv.exe` is located via `DBGSRV_PATH`, `BN_DEBUGGER_WIN32`, a local `debugger-win32` package next to the script, or the Windows SDK Debugging Tools installation.
 
+If Windows interop is available but `dbgsrv.exe` cannot be resolved, "Setup / repair debugger tools" automatically installs Microsoft's official Debugging Tools for Windows: it downloads `winsdksetup.exe`, runs only the Debugging Tools feature (`/features OptionId.WindowsDesktopDebuggers /quiet /norestart`), waits for completion, then re-resolves `dbgsrv.exe`. Success is reported only when `dbgsrv.exe` is actually found afterward — never from the installer exit code alone. You can run the same flow directly:
+
+```powershell
+.\debug-server.ps1 -Action Install
+```
+
 The Windows side records the PID, the resolved executable path, the process start time, and the listen address in per-user state under `%LOCALAPPDATA%\rot-tools\debug-server`. `Status` reports the recorded listen address rather than the current defaults. A process is only stopped when all recorded identity fields still match; stale or unverifiable PIDs are never killed.
 
 Startup captures the executable path and start time of the just-launched process before writing any state. If that identity cannot be captured, the process is terminated and startup fails — no state is written from a guess.

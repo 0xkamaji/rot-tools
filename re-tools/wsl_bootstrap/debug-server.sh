@@ -442,16 +442,7 @@ stop_windows() {
 # ---------------------------------------------------------------------------
 # Setup / repair debugger tools
 # ---------------------------------------------------------------------------
-setup_tools() {
-    printf '\nSetup / repair debugger tools\n'
-
-    if resolve_lldb_server; then
-        printf 'lldb-server already available:\n'
-        printf '  %s\n' "$LLDB_PATH"
-        printf '  source: %s\n' "$LLDB_SOURCE"
-        return 0
-    fi
-
+setup_linux_tools() {
     local pm
     pm="$(detect_pkg_manager)"
     printf 'lldb-server is missing. Installing via package manager: %s\n' "$pm"
@@ -486,6 +477,60 @@ setup_tools() {
     printf 'ERROR: lldb-server was not found after installation.\n' >&2
     printf 'The package manager reported success, but lldb-server is still missing.\n' >&2
     return 1
+}
+
+# Install/repair the Windows debugger dependency (dbgsrv.exe) through
+# debug-server.ps1 -Action Install, which downloads the official Windows SDK
+# installer, runs only the Debugging Tools feature, then re-resolves dbgsrv.exe.
+# Success is only reported after that re-resolution, never from exit codes.
+setup_windows_tools() {
+    local out installed path
+    out="$(run_windows_script Install 2>&1 || true)"
+
+    # Relay the installer's human progress lines; the key=value result lines
+    # are used below for the decision.
+    printf '%s\n' "$out" | tr -d '\r' | grep -vE '^(installed|path|error)=' | sed 's/^/  /'
+
+    installed="$(printf '%s\n' "$out" | sed -n 's/^installed=//p' | head -n1 | tr -d '\r')"
+    path="$(printf '%s\n' "$out" | sed -n 's/^path=//p' | head -n1 | tr -d '\r')"
+
+    if [[ "$installed" == "true" && -n "$path" ]]; then
+        printf 'Windows debugger installed:\n'
+        printf '  %s\n' "$path"
+        return 0
+    fi
+
+    printf 'ERROR: dbgsrv.exe could not be resolved after installing Debugging Tools for Windows.\n' >&2
+    return 1
+}
+
+setup_tools() {
+    printf '\nSetup / repair debugger tools\n'
+
+    local rc=0
+
+    if resolve_lldb_server; then
+        printf 'lldb-server already available:\n'
+        printf '  %s\n' "$LLDB_PATH"
+        printf '  source: %s\n' "$LLDB_SOURCE"
+    else
+        printf 'lldb-server is missing.\n'
+        setup_linux_tools || rc=1
+    fi
+
+    if windows_available; then
+        if windows_debugger_probe; then
+            printf 'Windows debugger: installed\n'
+            printf '  %s\n' "$WIN_DEBUGGER_PATH"
+        else
+            printf 'Windows debugger: missing\n'
+            setup_windows_tools || rc=1
+        fi
+    else
+        printf 'Windows interop: unavailable; Windows debugger tools cannot be installed.\n'
+    fi
+
+    return $rc
 }
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Start", "Stop", "Status", "StopAll", "Probe")]
+    [ValidateSet("Start", "Stop", "Status", "StopAll", "Probe", "Install")]
     [string]$Action = "Status",
 
     [string]$BindAddress = "127.0.0.1",
@@ -409,6 +409,123 @@ function Probe-DbgSrv {
 }
 
 
+# Install/repair of the Windows debugger dependency (dbgsrv.exe) using
+# Microsoft's official Debugging Tools for Windows.
+#
+# Emits machine-readable lines:
+#   installed=true / installed=false
+#   path=<dbgsrv.exe>              (when resolved)
+#   error=<reason>                 (on failure)
+#
+# Test-only overrides (never used in normal operation):
+#   ROT_DEBUG_WIN_INSTALL_URL  - installer download URL
+#   ROT_DEBUG_WIN_INSTALL_EXE  - use this file as winsdksetup.exe (skips download)
+#   ROT_DEBUG_WIN_INSTALL_ARGS - installer command-line arguments
+function Install-DbgSrv {
+    $script:installOk = $false
+
+    $installerExe = if ($env:ROT_DEBUG_WIN_INSTALL_EXE) {
+        $env:ROT_DEBUG_WIN_INSTALL_EXE
+    } else {
+        Join-Path $StateDir "winsdksetup.exe"
+    }
+    $downloaded = $false
+
+    try {
+        # Phase 1: if dbgsrv.exe already resolves there is nothing to install.
+        try {
+            $existing = Resolve-DbgSrv
+            "installed=true"
+            "path=$existing"
+            Write-Host "Windows debugger already available: $existing"
+            $script:installOk = $true
+            return
+        } catch {
+            # Not found; fall through to installation.
+        }
+
+        # Phase 2: obtain the official Microsoft Windows SDK installer.
+        # The fwlink is Microsoft's current Windows SDK installer download
+        # (verified July 2026 against learn.microsoft.com/windows/apps/windows-sdk/downloads);
+        # it can be redirected with ROT_DEBUG_WIN_INSTALL_URL.
+        $installerUrl = if ($env:ROT_DEBUG_WIN_INSTALL_URL) {
+            $env:ROT_DEBUG_WIN_INSTALL_URL
+        } else {
+            "https://go.microsoft.com/fwlink/?linkid=2372509"
+        }
+
+        if (-not $env:ROT_DEBUG_WIN_INSTALL_EXE) {
+            Write-Host "Downloading winsdksetup.exe from $installerUrl ..."
+            try {
+                Invoke-WebRequest -Uri $installerUrl -OutFile $installerExe -UseBasicParsing
+                $downloaded = $true
+            } catch {
+                Write-Host "ERROR: could not download the Windows SDK installer: $($_.Exception.Message)"
+                "installed=false"
+                "error=download-failed"
+                return
+            }
+        }
+
+        # Phase 3: install only the Debugging Tools for Windows feature.
+        $installArgs = if ($env:ROT_DEBUG_WIN_INSTALL_ARGS) {
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS -split ' '
+        } else {
+            @("/features", "OptionId.WindowsDesktopDebuggers", "/quiet", "/norestart")
+        }
+
+        Write-Host "Installing Debugging Tools for Windows..."
+        Write-Host "  winsdksetup.exe $($installArgs -join ' ')"
+
+        try {
+            $process = Start-Process `
+                -FilePath $installerExe `
+                -ArgumentList $installArgs `
+                -Wait `
+                -PassThru
+        } catch {
+            Write-Host "ERROR: could not run the Windows SDK installer: $($_.Exception.Message)"
+            "installed=false"
+            "error=installer-launch-failed"
+            return
+        }
+
+        $installerExit = $process.ExitCode
+        Write-Host "  installer exit code: $installerExit"
+
+        # Phase 4: the installer exit code alone is never proof of success.
+        # Resolve dbgsrv.exe again and only report success when it is found.
+        $resolvedPath = $null
+        try {
+            $resolvedPath = Resolve-DbgSrv
+        } catch { }
+
+        if ($resolvedPath) {
+            "installed=true"
+            "path=$resolvedPath"
+            Write-Host "Windows debugger installed: $resolvedPath"
+            $script:installOk = $true
+            return
+        }
+
+        $installerSucceeded = ($installerExit -eq 0 -or $installerExit -eq 3010)
+        if ($installerSucceeded) {
+            Write-Host "ERROR: the installer reported success but dbgsrv.exe still cannot be resolved."
+            "installed=false"
+            "error=dbgsrv-not-found-after-install"
+        } else {
+            Write-Host "ERROR: the Windows SDK installer exited with code $installerExit and dbgsrv.exe still cannot be resolved."
+            "installed=false"
+            "error=installer-failed"
+        }
+    } finally {
+        if ($downloaded) {
+            Remove-Item -LiteralPath $installerExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+
 switch ($Action) {
     "Start" {
         Start-DebugServer
@@ -429,5 +546,10 @@ switch ($Action) {
 
     "Probe" {
         Probe-DbgSrv
+    }
+
+    "Install" {
+        Install-DbgSrv
+        if ($script:installOk) { exit 0 } else { exit 1 }
     }
 }

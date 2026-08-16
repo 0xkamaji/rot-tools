@@ -228,6 +228,81 @@ try {
             Remove-Item -LiteralPath $fakeExe2 -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
         }
+
+        # --- Install: no-op when dbgsrv.exe already resolves -----------------
+        $placeholder = Join-Path $StateDir "dbgsrv.placeholder.exe"
+        Set-Content -LiteralPath $placeholder -Value "placeholder"
+        $oldDbgPath = $env:DBGSRV_PATH
+        $oldInstallExe = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        try {
+            $env:DBGSRV_PATH = $placeholder
+            # Point the installer at a non-existent file: if Install tried to run
+            # it, the run would fail and report installed=false.
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = Join-Path $StateDir "must-not-run.exe"
+            $out = Invoke-DbgPs1 -Action Install -MachineReadable
+            $exitCode = $LASTEXITCODE
+            if ((Get-StateLine $out "installed=") -eq "true" -and (Get-StateLine $out "path=") -eq $placeholder -and $exitCode -eq 0) {
+                Ok "Install is a no-op when dbgsrv.exe already resolves"
+            } else {
+                Fail "Install is a no-op when dbgsrv.exe already resolves" "installed=$(Get-StateLine $out 'installed=') exit=$exitCode out=$($out -join ' | ')"
+            }
+        } finally {
+            if ($null -eq $oldDbgPath) { Remove-Item Env:DBGSRV_PATH -ErrorAction SilentlyContinue }
+            else { $env:DBGSRV_PATH = $oldDbgPath }
+            if ($null -eq $oldInstallExe) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe }
+            Remove-Item -LiteralPath $placeholder -Force -ErrorAction SilentlyContinue
+        }
+
+        # --- Install: installer exit failure => setup failure -----------------
+        # DBGSRV_PATH is pinned to a nonexistent file so the "dbgsrv is missing"
+        # probe-first branch is exercised deterministically, even on machines
+        # that already have Debugging Tools installed.
+        $missingDbg = Join-Path $StateDir "dbgsrv.does-not-exist.exe"
+        $fakeInstaller = Join-Path $StateDir "fake-winsdk.cmd"
+        Set-Content -LiteralPath $fakeInstaller -Value @("@echo off", "exit /b 5")
+        $oldDbgPath2 = $env:DBGSRV_PATH
+        $oldInstallExe2 = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        try {
+            $env:DBGSRV_PATH = $missingDbg
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller
+            $out = Invoke-DbgPs1 -Action Install -MachineReadable
+            $exitCode = $LASTEXITCODE
+            if ((Get-StateLine $out "installed=") -eq "false" -and (Get-StateLine $out "error=") -eq "installer-failed" -and $exitCode -ne 0) {
+                Ok "Install fails when the installer returns failure"
+            } else {
+                Fail "Install fails when the installer returns failure" "installed=$(Get-StateLine $out 'installed=') error=$(Get-StateLine $out 'error=') exit=$exitCode out=$($out -join ' | ')"
+            }
+        } finally {
+            if ($null -eq $oldDbgPath2) { Remove-Item Env:DBGSRV_PATH -ErrorAction SilentlyContinue }
+            else { $env:DBGSRV_PATH = $oldDbgPath2 }
+            if ($null -eq $oldInstallExe2) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe2 }
+            Remove-Item -LiteralPath $fakeInstaller -Force -ErrorAction SilentlyContinue
+        }
+
+        # --- Install: exit code 0 is not success if dbgsrv.exe stays missing --
+        $fakeInstaller2 = Join-Path $StateDir "fake-winsdk-ok.cmd"
+        Set-Content -LiteralPath $fakeInstaller2 -Value @("@echo off", "exit /b 0")
+        $oldDbgPath3 = $env:DBGSRV_PATH
+        $oldInstallExe3 = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        try {
+            $env:DBGSRV_PATH = $missingDbg
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller2
+            $out = Invoke-DbgPs1 -Action Install -MachineReadable
+            $exitCode = $LASTEXITCODE
+            if ((Get-StateLine $out "installed=") -eq "false" -and (Get-StateLine $out "error=") -eq "dbgsrv-not-found-after-install" -and $exitCode -ne 0) {
+                Ok "Install fails when installer exits 0 but dbgsrv.exe stays missing"
+            } else {
+                Fail "Install fails when installer exits 0 but dbgsrv.exe stays missing" "installed=$(Get-StateLine $out 'installed=') error=$(Get-StateLine $out 'error=') exit=$exitCode out=$($out -join ' | ')"
+            }
+        } finally {
+            if ($null -eq $oldDbgPath3) { Remove-Item Env:DBGSRV_PATH -ErrorAction SilentlyContinue }
+            else { $env:DBGSRV_PATH = $oldDbgPath3 }
+            if ($null -eq $oldInstallExe3) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe3 }
+            Remove-Item -LiteralPath $fakeInstaller2 -Force -ErrorAction SilentlyContinue
+        }
     } else {
         Skip "live-process identity tests (Windows only)"
     }

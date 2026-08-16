@@ -143,8 +143,9 @@ exit "${APTGET_EXIT:-0}"
     fi
 
     # Fake Windows interop so the real powershell.exe is never reached.
-    # Honors FAKE_WIN_STATUS (running/stopped) and FAKE_WIN_PROBE
-    # (found/missing) so tests can simulate each Windows scenario.
+    # Honors FAKE_WIN_STATUS (running/stopped), FAKE_WIN_PROBE
+    # (found/missing) and FAKE_WIN_INSTALL (ok/fail/missing) so tests can
+    # simulate each Windows scenario.
     make_fake "$BIN/powershell.exe" '
 printf "POWERSHELL:%s\n" "$*" >> "$FAKE_LOG"
 case " $* " in
@@ -161,6 +162,21 @@ case " $* " in
         else
             printf "available=false\n"
         fi
+        ;;
+    *" -Action Install "*)
+        case "${FAKE_WIN_INSTALL:-ok}" in
+            ok)
+                printf "installed=true\npath=Z:\\\\Program Files (x86)\\\\Windows Kits\\\\10\\\\Debuggers\\\\x64\\\\dbgsrv.exe\n"
+                ;;
+            fail)
+                printf "  installer exit code: 1\n"
+                printf "installed=false\nerror=installer-failed\n"
+                ;;
+            missing)
+                printf "ERROR: the installer reported success but dbgsrv.exe still cannot be resolved.\n"
+                printf "installed=false\nerror=dbgsrv-not-found-after-install\n"
+                ;;
+        esac
         ;;
     *" -Action StopAll "* | *" -Action Stop "*)
         printf "Windows debug server stopped.\n"
@@ -187,6 +203,7 @@ run_script() {
     FAKE_LOG="$TMP/fake.log" \
     FAKE_WIN_STATUS="${FAKE_WIN_STATUS:-}" \
     FAKE_WIN_PROBE="${FAKE_WIN_PROBE:-}" \
+    FAKE_WIN_INSTALL="${FAKE_WIN_INSTALL:-}" \
     ROT_DEBUG_SUDO="" \
     ROT_DEBUG_TERM_WAIT="${ROT_DEBUG_TERM_WAIT:-}" \
     PATH="$BIN" \
@@ -197,6 +214,7 @@ run_script() {
     # scenario into a later test.
     FAKE_WIN_STATUS=""
     FAKE_WIN_PROBE=""
+    FAKE_WIN_INSTALL=""
     return $rc
 }
 
@@ -778,6 +796,112 @@ test_start_windows_dbg_missing() {
 }
 
 # ---------------------------------------------------------------------------
+# 13c. Setup / repair: Windows debugger auto-install through the mock boundary
+# ---------------------------------------------------------------------------
+test_setup_windows_already_installed() {
+    say "setup with dbgsrv.exe present does not invoke the installer"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=found
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows debugger: installed' "$TMP/out" \
+        && grep -q 'Z:\\fake\\dbgsrv.exe' "$TMP/out" \
+        && ! grep -q -- '-Action Install' "$TMP/fake.log"; then
+        ok "installer not invoked when dbgsrv.exe present"
+    else
+        fail "installer invoked or state wrong; out=$(cat "$TMP/out") log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    destroy_sandbox
+}
+
+test_setup_windows_installs_missing() {
+    say "setup with dbgsrv.exe missing installs and reports the resolved path"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=missing
+    FAKE_WIN_INSTALL=ok
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'Windows debugger: missing' "$TMP/out" \
+        && grep -q -- '-Action Install' "$TMP/fake.log" \
+        && grep -q 'Windows debugger installed:' "$TMP/out" \
+        && grep -q 'Z:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\dbgsrv.exe' "$TMP/out"; then
+        ok "installer invoked and resolved dbgsrv.exe reported"
+    else
+        fail "install flow wrong; out=$(cat "$TMP/out") log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    destroy_sandbox
+}
+
+test_setup_windows_installer_fails() {
+    say "setup fails when the installer returns failure"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=missing
+    FAKE_WIN_INSTALL=fail
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'installer exit code: 1' "$TMP/out" \
+        && grep -q 'ERROR: dbgsrv.exe could not be resolved after installing Debugging Tools for Windows.' "$TMP/out"; then
+        ok "installer failure reported as setup failure"
+    else
+        fail "installer failure not reported; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+test_setup_windows_false_success() {
+    say "setup fails when installer reports success but dbgsrv.exe stays missing"
+    new_sandbox
+    install_fakes yes both
+    FAKE_WIN_STATUS=stopped
+    FAKE_WIN_PROBE=missing
+    FAKE_WIN_INSTALL=missing
+    run_script "3
+4
+" >"$TMP/out" 2>&1
+
+    if grep -q 'the installer reported success but dbgsrv.exe still cannot be resolved.' "$TMP/out" \
+        && grep -q 'ERROR: dbgsrv.exe could not be resolved after installing Debugging Tools for Windows.' "$TMP/out" \
+        && ! grep -q 'Windows debugger installed:' "$TMP/out"; then
+        ok "false-success not claimed as installed"
+    else
+        fail "false-success mishandled; out=$(cat "$TMP/out")"
+    fi
+    destroy_sandbox
+}
+
+test_setup_linux_only() {
+    say "setup with no Windows interop only repairs Linux"
+    new_sandbox
+    install_fakes yes both
+    rm -f "$BIN/powershell.exe" "$BIN/wslpath"
+    run_script "2
+3
+" >"$TMP/out" 2>&1
+
+    if grep -q 'lldb-server already available:' "$TMP/out" \
+        && grep -q 'Windows interop: unavailable' "$TMP/out" \
+        && ! grep -qE 'PACMAN:|APTGET:' "$TMP/fake.log" 2>/dev/null \
+        && ! grep -q 'Windows debugger installed:' "$TMP/out"; then
+        ok "Linux-only setup intact without Windows interop"
+    else
+        fail "Linux-only setup broken; out=$(cat "$TMP/out") log=$(cat "$TMP/fake.log" 2>/dev/null)"
+    fi
+    destroy_sandbox
+}
+
+# ---------------------------------------------------------------------------
 # 14. PowerShell ownership tests (run when a PowerShell host exists)
 # ---------------------------------------------------------------------------
 test_windows_ownership() {
@@ -835,6 +959,11 @@ main() {
     test_windows_probe_missing
     test_windows_interop_unavailable
     test_start_windows_dbg_missing
+    test_setup_windows_already_installed
+    test_setup_windows_installs_missing
+    test_setup_windows_installer_fails
+    test_setup_windows_false_success
+    test_setup_linux_only
     test_windows_ownership
 
     # Make sure cleanup did not leave fake servers behind.
