@@ -32,8 +32,22 @@ function Invoke-DbgPs1 {
     # $ErrorActionPreference=Stop, Windows PowerShell 5.1 turns merged native
     # stderr into terminating errors, which would abort this suite when the
     # child intentionally fails (identity-capture failure test).
-    $out = & $exe @args
-    return ,$out
+    #
+    # Run the child from $StateDir (a local %TEMP% path). When this suite is
+    # launched from a WSL UNC checkout the inherited working directory is a UNC
+    # path; a cmd.exe launched by the child's Start-Process would then print
+    # "UNC paths are not supported". A local working directory keeps the
+    # harness headless and deterministic.
+    if ($env:OS -eq "Windows_NT") {
+        Push-Location -Path $StateDir
+        try {
+            $out = & $exe @args
+        } finally {
+            Pop-Location
+        }
+        return ,$out
+    }
+    return ,(& $exe @args)
 }
 
 function Get-StateLine {
@@ -52,6 +66,24 @@ function Set-TestState {
         "started=$Started",
         "listen=$Listen"
     )
+}
+
+function New-CmdInstallerArgs {
+    # Build ROT_DEBUG_WIN_INSTALL_ARGS that turn cmd.exe -- the real Windows
+    # executable supplied as ROT_DEBUG_WIN_INSTALL_EXE -- into a fake Windows
+    # SDK installer: optionally create a file (the dbgsrv.exe that
+    # Resolve-DbgSrv must find after the install) and return the requested
+    # exit code.
+    #
+    # The command must survive a split/join round-trip: production splits
+    # ROT_DEBUG_WIN_INSTALL_ARGS on single spaces and Start-Process rejoins
+    # them. Every path used here lives under %TEMP% ($StateDir), which never
+    # contains spaces, so the quoted arguments round-trip intact.
+    param([int]$ExitCode, [string]$Source, [string]$Target)
+    if ($Source -and $Target) {
+        return "/d /c copy /y `"$Source`" `"$Target`" >nul & exit /b $ExitCode"
+    }
+    return "/d /c exit /b $ExitCode"
 }
 
 $tempBase = if ($env:TEMP) { $env:TEMP } else { if ($env:TMPDIR) { $env:TMPDIR } else { "/tmp" } }
@@ -234,11 +266,13 @@ try {
         Set-Content -LiteralPath $placeholder -Value "placeholder"
         $oldDbgPath = $env:DBGSRV_PATH
         $oldInstallExe = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgs = $env:ROT_DEBUG_WIN_INSTALL_ARGS
         try {
             $env:DBGSRV_PATH = $placeholder
             # Point the installer at a non-existent file: if Install tried to run
             # it, the run would fail and report installed=false.
             $env:ROT_DEBUG_WIN_INSTALL_EXE = Join-Path $StateDir "must-not-run.exe"
+            Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             if ((Get-StateLine $out "installed=") -eq "true" -and (Get-StateLine $out "path=") -eq $placeholder -and $exitCode -eq 0) {
@@ -251,25 +285,29 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPath }
             if ($null -eq $oldInstallExe) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe }
+            if ($null -eq $oldInstallArgs) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgs }
             Remove-Item -LiteralPath $placeholder -Force -ErrorAction SilentlyContinue
         }
 
         # --- Install: exit 0 + dbgsrv appears afterward => success --------------
         # DBGSRV_PATH points at a file that does not exist yet (phase 1 probe
         # must fail) which the fake installer creates (phase 4 resolve hits),
-        # even on machines that already have Debugging Tools installed.
+        # even on machines that already have Debugging Tools installed. The
+        # fake installer is cmd.exe ($env:ComSpec) driven through
+        # ROT_DEBUG_WIN_INSTALL_ARGS; running from $StateDir (local %TEMP%)
+        # avoids a UNC checkout becoming CMD's working directory.
         $dbgSrc = Join-Path $StateDir "dbgsrv.src.exe"
         Set-Content -LiteralPath $dbgSrc -Value "placeholder"
         $oldDbgPath = $env:DBGSRV_PATH
         $oldInstallExe = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgs = $env:ROT_DEBUG_WIN_INSTALL_ARGS
 
         $target0 = Join-Path $StateDir "dbgsrv.installed-0.exe"
-        $fakeInstaller0 = Join-Path $StateDir "fake-winsdk-0-create.cmd"
-        $copyLine0 = 'copy /y "' + $dbgSrc + '" "' + $target0 + '" >nul'
-        Set-Content -LiteralPath $fakeInstaller0 -Value @("@echo off", $copyLine0, "exit /b 0")
         try {
             $env:DBGSRV_PATH = $target0
-            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller0
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $env:ComSpec
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS = New-CmdInstallerArgs -ExitCode 0 -Source $dbgSrc -Target $target0
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             if ((Get-StateLine $out "installed=") -eq "true" -and (Get-StateLine $out "path=") -eq $target0 -and $exitCode -eq 0) {
@@ -282,19 +320,20 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPath }
             if ($null -eq $oldInstallExe) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe }
-            Remove-Item -LiteralPath $fakeInstaller0, $target0 -Force -ErrorAction SilentlyContinue
+            if ($null -eq $oldInstallArgs) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgs }
+            Remove-Item -LiteralPath $target0 -Force -ErrorAction SilentlyContinue
         }
 
         # --- Install: exit 3010 + dbgsrv appears afterward => success ---------
         $target3010 = Join-Path $StateDir "dbgsrv.installed-3010.exe"
-        $fakeInstaller3010 = Join-Path $StateDir "fake-winsdk-3010-create.cmd"
-        $copyLine3010 = 'copy /y "' + $dbgSrc + '" "' + $target3010 + '" >nul'
-        Set-Content -LiteralPath $fakeInstaller3010 -Value @("@echo off", $copyLine3010, "exit /b 3010")
         $oldDbgPath3010 = $env:DBGSRV_PATH
         $oldInstallExe3010 = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgs3010 = $env:ROT_DEBUG_WIN_INSTALL_ARGS
         try {
             $env:DBGSRV_PATH = $target3010
-            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller3010
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $env:ComSpec
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS = New-CmdInstallerArgs -ExitCode 3010 -Source $dbgSrc -Target $target3010
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             if ((Get-StateLine $out "installed=") -eq "true" -and (Get-StateLine $out "path=") -eq $target3010 -and $exitCode -eq 0) {
@@ -307,21 +346,22 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPath3010 }
             if ($null -eq $oldInstallExe3010) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe3010 }
-            Remove-Item -LiteralPath $fakeInstaller3010, $target3010 -Force -ErrorAction SilentlyContinue
+            if ($null -eq $oldInstallArgs3010) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgs3010 }
+            Remove-Item -LiteralPath $target3010 -Force -ErrorAction SilentlyContinue
         }
 
         # --- Install: nonzero exit => failure even if dbgsrv.exe appears -------
         # The fake installer still creates the file Resolve-DbgSrv will find,
         # so a "lucky resolve" is guaranteed; the failure must still win.
         $targetBad = Join-Path $StateDir "dbgsrv.installed-bad.exe"
-        $fakeInstallerBad = Join-Path $StateDir "fake-winsdk-bad-create.cmd"
-        $copyLineBad = 'copy /y "' + $dbgSrc + '" "' + $targetBad + '" >nul'
-        Set-Content -LiteralPath $fakeInstallerBad -Value @("@echo off", $copyLineBad, "exit /b 7")
         $oldDbgPathBad = $env:DBGSRV_PATH
         $oldInstallExeBad = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgsBad = $env:ROT_DEBUG_WIN_INSTALL_ARGS
         try {
             $env:DBGSRV_PATH = $targetBad
-            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstallerBad
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $env:ComSpec
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS = New-CmdInstallerArgs -ExitCode 7 -Source $dbgSrc -Target $targetBad
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             $resolvableAfter = Test-Path -LiteralPath $targetBad
@@ -335,18 +375,20 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPathBad }
             if ($null -eq $oldInstallExeBad) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExeBad }
-            Remove-Item -LiteralPath $fakeInstallerBad, $targetBad, $dbgSrc -Force -ErrorAction SilentlyContinue
+            if ($null -eq $oldInstallArgsBad) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgsBad }
+            Remove-Item -LiteralPath $targetBad, $dbgSrc -Force -ErrorAction SilentlyContinue
         }
 
         # --- Install: exit 0 is not success if dbgsrv.exe stays missing ---------
         $missingDbg = Join-Path $StateDir "dbgsrv.does-not-exist.exe"
-        $fakeInstaller0Missing = Join-Path $StateDir "fake-winsdk-0-missing.cmd"
-        Set-Content -LiteralPath $fakeInstaller0Missing -Value @("@echo off", "exit /b 0")
         $oldDbgPath0M = $env:DBGSRV_PATH
         $oldInstallExe0M = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgs0M = $env:ROT_DEBUG_WIN_INSTALL_ARGS
         try {
             $env:DBGSRV_PATH = $missingDbg
-            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller0Missing
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $env:ComSpec
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS = New-CmdInstallerArgs -ExitCode 0
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             if ((Get-StateLine $out "installed=") -eq "false" -and (Get-StateLine $out "error=") -eq "dbgsrv-not-found-after-install" -and $exitCode -ne 0) {
@@ -359,17 +401,18 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPath0M }
             if ($null -eq $oldInstallExe0M) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe0M }
-            Remove-Item -LiteralPath $fakeInstaller0Missing -Force -ErrorAction SilentlyContinue
+            if ($null -eq $oldInstallArgs0M) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgs0M }
         }
 
         # --- Install: exit 3010 is not success if dbgsrv.exe stays missing ------
-        $fakeInstaller3010Missing = Join-Path $StateDir "fake-winsdk-3010-missing.cmd"
-        Set-Content -LiteralPath $fakeInstaller3010Missing -Value @("@echo off", "exit /b 3010")
         $oldDbgPath3010M = $env:DBGSRV_PATH
         $oldInstallExe3010M = $env:ROT_DEBUG_WIN_INSTALL_EXE
+        $oldInstallArgs3010M = $env:ROT_DEBUG_WIN_INSTALL_ARGS
         try {
             $env:DBGSRV_PATH = $missingDbg
-            $env:ROT_DEBUG_WIN_INSTALL_EXE = $fakeInstaller3010Missing
+            $env:ROT_DEBUG_WIN_INSTALL_EXE = $env:ComSpec
+            $env:ROT_DEBUG_WIN_INSTALL_ARGS = New-CmdInstallerArgs -ExitCode 3010
             $out = Invoke-DbgPs1 -Action Install -MachineReadable
             $exitCode = $LASTEXITCODE
             if ((Get-StateLine $out "installed=") -eq "false" -and (Get-StateLine $out "error=") -eq "dbgsrv-not-found-after-install" -and $exitCode -ne 0) {
@@ -382,7 +425,8 @@ try {
             else { $env:DBGSRV_PATH = $oldDbgPath3010M }
             if ($null -eq $oldInstallExe3010M) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_EXE -ErrorAction SilentlyContinue }
             else { $env:ROT_DEBUG_WIN_INSTALL_EXE = $oldInstallExe3010M }
-            Remove-Item -LiteralPath $fakeInstaller3010Missing -Force -ErrorAction SilentlyContinue
+            if ($null -eq $oldInstallArgs3010M) { Remove-Item Env:ROT_DEBUG_WIN_INSTALL_ARGS -ErrorAction SilentlyContinue }
+            else { $env:ROT_DEBUG_WIN_INSTALL_ARGS = $oldInstallArgs3010M }
         }
     } else {
         Skip "live-process identity tests (Windows only)"
