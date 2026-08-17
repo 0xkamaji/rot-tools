@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-# Test suite for re-tools/mcp/setup.sh
+# Test suite for re-tools/binary-ninja-mcp/mcp_configure.sh
 #
 # Uses a FULLY ISOLATED test PATH so the host's real node, npm, npx,
 # opencode, curl, powershell.exe, and package managers can never be reached.
@@ -9,7 +9,7 @@ set -u
 # symlinks to the safe system utilities the script itself needs.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SETUP="$SCRIPT_DIR/../setup.sh"
+SETUP="$SCRIPT_DIR/../mcp_configure.sh"
 HARNESS_BASH="$(command -v bash)"
 
 PASS=0
@@ -124,9 +124,9 @@ test_bash_syntax() {
 # 2. NVM must never be used (Node is installed via OS methods only)
 # ---------------------------------------------------------------------------
 test_no_nvm() {
-    say "setup.sh never invokes nvm (no NVM_DIR / nvm.sh / nvm install)"
+    say "mcp_configure.sh never invokes nvm (no NVM_DIR / nvm.sh / nvm install)"
     if grep -Eq 'nvm install|nvm\.sh|NVM_DIR' "$SETUP"; then
-        fail "functional nvm usage found in setup.sh"
+        fail "functional nvm usage found in mcp_configure.sh"
     else
         ok "no functional nvm usage"
     fi

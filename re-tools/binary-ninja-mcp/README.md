@@ -3,7 +3,7 @@
 Prepares and checks the AI <-> Binary Ninja MCP integration for OpenCode.
 
 This tool does **not** manage debugger servers. Debugger tooling lives in
-[`re-tools/debug/`](../debug/).
+[`re-tools/remote-debug/`](../remote-debug/).
 
 The MCP connection it sets up:
 
@@ -16,13 +16,13 @@ OpenCode
 Run it:
 
 ```bash
-./setup.sh          # Linux or WSL (interactive menu)
-./setup.sh status   # non-interactive status report
+./mcp_configure.sh          # Linux or WSL (interactive menu)
+./mcp_configure.sh status   # non-interactive status report
 ```
 
 ```powershell
-.\setup.ps1         # native Windows (interactive menu)
-.\setup.ps1 -Action status
+.\mcp_configure.ps1         # native Windows (interactive menu)
+.\mcp_configure.ps1 -Action status
 ```
 
 ## What it checks
@@ -64,7 +64,7 @@ wsl --shutdown
 
 ### Native Windows
 
-Equivalent behavior through `setup.ps1`:
+Equivalent behavior through `mcp_configure.ps1`:
 
 - checks Node/npm/npx and OpenCode;
 - checks `localhost:9009`;
@@ -129,7 +129,7 @@ The interactive menu appears immediately without running the (slower) status
 scan; the full scan runs only when an action needs it — "Show status",
 Setup / repair, Configure OpenCode MCP, or Test Binary Ninja connection.
 
-"Show status" (or `./setup.sh status`) renders:
+"Show status" (or `./mcp_configure.sh status`) renders:
 
 ```text
 Binary Ninja MCP

@@ -10,10 +10,10 @@ set -o pipefail
 #   * OpenCode's MCP configuration for the Binary Ninja MCP server
 #     (identified by its `binary-ninja-mcp` command, under any entry name)
 #
-# It does NOT manage debugger servers (see re-tools/debug/debug-server.sh).
+# It does NOT manage debugger servers (see re-tools/remote-debug/debug-server.sh).
 #
 # Environment detection is done at runtime, so the same script works on
-# native Linux and inside WSL. Native Windows uses setup.ps1 instead.
+# native Linux and inside WSL. Native Windows uses mcp_configure.ps1 instead.
 #
 # Node/npm/npx are never installed through NVM; if they are already present
 # they are left untouched. Missing pieces are installed with the detected

@@ -14,11 +14,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Shell syntax check
         run: |
-          bash -n re-tools/debug/debug-server.sh
-          bash -n re-tools/mcp/setup.sh
+          bash -n re-tools/remote-debug/debug-server.sh
+          bash -n re-tools/binary-ninja-mcp/mcp_configure.sh
       - name: Run debug-server fake-tool test suite
-        run: bash re-tools/debug/tests/test-debug-server.sh
+        run: bash re-tools/remote-debug/tests/test-debug-server.sh
       - name: Run MCP setup fake-tool test suite
-        run: bash re-tools/mcp/tests/test-mcp-setup.sh
+        run: bash re-tools/binary-ninja-mcp/tests/test-mcp-setup.sh
       - name: PowerShell syntax + ownership tests
-        run: pwsh -NoProfile -File re-tools/debug/tests/test-windows-ownership.ps1
+        run: pwsh -NoProfile -File re-tools/remote-debug/tests/test-windows-ownership.ps1

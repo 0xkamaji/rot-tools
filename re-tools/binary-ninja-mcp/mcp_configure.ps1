@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 #   * the Binary Ninja MCP server on localhost:9009
 #   * OpenCode's MCP configuration for the `binary-ninja` server
 #
-# It does NOT manage debugger servers (see re-tools\debug\debug-server.ps1).
+# It does NOT manage debugger servers (see re-tools\remote-debug\debug-server.ps1).
 #
 # Node/npm/npx are never installed through NVM; if already present they are
 # left untouched. Missing pieces are installed with supported Windows methods

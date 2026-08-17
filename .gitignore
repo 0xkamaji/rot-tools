@@ -3,6 +3,6 @@ __pycache__/
 context/
 
 # Debugger binaries are never committed (downloaded/extracted locally).
-re-tools/debug/debugger-win32/
-re-tools/debug/debugger-linux/
+re-tools/remote-debug/debugger-win32/
+re-tools/remote-debug/debugger-linux/
 **/debuggers/
