@@ -1,9 +1,9 @@
 # Export Ghidra-defined strings and functions through an interactive report.
 # Mirrors re-toolkit/recipes/binary-ninja/export_triage.py.
 # Run after Ghidra auto-analysis completes.
-# @author 0xkamaji
-# @category Loadbot
-# @menupath Tools.Loadbot.Export Triage Report
+#@author 0xkamaji
+#@category Loadbot
+#@menupath Tools.Loadbot.Export Triage Report
 
 from java.awt import Toolkit
 from java.awt.datatransfer import StringSelection
