@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-# Test suite for re-tools/binary-ninja-mcp/mcp_configure.sh
+# Test suite for re-toolkit/tools/binary-ninja/binary-ninja-mcp/mcp_configure.sh
 #
 # Uses a FULLY ISOLATED test PATH so the host's real node, npm, npx,
 # opencode, curl, powershell.exe, and package managers can never be reached.
