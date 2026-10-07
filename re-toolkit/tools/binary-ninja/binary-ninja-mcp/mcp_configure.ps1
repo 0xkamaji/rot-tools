@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 # This tool ONLY prepares and checks the AI <-> Binary Ninja MCP integration:
 #   * Node/npm/npx and OpenCode availability
 #   * the Binary Ninja MCP server on localhost:9009
-#   * OpenCode's MCP configuration for the `binary-ninja` server
+#   * OpenCode's MCP configuration identified by its `binary-ninja-mcp` backend
 #
 # It does NOT manage debugger servers (see re-tools\remote-debug\debug-server.ps1).
 #
@@ -22,10 +22,10 @@ $ErrorActionPreference = "Stop"
 # OpenCode's own `opencode mcp add` wizard is used for configuration instead
 # of editing OpenCode's internal config directly.
 
-$Script:McpName = "binary-ninja"
-$Script:McpCommand = "npx -y binary-ninja-mcp --host localhost --port 9009"
-$Script:BnHost = "localhost"
-$Script:BnPort = 9009
+$Script:McpName = if ($env:ROT_MCP_NAME) { $env:ROT_MCP_NAME } else { "binary-ninja" }
+$Script:BnHost = if ($env:ROT_MCP_HOST) { $env:ROT_MCP_HOST } else { "localhost" }
+$Script:BnPort = if ($env:ROT_MCP_PORT) { $env:ROT_MCP_PORT } else { "9009" }
+$Script:McpCommand = "npx -y binary-ninja-mcp --host $($Script:BnHost) --port $($Script:BnPort)"
 
 $Script:NodeStatus = "missing"
 $Script:NpmStatus = "missing"
@@ -36,17 +36,46 @@ $Script:BnNote = ""
 $Script:McpConfigured = "missing"
 $Script:McpStatus = "unknown"
 $Script:McpNote = ""
+$Script:McpFoundName = ""
+$Script:McpFoundBackend = ""
+$Script:McpFoundHost = ""
+$Script:McpFoundPort = ""
 
 function Test-Tool {
     param([string]$Name)
     return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-OpencodeCommand {
+    $command = Get-Command -Name opencode.exe -ErrorAction SilentlyContinue
+    if (-not $command) {
+        $command = Get-Command -Name opencode -ErrorAction SilentlyContinue
+    }
+    return $command
+}
+
+function Invoke-OpencodeCapture {
+    param([string[]]$Arguments)
+    $command = Get-OpencodeCommand
+    if (-not $command) { return $null }
+
+    # Windows PowerShell wraps native stderr in ErrorRecords, including through
+    # npm's .ps1 shim. Convert those records to text before formatting output.
+    $savedPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $PSNativeCommandUseErrorActionPreference = $false
+        return (& $command @Arguments 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+    } finally {
+        $ErrorActionPreference = $savedPreference
+    }
+}
+
 function Check-Dependencies {
     $Script:NodeStatus = if (Test-Tool "node") { "found" } else { "missing" }
     $Script:NpmStatus = if (Test-Tool "npm") { "found" } else { "missing" }
     $Script:NpxStatus = if (Test-Tool "npx") { "found" } else { "missing" }
-    $Script:OpencodeStatus = if (Test-Tool "opencode") { "found" } else { "missing" }
+    $Script:OpencodeStatus = if (Get-OpencodeCommand) { "found" } else { "missing" }
 }
 
 function Test-BnEndpoint {
@@ -77,10 +106,8 @@ function Check-BnEndpoint {
 }
 
 function Get-OpencodeMcpList {
-    if (-not (Test-Tool "opencode")) {
-        return $null
-    }
-    $out = & opencode mcp list 2>&1 | Out-String
+    $out = Invoke-OpencodeCapture -Arguments @("mcp", "list")
+    if ($null -eq $out) { return $null }
     $out = $out -replace "\x1b\[[0-9;]*[mK]", ""
     return $out
 }
@@ -89,35 +116,46 @@ function Check-OpencodeMcp {
     $Script:McpConfigured = "missing"
     $Script:McpStatus = "unknown"
     $Script:McpNote = ""
+    $Script:McpFoundName = ""
+    $Script:McpFoundBackend = ""
+    $Script:McpFoundHost = ""
+    $Script:McpFoundPort = ""
 
     $list = Get-OpencodeMcpList
     if ($null -eq $list) {
         return
     }
 
-    $found = $false
-    # Match the server name as a standalone token, not as part of the command
-    # line (e.g. `binary-ninja-mcp` must not match a server named `binary-ninja`).
-    $nameRe = "(^|[^a-zA-Z0-9_-])$($Script:McpName)([^a-zA-Z0-9_-]|$)"
+    $entryName = ""
+    $entryStatus = "unknown"
+    $namedSeen = $false
+    $launcher = '(?:npx|npx\.cmd|npx\.exe|npm|npm\.cmd|bun|bunx|node|node\.exe|deno|python|python3)'
     foreach ($line in ($list -split "`r?`n")) {
-        if ($line -match $nameRe) {
-            $found = $true
-            if ($line -match "connected") {
-                $Script:McpStatus = "connected"
-            } elseif ($line -match "disconnected") {
-                $Script:McpStatus = "disconnected"
-            } else {
-                $Script:McpStatus = "unknown"
+        $norm = ($line -replace '^[^\p{L}\p{N}_]*', '').TrimEnd()
+        if (-not $norm) { continue }
+        $first = ($norm -split '\s+', 2)[0]
+        $isCommand = $first -match "^$launcher$" -or $first -match '[/\\]'
+        $isBackend = $norm.Contains("binary-ninja-mcp")
+        if (-not $isCommand) {
+            if ($norm -eq "MCP Servers" -or $norm -match '^\d+\s+server\(s\)$') { continue }
+            $entryStatus = if ($norm -match '\bdisconnected\b') { "disconnected" } elseif ($norm -match '\bconnected\b') { "connected" } else { "unknown" }
+            $entryName = $norm -replace '\s+(connected|disconnected|pending|failed|disabled|needs[_-]?auth)\s*$', ''
+            $entryName = $entryName -replace "\s+$launcher(?:\s+.*)?$", ''
+            if ($entryName -eq $Script:McpName) { $namedSeen = $true }
+        }
+        if ($isBackend -and $entryName) {
+            if (-not $Script:McpFoundName -or $entryName -eq $Script:McpName) {
+                $Script:McpConfigured = "configured"
+                $Script:McpFoundName = $entryName
+                $Script:McpFoundBackend = "binary-ninja-mcp"
+                $Script:McpStatus = $entryStatus
+                $Script:McpFoundHost = if ($norm -match '--host[= ]\s*([^\s]+)') { $Matches[1] } else { "" }
+                $Script:McpFoundPort = if ($norm -match '--port[= ]\s*([^\s]+)') { $Matches[1] } else { "" }
             }
         }
     }
-
-    if ($found) {
-        $Script:McpConfigured = "configured"
-    }
-
-    if ($list -match "binary-ninja-mcp" -and $Script:McpConfigured -eq "missing") {
-        $Script:McpNote = "an equivalent server using binary-ninja-mcp exists under another name"
+    if ($Script:McpConfigured -eq "missing" -and $namedSeen) {
+        $Script:McpNote = "a server named '$($Script:McpName)' exists but does not use binary-ninja-mcp"
     }
 }
 
@@ -147,8 +185,18 @@ function Show-Status {
     }
     Write-Host ""
     Write-Host "OpenCode MCP:"
-    Write-Host "  $($Script:McpName): $($Script:McpConfigured)"
-    Write-Host "  status: $($Script:McpStatus)"
+    if ($Script:McpConfigured -eq "configured") {
+        Write-Host "  found:   yes"
+        Write-Host "  name:    $($Script:McpFoundName)"
+        Write-Host "  backend: $($Script:McpFoundBackend)"
+        if ($Script:McpFoundHost) {
+            Write-Host "  host:    $($Script:McpFoundHost)"
+            Write-Host "  port:    $($Script:McpFoundPort)"
+        }
+    } else {
+        Write-Host "  found:   no"
+    }
+    Write-Host "  status:  $($Script:McpStatus)"
     if ($Script:McpNote) {
         Write-Host "    $($Script:McpNote)"
     }
@@ -201,7 +249,8 @@ function Install-Opencode {
 }
 
 function Set-OpencodeMcp {
-    if (-not (Test-Tool "opencode")) {
+    $command = Get-OpencodeCommand
+    if (-not $command) {
         Write-Host "OpenCode is not installed. Run 'Setup / repair' first." -ForegroundColor Red
         return
     }
@@ -212,14 +261,23 @@ function Set-OpencodeMcp {
     Write-Host "  Type:    Local"
     Write-Host "  Name:    $($Script:McpName)"
     Write-Host "  Command: $($Script:McpCommand)"
+    Write-Host "Paste the entire generated command as one complete command."
+    if (Test-Tool "Set-Clipboard") {
+        try {
+            Set-Clipboard -Value $Script:McpCommand
+            Write-Host "The command has been copied to the clipboard."
+        } catch {
+            Write-Host "Could not copy to the clipboard; use the command printed above." -ForegroundColor Yellow
+        }
+    }
     Write-Host ""
 
     $answer = Read-Host "Launch 'opencode mcp add' now? [Y/n]"
     if ($answer -match "^[Yy]|^$") {
-        & opencode mcp add
+        & $command mcp add
         Write-Host ""
         Write-Host "Verifying configuration..."
-        & opencode mcp list
+        Write-Host (Invoke-OpencodeCapture -Arguments @("mcp", "list"))
     } else {
         Write-Host "Skipped. Run it later with:"
         Write-Host "  opencode mcp add"
@@ -247,7 +305,7 @@ function Setup-Tools {
     }
 
     if ($Script:OpencodeStatus -eq "found") {
-        Write-Host "OpenCode already available: $(opencode --version)"
+        Write-Host "OpenCode already available: $(Invoke-OpencodeCapture -Arguments @('--version'))"
     } else {
         Write-Host "OpenCode is missing."
         $answer = Read-Host "Install OpenCode? [Y/n]"
@@ -291,6 +349,9 @@ function Test-Connection {
 }
 
 function Show-Menu {
+    Write-Host "Binary Ninja MCP"
+    Write-Host "================"
+    Write-Host ""
     Write-Host "1) Setup / repair"
     Write-Host "2) Show status"
     Write-Host "3) Configure OpenCode MCP"
@@ -300,7 +361,6 @@ function Show-Menu {
 
 function Invoke-Menu {
     while ($true) {
-        Show-Status
         Show-Menu
         Write-Host ""
         $choice = Read-Host ">"

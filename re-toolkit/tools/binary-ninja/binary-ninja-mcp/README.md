@@ -40,7 +40,7 @@ OpenCode MCP:  found via its `binary-ninja-mcp` backend under any entry name
 ### Native Linux
 
 - Checks Node/npm/npx and OpenCode.
-- Checks the Binary Ninja MCP endpoint on `localhost:9009`.
+- Checks the Binary Ninja MCP endpoint (default `localhost:9009`).
 - Checks OpenCode's MCP configuration/status via `opencode mcp list`.
 
 ### WSL
@@ -67,8 +67,12 @@ wsl --shutdown
 Equivalent behavior through `mcp_configure.ps1`:
 
 - checks Node/npm/npx and OpenCode;
-- checks `localhost:9009`;
-- helps configure/test the Binary Ninja MCP connection.
+- checks the configured endpoint (default `localhost:9009`);
+- discovers and reports the MCP backend under any entry name, like Bash;
+- prefers `opencode.exe` when available and captures list/version output safely,
+  including stderr from the npm PowerShell shim;
+- copies the generated wizard command to the clipboard when `Set-Clipboard`
+  is available (clipboard failures do not prevent configuration).
 
 ## Install behavior
 
@@ -95,12 +99,15 @@ opencode mcp add
 Choose:
 
 - Type: `Local`
-- Name: `binary-ninja`
+- Name: `binary-ninja` (or `ROT_MCP_NAME` when set)
 - Command:
 
 ```text
 npx -y binary-ninja-mcp --host localhost --port 9009
 ```
+
+Paste the entire generated command as one complete command. Both scripts build
+it from `ROT_MCP_HOST` and `ROT_MCP_PORT`, using the defaults shown above.
 
 The wizard is interactive (OpenCode exposes no documented non-interactive
 flags for a local server's type/command). After the wizard finishes, the setup
@@ -109,7 +116,9 @@ tool verifies the result with `opencode mcp list`.
 The MCP entry is detected by its command/backend (`binary-ninja-mcp`), not by
 its name, so OpenCode users may name the entry anything (e.g. `binja`); the
 tool then reports the actual discovered name. `binary-ninja` remains the
-suggested name for new entries. A differently-named entry is never duplicated
+suggested name for new entries. If multiple matching entries exist, both scripts
+prefer `ROT_MCP_NAME` (default `binary-ninja`), otherwise the first match.
+A differently-named entry is never duplicated
 by Setup / repair.
 
 ## Menu
@@ -126,8 +135,9 @@ Binary Ninja MCP
 ```
 
 The interactive menu appears immediately without running the (slower) status
-scan; the full scan runs only when an action needs it — "Show status",
-Setup / repair, Configure OpenCode MCP, or Test Binary Ninja connection.
+scan. "Show status" and Setup / repair run the full scan; Configure OpenCode MCP
+checks OpenCode and lists entries after the wizard, while Test Binary Ninja
+connection checks endpoint reachability.
 
 "Show status" (or `./mcp_configure.sh status`) renders:
 
@@ -157,17 +167,25 @@ OpenCode MCP:
   status:  connected/disconnected/unknown
 ```
 
-## Environment overrides (test- / integration-oriented)
+## Environment overrides
+
+Both scripts support the name, host, and port overrides below. Empty or unset
+values use the defaults; host/port affect both endpoint checks and the generated
+MCP command, not existing OpenCode entries.
 
 | Variable        | Default      | Purpose                        |
 | --------------- | ------------ | ------------------------------ |
-| `ROT_MCP_NAME`  | `binary-ninja` | Preferred MCP server name for new entries; detection never requires it |
+| `ROT_MCP_NAME`  | `binary-ninja` | Suggested name for new entries and preferred match; detection never requires it |
 | `ROT_MCP_HOST`  | `localhost`  | Binary Ninja MCP host          |
 | `ROT_MCP_PORT`  | `9009`       | Binary Ninja MCP port          |
-| `ROT_MCP_SUDO`  | `sudo`       | Elevation command for package installs |
+| `ROT_MCP_SUDO`  | `sudo`       | Bash only: elevation command for package installs |
 
 ## Tests
 
 ```bash
 ./tests/test-mcp-setup.sh   # self-contained; uses fake tools
+```
+
+```powershell
+.\tests\test-mcp-setup.ps1  # isolated mocks; no real OpenCode or installs
 ```

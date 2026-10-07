@@ -371,6 +371,34 @@ test_connection_subcommand() {
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+test_overrides_and_preferred_entry() {
+    say "overrides generate the command and preferred entry retains its endpoint"
+    new_sandbox
+    install_fakes all
+    FAKE_MCP_LIST="preferred disconnected"
+    FAKE_MCP_CMD="npx -y binary-ninja-mcp --host chosen --port 9010\nother connected\nnpx -y binary-ninja-mcp --host other --port 9011"
+    ROT_MCP_NAME=preferred run_script "" status >"$TMP/out" 2>&1
+    if grep -q 'name:    preferred' "$TMP/out" \
+        && grep -q 'host:    chosen' "$TMP/out" \
+        && grep -q 'port:    9010' "$TMP/out" \
+        && grep -q 'status:  disconnected' "$TMP/out"; then
+        ok "preferred match reports its own endpoint/status"
+    else
+        fail "preferred match lost its endpoint"
+    fi
+    ROT_MCP_NAME=custom ROT_MCP_HOST=bn.example ROT_MCP_PORT=9012 \
+        run_script "n" --configure-opencode >"$TMP/out" 2>&1
+    if grep -q 'Name:    custom' "$TMP/out" \
+        && grep -q 'Command: npx -y binary-ninja-mcp --host bn.example --port 9012' "$TMP/out" \
+        && grep -q 'one complete command' "$TMP/out"; then
+        ok "wizard uses all environment overrides"
+    else
+        fail "wizard ignored environment overrides"
+    fi
+    unset FAKE_MCP_CMD
+    destroy_sandbox
+}
+
 main() {
     say "Running MCP setup test suite"
 
@@ -389,6 +417,7 @@ main() {
     test_menu_no_full_scan
     test_menu_show_status
     test_connection_subcommand
+    test_overrides_and_preferred_entry
 
     printf '\n'
     printf 'Results: %d passed, %d failed\n' "$PASS" "$FAIL"

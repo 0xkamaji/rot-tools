@@ -27,9 +27,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # Desired MCP server.
 MCP_NAME="${ROT_MCP_NAME:-binary-ninja}"
-MCP_COMMAND='npx -y binary-ninja-mcp --host localhost --port 9009'
 BN_HOST="${ROT_MCP_HOST:-localhost}"
 BN_PORT="${ROT_MCP_PORT:-9009}"
+MCP_COMMAND="npx -y binary-ninja-mcp --host $BN_HOST --port $BN_PORT"
 BN_URL="http://$BN_HOST:$BN_PORT/"
 
 # Elevation for package installs. Unset -> "sudo". Set to empty to disable
@@ -415,7 +415,7 @@ check_opencode_mcp() {
 
     local out list line norm first
     local entry_name="" entry_status=""
-    local match_name="" match_status=""
+    local match_name="" match_status="" match_command=""
     local cmdline=""
     local found="" named_seen=""
 
@@ -440,6 +440,7 @@ check_opencode_mcp() {
                 if [[ -z "$match_name" || "$entry_name" == "$MCP_NAME" ]]; then
                     match_name="$entry_name"
                     match_status="$entry_status"
+                    match_command="$cmdline"
                 fi
             fi
             continue
@@ -462,8 +463,8 @@ check_opencode_mcp() {
         MCP_STATUS="${match_status:-unknown}"
         MCP_FOUND_NAME="$match_name"
         MCP_FOUND_BACKEND="binary-ninja-mcp"
-        MCP_FOUND_HOST="$(command_host_port "$cmdline" host)"
-        MCP_FOUND_PORT="$(command_host_port "$cmdline" port)"
+        MCP_FOUND_HOST="$(command_host_port "$match_command" host)"
+        MCP_FOUND_PORT="$(command_host_port "$match_command" port)"
     elif [[ -n "$named_seen" ]]; then
         MCP_NOTE="a server named '$MCP_NAME' exists but does not use binary-ninja-mcp"
     fi
@@ -484,6 +485,7 @@ configure_opencode_mcp() {
     printf '  Type:    Local\n'
     printf '  Name:    %s\n' "$MCP_NAME"
     printf '  Command: %s\n' "$MCP_COMMAND"
+    printf 'Paste the entire generated command as one complete command.\n'
     printf '\n'
 
     read -r -p "Launch 'opencode mcp add' now? [Y/n] " answer
